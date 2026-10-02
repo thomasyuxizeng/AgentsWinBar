@@ -16,6 +16,14 @@
             RadiusX="3"
             RadiusY="3"/>
 
+        <!-- Time elapsed in the usage window (underlying layer, hidden when unknown) -->
+        <Rectangle
+            x:Name="TimeBar"
+            HorizontalAlignment="Left"
+            RadiusX="3"
+            RadiusY="3"
+            Visibility="Collapsed"/>
+
         <!-- Usage bar -->
         <Rectangle
             x:Name="UsageBar"

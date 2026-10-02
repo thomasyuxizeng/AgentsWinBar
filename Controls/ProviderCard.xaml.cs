@@ -101,6 +101,7 @@ public sealed partial class ProviderCard : UserControl
             {
                 SessionSection.Visibility = Visibility.Visible;
                 SessionMeter.Percent = Data.Session!.Percent;
+                SessionMeter.TimePercent = Data.Session.ElapsedPercent ?? -1;
                 SessionPercentText.Text = Data.Session.PercentText;
                 SessionTimeText.Text = Data.Session.ResetText;
             }
@@ -114,6 +115,7 @@ public sealed partial class ProviderCard : UserControl
             {
                 WeeklySection.Visibility = Visibility.Visible;
                 WeeklyMeter.Percent = Data.Weekly!.Percent;
+                WeeklyMeter.TimePercent = Data.Weekly.ElapsedPercent ?? -1;
                 WeeklyPercentText.Text = Data.Weekly.PercentText;
                 WeeklyTimeText.Text = Data.Weekly.ResetText;
             }

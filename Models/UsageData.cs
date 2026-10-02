@@ -56,6 +56,18 @@ public record UsageWindow
     public string PercentText => $"{Percent:F0}%";
     public DateTime? ResetAt { get; init; }
     public string? ResetIn { get; init; }
+
+    /// <summary>
+    /// Length of the usage window in minutes (e.g. 300 for a 5-hour window), or 0 if unknown.
+    /// </summary>
+    public int WindowMinutes { get; init; }
+
+    /// <summary>
+    /// How far through the window we are (0-100), or null if the window length or reset time is unknown.
+    /// Compare with <see cref="Percent"/> to see whether usage is running ahead of or behind time.
+    /// </summary>
+    public double? ElapsedPercent =>
+        Helpers.ResetTimeFormatter.ElapsedPercent(ResetAt, WindowMinutes, DateTime.UtcNow);
     public TimeSpan? TimeUntilReset => ResetAt.HasValue ? ResetAt.Value - DateTime.UtcNow : null;
 
     /// <summary>

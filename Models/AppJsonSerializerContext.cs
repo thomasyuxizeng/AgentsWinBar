@@ -75,6 +75,7 @@ public record UsageWindowDto
     {
         Used = (int)UsedPercent,
         Limit = 100,
+        WindowMinutes = WindowMinutes,
         ResetAt = ResetsAt,
         ResetIn = ResetDescription
     };

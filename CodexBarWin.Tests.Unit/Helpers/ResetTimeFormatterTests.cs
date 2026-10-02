@@ -52,6 +52,56 @@ public class ResetTimeFormatterTests
     }
 
     [TestMethod]
+    [DataRow(300, 300, 0.0)]        // reset is a full window away: just started
+    [DataRow(300, 150, 50.0)]       // halfway
+    [DataRow(300, 75, 75.0)]
+    [DataRow(300, 0, 100.0)]        // reset due now: full
+    [DataRow(10080, 5040, 50.0)]    // weekly window
+    public void ElapsedPercent_WhenWindowKnown_ReturnsFractionOfWindowElapsed(int windowMinutes, int minutesLeft, double expected)
+    {
+        ResetTimeFormatter.ElapsedPercent(Now.AddMinutes(minutesLeft), windowMinutes, Now)
+            .Should().BeApproximately(expected, 0.001);
+    }
+
+    [TestMethod]
+    public void ElapsedPercent_WhenResetIsInThePast_IsClampedToFull()
+    {
+        ResetTimeFormatter.ElapsedPercent(Now.AddMinutes(-30), 300, Now).Should().Be(100);
+    }
+
+    [TestMethod]
+    public void ElapsedPercent_WhenResetIsFurtherAwayThanWindow_IsClampedToZero()
+    {
+        ResetTimeFormatter.ElapsedPercent(Now.AddMinutes(600), 300, Now).Should().Be(0);
+    }
+
+    [TestMethod]
+    public void ElapsedPercent_WhenWindowLengthOrResetUnknown_ReturnsNull()
+    {
+        ResetTimeFormatter.ElapsedPercent(null, 300, Now).Should().BeNull();
+        ResetTimeFormatter.ElapsedPercent(Now.AddHours(1), 0, Now).Should().BeNull();
+    }
+
+    [TestMethod]
+    public void ElapsedPercent_WhenKindUnspecified_TreatsValueAsUtc()
+    {
+        var unspecified = DateTime.SpecifyKind(Now.AddMinutes(150), DateTimeKind.Unspecified);
+
+        ResetTimeFormatter.ElapsedPercent(unspecified, 300, Now).Should().BeApproximately(50, 0.001);
+    }
+
+    [TestMethod]
+    public void UsageWindowDto_ToUsageWindow_KeepsWindowLength()
+    {
+        var dto = new UsageWindowDto { UsedPercent = 40, WindowMinutes = 300, ResetsAt = DateTime.UtcNow.AddHours(1) };
+
+        var window = dto.ToUsageWindow();
+
+        window.WindowMinutes.Should().Be(300);
+        window.ElapsedPercent.Should().BeInRange(79, 81);   // about 1h of 5h left
+    }
+
+    [TestMethod]
     public void ResetText_WhenNoResetTime_FallsBackToCliDescription()
     {
         var window = new UsageWindow { ResetIn = "  resets Oct 2, 1pm  " };

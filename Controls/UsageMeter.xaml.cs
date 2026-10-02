@@ -6,10 +6,15 @@ using Windows.UI;
 namespace CodexBarWin.Controls;
 
 /// <summary>
-/// A meter control for displaying usage percentage.
+/// A meter control for displaying usage percentage, with an optional underlying bar showing how much
+/// of the usage window's time has passed. Blue running past the underlay means usage is ahead of time
+/// (using it too fast); the underlay peeking out past the blue means usage is behind (plenty to spare).
 /// </summary>
 public sealed partial class UsageMeter : UserControl
 {
+    // Muted violet: distinct from the blue/amber/red usage colours and readable on light and dark themes
+    private static readonly SolidColorBrush TimeBrush = new(Color.FromArgb(0xC0, 0x9B, 0x8A, 0xFB));
+
     public static readonly DependencyProperty PercentProperty =
         DependencyProperty.Register(
             nameof(Percent),
@@ -17,15 +22,32 @@ public sealed partial class UsageMeter : UserControl
             typeof(UsageMeter),
             new PropertyMetadata(0.0, OnPercentChanged));
 
+    /// <summary>
+    /// How much of the usage window's time has elapsed (0-100). A negative value means unknown (layer hidden).
+    /// </summary>
+    public static readonly DependencyProperty TimePercentProperty =
+        DependencyProperty.Register(
+            nameof(TimePercent),
+            typeof(double),
+            typeof(UsageMeter),
+            new PropertyMetadata(-1.0, OnPercentChanged));
+
     public double Percent
     {
         get => (double)GetValue(PercentProperty);
         set => SetValue(PercentProperty, value);
     }
 
+    public double TimePercent
+    {
+        get => (double)GetValue(TimePercentProperty);
+        set => SetValue(TimePercentProperty, value);
+    }
+
     public UsageMeter()
     {
         InitializeComponent();
+        TimeBar.Fill = TimeBrush;
         SizeChanged += OnSizeChanged;
     }
 
@@ -48,6 +70,22 @@ public sealed partial class UsageMeter : UserControl
 
         UsageBar.Width = ActualWidth * (percent / 100.0);
         UsageBar.Fill = GetBarColor(percent);
+
+        if (TimePercent < 0)
+        {
+            TimeBar.Visibility = Visibility.Collapsed;
+            ToolTipService.SetToolTip(this, null);
+            return;
+        }
+
+        var time = Math.Clamp(TimePercent, 0, 100);
+        TimeBar.Visibility = Visibility.Visible;
+        TimeBar.Width = ActualWidth * (time / 100.0);
+
+        var pace = percent > time + 5 ? "ahead of time: using it fast"
+            : percent < time - 5 ? "behind time: using it slowly"
+            : "on pace";
+        ToolTipService.SetToolTip(this, $"Used {percent:F0}% · {time:F0}% of the time has passed ({pace})");
     }
 
     private static SolidColorBrush GetBarColor(double percent) => percent switch

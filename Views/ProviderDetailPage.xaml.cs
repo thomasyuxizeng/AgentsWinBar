@@ -54,6 +54,7 @@ public sealed partial class ProviderDetailPage : Page
         {
             SessionSection.Visibility = Visibility.Visible;
             SessionMeter.Percent = _data.Session.Percent;
+            SessionMeter.TimePercent = _data.Session.ElapsedPercent ?? -1;
             SessionPercentText.Text = $"{_data.Session.PercentText} used";
             SessionResetText.Text = _data.Session.ResetText;
         }
@@ -67,6 +68,7 @@ public sealed partial class ProviderDetailPage : Page
         {
             WeeklySection.Visibility = Visibility.Visible;
             WeeklyMeter.Percent = _data.Weekly.Percent;
+            WeeklyMeter.TimePercent = _data.Weekly.ElapsedPercent ?? -1;
             WeeklyPercentText.Text = $"{_data.Weekly.PercentText} used";
             WeeklyResetText.Text = _data.Weekly.ResetText;
         }
@@ -80,6 +82,7 @@ public sealed partial class ProviderDetailPage : Page
         {
             TertiarySection.Visibility = Visibility.Visible;
             TertiaryMeter.Percent = _data.Tertiary.Percent;
+            TertiaryMeter.TimePercent = _data.Tertiary.ElapsedPercent ?? -1;
             TertiaryPercentText.Text = $"{_data.Tertiary.PercentText} used";
             TertiaryResetText.Text = _data.Tertiary.ResetText;
         }

@@ -22,8 +22,10 @@ public sealed class OverlayRow
     public string Name { get; set; } = string.Empty;
     public Microsoft.UI.Xaml.Media.Geometry Icon { get; set; } = null!;
     public double SessionPercent { get; set; }
+    public double SessionTimePercent { get; set; } = -1;
     public string SessionText { get; set; } = string.Empty;
     public double WeeklyPercent { get; set; }
+    public double WeeklyTimePercent { get; set; } = -1;
     public string WeeklyText { get; set; } = string.Empty;
     public double RowHeight => OverlayWindow.RowHeightDip;
 }
@@ -47,6 +49,7 @@ public sealed partial class OverlayWindow : Window
     private readonly ISettingsService _settingsService;
     private readonly IntPtr _hwnd;
     private readonly DispatcherTimer _topmostTimer;
+    private int _tickCount;
     private WindowZOrder.ForegroundWatcher? _foregroundWatcher;
     private DesktopAcrylicController? _acrylicController;
     private SystemBackdropConfiguration? _backdropConfiguration;
@@ -84,6 +87,12 @@ public sealed partial class OverlayWindow : Window
         {
             WindowZOrder.AssertTopmost(_hwnd);
             ApplySize();   // follows display scale changes (e.g. remote desktop)
+
+            // Time keeps passing between data refreshes, so refresh the time layer about every 30s
+            if (++_tickCount % 15 == 0)
+            {
+                Rebuild();
+            }
         };
 
         App.Windows.Add(this);
@@ -185,8 +194,10 @@ public sealed partial class OverlayWindow : Window
             Name = ProviderIcons.GetDisplayName(data.Provider),
             Icon = ProviderIcons.GetGeometry(data.Provider),
             SessionPercent = session.Percent,
+            SessionTimePercent = data.Session?.ElapsedPercent ?? -1,
             SessionText = session.Text,
             WeeklyPercent = weekly.Percent,
+            WeeklyTimePercent = data.Weekly?.ElapsedPercent ?? -1,
             WeeklyText = weekly.Text
         };
     }

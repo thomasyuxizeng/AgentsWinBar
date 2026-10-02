@@ -79,7 +79,8 @@
                                 Grid.Column="0"
                                 Height="5"
                                 VerticalAlignment="Center"
-                                Percent="{x:Bind SessionPercent}"/>
+                                Percent="{x:Bind SessionPercent}"
+                                TimePercent="{x:Bind SessionTimePercent}"/>
                             <TextBlock
                                 Grid.Row="0"
                                 Grid.Column="1"
@@ -94,7 +95,8 @@
                                 Grid.Column="0"
                                 Height="5"
                                 VerticalAlignment="Center"
-                                Percent="{x:Bind WeeklyPercent}"/>
+                                Percent="{x:Bind WeeklyPercent}"
+                                TimePercent="{x:Bind WeeklyTimePercent}"/>
                             <TextBlock
                                 Grid.Row="1"
                                 Grid.Column="1"

@@ -24,6 +24,8 @@ public sealed class TaskbarItem
     public Geometry Icon { get; set; } = null!;
     public double SessionPercent { get; set; }
     public double WeeklyPercent { get; set; }
+    public double SessionTimePercent { get; set; } = -1;
+    public double WeeklyTimePercent { get; set; } = -1;
     public string SessionText { get; set; } = string.Empty;
     public string WeeklyText { get; set; } = string.Empty;
     public Brush SessionBrush { get; set; } = null!;
@@ -50,6 +52,7 @@ public sealed partial class TaskbarWindow : Window
     private readonly MainViewModel _viewModel;
     private readonly IntPtr _hwnd;
     private readonly DispatcherTimer _keepOnTopTimer;
+    private int _tickCount;
     private WindowZOrder.ForegroundWatcher? _foregroundWatcher;
     private DesktopAcrylicController? _acrylicController;
     private SystemBackdropConfiguration? _backdropConfiguration;
@@ -86,6 +89,12 @@ public sealed partial class TaskbarWindow : Window
         {
             Reposition();
             WindowZOrder.AssertTopmost(_hwnd);
+
+            // Time keeps passing between data refreshes, so refresh the time layer about every 30s
+            if (++_tickCount % 15 == 0)
+            {
+                Rebuild();
+            }
         };
 
         App.Windows.Add(this);
@@ -185,6 +194,8 @@ public sealed partial class TaskbarWindow : Window
                 Icon = ProviderIcons.GetGeometry(data.Provider),
                 SessionPercent = data.Session?.Percent ?? 0,
                 WeeklyPercent = data.Weekly?.Percent ?? 0,
+                SessionTimePercent = data.Session?.ElapsedPercent ?? -1,
+                WeeklyTimePercent = data.Weekly?.ElapsedPercent ?? -1,
                 SessionText = session,
                 WeeklyText = weekly,
                 SessionBrush = WarningBrush(data.Session) ?? primary,

@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Gemini windows are labelled "5-hour" and "Weekly" instead of "Pro" and "Flash"
 
 ### Added
+- Pace layer under every usage bar: a second, violet bar shows how much of the usage window's time has passed (full at the reset). Blue running past it means you're using usage fast; violet showing past the blue means you're using it slowly. Hover a bar for the exact numbers
 - Taskbar display: a compact usage strip on the taskbar, bottom-left corner, with its own Settings toggle (independent of the floating overlay)
 - Provider logos replace the text labels in the overlay and taskbar strip to save space
 - Always-on overlay: a minimal, draggable usage readout that stays above other windows without taking focus (tray menu and Settings toggle; position is remembered)
