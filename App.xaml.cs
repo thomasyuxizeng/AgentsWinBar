@@ -225,6 +225,8 @@ public partial class App : Application
         services.AddSingleton<ISettingsService, SettingsService>();
         services.AddSingleton<ISetupChecker, SetupChecker>();
         services.AddSingleton<ISampleDataLoader, SampleDataLoader>();
+        services.AddSingleton<UsageAlertEvaluator>();
+        services.AddSingleton<IToastNotifier, ToastNotifier>();
 
         // ViewModels
         services.AddSingleton<MainViewModel>();

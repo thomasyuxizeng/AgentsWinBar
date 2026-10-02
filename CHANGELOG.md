@@ -14,6 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Gemini windows are labelled "5-hour" and "Weekly" instead of "Pro" and "Flash"
 
 ### Added
+- Projected run-out time in every usage bar's hover tooltip, e.g. "At this pace you'll hit the limit in 1h 20m, 3h 10m before the reset" (or the usage you're on track for by the reset)
+- Usage alerts: a Windows notification when usage is far ahead of pace (25+ points and the limit would be hit well before the reset), nearly out (90%+), or at the limit; once per usage window. Settings toggle (on by default) and a "Send test notification" button
+- The floating overlay and the taskbar strip hide while a fullscreen game, video or presentation is running, and come back afterwards
+- `tools/wsl`: installer for the CodexBar CLI and the shim that bridges Gemini (via Antigravity) and Claude (CLI route, cached) inside WSL, so a fresh machine or reinstalled distro can be set up in one step
 - Pace layer under every usage bar: a soft violet layer shows how much of the usage window's time has passed (full at the reset); when it shows past the end of the blue you're using usage slowly. When usage is outpacing the schedule, a thin marker line appears at the time position instead. Hover a bar for the exact numbers
 - Overlay and taskbar strip number columns size to the actual numbers (two digits as the typical case) so values sit snugly next to their bars and the "%" signs line up
 - The taskbar strip sits flush with the taskbar: full height (starting just below the taskbar's top line), square left end, rounded right end, no border

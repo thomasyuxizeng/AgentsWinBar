@@ -15,6 +15,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
 {
     private readonly ICodexBarService _codexBarService;
     private readonly ISettingsService _settingsService;
+    private readonly UsageAlertEvaluator _alertEvaluator;
+    private readonly IToastNotifier _toastNotifier;
     private readonly ILogger<MainViewModel> _logger;
     private PeriodicTimer? _refreshTimer;
     private CancellationTokenSource? _refreshCts;
@@ -39,10 +41,14 @@ public partial class MainViewModel : ObservableObject, IDisposable
     public MainViewModel(
         ICodexBarService codexBarService,
         ISettingsService settingsService,
+        UsageAlertEvaluator alertEvaluator,
+        IToastNotifier toastNotifier,
         ILogger<MainViewModel> logger)
     {
         _codexBarService = codexBarService;
         _settingsService = settingsService;
+        _alertEvaluator = alertEvaluator;
+        _toastNotifier = toastNotifier;
         _logger = logger;
 
         _settingsService.SettingsChanged += OnSettingsChanged;
@@ -165,6 +171,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
             LastUpdated = DateTime.Now;
             UpdateLastUpdatedText();
+            NotifyAlerts();
 
             _logger.LogInformation("Usage data refreshed, {Count} providers", Providers.Count);
         }
@@ -192,6 +199,30 @@ public partial class MainViewModel : ObservableObject, IDisposable
         finally
         {
             IsLoading = false;
+        }
+    }
+
+    /// <summary>
+    /// Shows a Windows notification for anything that newly needs attention (once per usage window).
+    /// </summary>
+    private void NotifyAlerts()
+    {
+        if (!_settingsService.Settings.AlertsEnabled)
+        {
+            return;
+        }
+
+        try
+        {
+            foreach (var alert in _alertEvaluator.Evaluate(Providers, DateTime.UtcNow))
+            {
+                _logger.LogInformation("Usage alert: {Title}", alert.Title);
+                _toastNotifier.Show(alert.Title, alert.Message);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to evaluate usage alerts");
         }
     }
 

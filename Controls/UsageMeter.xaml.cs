@@ -33,6 +33,22 @@ public sealed partial class UsageMeter : UserControl
             typeof(UsageMeter),
             new PropertyMetadata(-1.0, OnPercentChanged));
 
+    /// <summary>
+    /// Optional extra tooltip line, e.g. the projected run-out time ("At this pace you'll hit the limit in ...").
+    /// </summary>
+    public static readonly DependencyProperty PaceTextProperty =
+        DependencyProperty.Register(
+            nameof(PaceText),
+            typeof(string),
+            typeof(UsageMeter),
+            new PropertyMetadata(string.Empty, OnPercentChanged));
+
+    public string PaceText
+    {
+        get => (string)GetValue(PaceTextProperty);
+        set => SetValue(PaceTextProperty, value);
+    }
+
     public double Percent
     {
         get => (double)GetValue(PercentProperty);
@@ -76,7 +92,7 @@ public sealed partial class UsageMeter : UserControl
         {
             TimeBar.Visibility = Visibility.Collapsed;
             TimeMarker.Visibility = Visibility.Collapsed;
-            ToolTipService.SetToolTip(this, null);
+            ToolTipService.SetToolTip(this, string.IsNullOrEmpty(PaceText) ? null : PaceText);
             return;
         }
 
@@ -94,7 +110,13 @@ public sealed partial class UsageMeter : UserControl
         var pace = percent > time + 5 ? "ahead of time: using it fast"
             : percent < time - 5 ? "behind time: using it slowly"
             : "on pace";
-        ToolTipService.SetToolTip(this, $"Used {percent:F0}% · {time:F0}% of the time has passed ({pace})");
+        var tip = $"Used {percent:F0}% · {time:F0}% of the time has passed ({pace})";
+        if (!string.IsNullOrEmpty(PaceText))
+        {
+            tip += Environment.NewLine + PaceText;
+        }
+
+        ToolTipService.SetToolTip(this, tip);
     }
 
     private static SolidColorBrush GetBarColor(double percent) => percent switch

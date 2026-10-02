@@ -63,7 +63,21 @@ public sealed partial class SettingsPage : Page
         StartMinimizedToggle.IsOn = ViewModel.StartMinimized;
         AlwaysOnOverlayToggle.IsOn = ViewModel.AlwaysOnOverlay;
         TaskbarDisplayToggle.IsOn = ViewModel.TaskbarDisplay;
+        AlertsToggle.IsOn = ViewModel.AlertsEnabled;
         DeveloperModeToggle.IsOn = ViewModel.DeveloperModeEnabled;
+    }
+
+    private void OnTestAlertClicked(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            App.Services.GetRequiredService<Services.IToastNotifier>()
+                .Show("CodexBarWin", "Notifications are working. You'll get one like this when usage needs attention.");
+        }
+        catch (Exception ex)
+        {
+            App.Services.GetRequiredService<ILogger<SettingsPage>>().LogWarning(ex, "Test notification failed");
+        }
     }
 
     private async void OnSaveClicked(object sender, RoutedEventArgs e)
@@ -87,6 +101,7 @@ public sealed partial class SettingsPage : Page
             ViewModel.StartMinimized = StartMinimizedToggle.IsOn;
             ViewModel.AlwaysOnOverlay = AlwaysOnOverlayToggle.IsOn;
             ViewModel.TaskbarDisplay = TaskbarDisplayToggle.IsOn;
+            ViewModel.AlertsEnabled = AlertsToggle.IsOn;
             ViewModel.DeveloperModeEnabled = DeveloperModeToggle.IsOn;
 
             await ViewModel.SaveCommand.ExecuteAsync(null);

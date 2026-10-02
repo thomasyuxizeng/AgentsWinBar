@@ -39,7 +39,7 @@ This is a WinUI 3 frontend wrapper for [CodexBar CLI](https://github.com/steipet
 - Windows 10 (1809+) / Windows 11
 - WSL 2 with a Linux distribution (Ubuntu recommended)
 - .NET 10.0 Runtime
-- [CodexBar CLI](https://github.com/steipete/CodexBar)
+- [CodexBar CLI](https://github.com/steipete/CodexBar) (the scripts in [`tools/wsl`](tools/wsl/README.md) install it inside WSL together with a shim that keeps Claude and Gemini working)
 
 ## Installation
 

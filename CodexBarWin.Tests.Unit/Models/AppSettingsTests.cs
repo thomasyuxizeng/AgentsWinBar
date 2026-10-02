@@ -107,6 +107,18 @@ public class AppSettingsTests
     }
 
     [TestMethod]
+    public void AlertsEnabled_IsOnByDefaultAndMissingFieldInOlderFilesKeepsDefault()
+    {
+        AppSettings.GetDefaults().AlertsEnabled.Should().BeTrue();
+
+        var older = System.Text.Json.JsonSerializer.Deserialize("""{"Version":1}""", AppJsonSerializerContext.Default.AppSettings);
+        older!.AlertsEnabled.Should().BeTrue();
+
+        var off = System.Text.Json.JsonSerializer.Deserialize("""{"AlertsEnabled":false}""", AppJsonSerializerContext.Default.AppSettings);
+        off!.AlertsEnabled.Should().BeFalse();
+    }
+
+    [TestMethod]
     public void TaskbarDisplay_IsOffByDefaultAndIndependentOfOverlay()
     {
         // Arrange

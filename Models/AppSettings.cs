@@ -61,6 +61,11 @@ public class AppSettings
     public bool TaskbarDisplayEnabled { get; set; } = false;
 
     /// <summary>
+    /// Shows a Windows notification when usage is far ahead of pace, nearly out, or at the limit.
+    /// </summary>
+    public bool AlertsEnabled { get; set; } = true;
+
+    /// <summary>
     /// Saved overlay position in screen pixels (null = default corner).
     /// </summary>
     public int? OverlayX { get; set; }
@@ -82,6 +87,7 @@ public class AppSettings
         CodexBarGuideUrl = "https://github.com/steipete/CodexBar#installation",
         DeveloperModeEnabled = false,
         AlwaysOnOverlayEnabled = false,
-        TaskbarDisplayEnabled = false
+        TaskbarDisplayEnabled = false,
+        AlertsEnabled = true
     };
 }

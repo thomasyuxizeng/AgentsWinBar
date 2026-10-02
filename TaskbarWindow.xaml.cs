@@ -26,6 +26,8 @@ public sealed class TaskbarItem
     public double WeeklyPercent { get; set; }
     public double SessionTimePercent { get; set; } = -1;
     public double WeeklyTimePercent { get; set; } = -1;
+    public string SessionPace { get; set; } = string.Empty;
+    public string WeeklyPace { get; set; } = string.Empty;
     public string SessionText { get; set; } = string.Empty;
     public string WeeklyText { get; set; } = string.Empty;
     public Brush SessionBrush { get; set; } = null!;
@@ -57,6 +59,7 @@ public sealed partial class TaskbarWindow : Window
     private readonly DispatcherTimer _keepOnTopTimer;
     private int _tickCount;
     private bool _roundedRightEnd;
+    private bool _hiddenForFullscreen;
     private WindowZOrder.ForegroundWatcher? _foregroundWatcher;
     private DesktopAcrylicController? _acrylicController;
     private SystemBackdropConfiguration? _backdropConfiguration;
@@ -91,6 +94,7 @@ public sealed partial class TaskbarWindow : Window
         _keepOnTopTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
         _keepOnTopTimer.Tick += (_, _) =>
         {
+            UpdateFullscreenVisibility();
             Reposition();
             WindowZOrder.AssertTopmost(_hwnd);
 
@@ -123,10 +127,29 @@ public sealed partial class TaskbarWindow : Window
 
         _foregroundWatcher ??= new WindowZOrder.ForegroundWatcher(() =>
         {
+            UpdateFullscreenVisibility();
             Reposition();
             WindowZOrder.AssertTopmost(_hwnd);
         });
         _keepOnTopTimer.Start();
+    }
+
+    /// <summary>
+    /// Hides the strip while a fullscreen game, video or presentation is running, and brings it back after.
+    /// </summary>
+    private void UpdateFullscreenVisibility()
+    {
+        var fullscreen = WindowZOrder.IsFullscreenAppActive();
+        if (fullscreen && !_hiddenForFullscreen)
+        {
+            _hiddenForFullscreen = true;
+            AppWindow.Hide();
+        }
+        else if (!fullscreen && _hiddenForFullscreen)
+        {
+            _hiddenForFullscreen = false;
+            AppWindow.Show(false);
+        }
     }
 
     private void ConfigureWindow()
@@ -201,6 +224,8 @@ public sealed partial class TaskbarWindow : Window
                 WeeklyPercent = data.Weekly?.Percent ?? 0,
                 SessionTimePercent = data.Session?.ElapsedPercent ?? -1,
                 WeeklyTimePercent = data.Weekly?.ElapsedPercent ?? -1,
+                SessionPace = data.Session?.PaceSummary ?? string.Empty,
+                WeeklyPace = data.Weekly?.PaceSummary ?? string.Empty,
                 SessionText = session,
                 WeeklyText = weekly,
                 SessionBrush = WarningBrush(data.Session) ?? primary,

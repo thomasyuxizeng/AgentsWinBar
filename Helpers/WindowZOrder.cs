@@ -172,6 +172,24 @@ internal static class WindowZOrder
         _ = DwmSetWindowAttribute(hwnd, DWMWA_BORDER_COLOR, ref none, sizeof(int));
     }
 
+    [DllImport("shell32.dll")]
+    private static extern int SHQueryUserNotificationState(out int state);
+
+    // QUERY_USER_NOTIFICATION_STATE values that mean "a fullscreen app owns the screen"
+    private const int QUNS_BUSY = 2;                    // fullscreen app (e.g. fullscreen video or game)
+    private const int QUNS_RUNNING_D3D_FULL_SCREEN = 3; // exclusive-mode Direct3D game
+    private const int QUNS_PRESENTATION_MODE = 4;       // e.g. a slideshow
+
+    /// <summary>
+    /// True while a fullscreen game, video or presentation is in the foreground, when an always-on-top
+    /// overlay would only get in the way.
+    /// </summary>
+    public static bool IsFullscreenAppActive()
+    {
+        return SHQueryUserNotificationState(out var state) == 0
+            && state is QUNS_BUSY or QUNS_RUNNING_D3D_FULL_SCREEN or QUNS_PRESENTATION_MODE;
+    }
+
     private const uint ABM_GETTASKBARPOS = 0x00000005;
 
     [StructLayout(LayoutKind.Sequential)]

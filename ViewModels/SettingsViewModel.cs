@@ -34,6 +34,9 @@ public partial class SettingsViewModel : ObservableObject
     private bool _taskbarDisplay;
 
     [ObservableProperty]
+    private bool _alertsEnabled;
+
+    [ObservableProperty]
     private int _selectedThemeIndex;
 
     [ObservableProperty]
@@ -74,6 +77,7 @@ public partial class SettingsViewModel : ObservableObject
         StartMinimized = settings.StartMinimized;
         AlwaysOnOverlay = settings.AlwaysOnOverlayEnabled;
         TaskbarDisplay = settings.TaskbarDisplayEnabled;
+        AlertsEnabled = settings.AlertsEnabled;
         SelectedThemeIndex = (int)settings.Theme;
         DeveloperModeEnabled = settings.DeveloperModeEnabled;
     }
@@ -129,6 +133,7 @@ public partial class SettingsViewModel : ObservableObject
         settings.StartMinimized = StartMinimized;
         settings.AlwaysOnOverlayEnabled = AlwaysOnOverlay;
         settings.TaskbarDisplayEnabled = TaskbarDisplay;
+        settings.AlertsEnabled = AlertsEnabled;
         settings.Theme = (AppTheme)SelectedThemeIndex;
         settings.DeveloperModeEnabled = DeveloperModeEnabled;
 

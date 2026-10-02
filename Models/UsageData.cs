@@ -68,6 +68,17 @@ public record UsageWindow
     /// </summary>
     public double? ElapsedPercent =>
         Helpers.ResetTimeFormatter.ElapsedPercent(ResetAt, WindowMinutes, DateTime.UtcNow);
+
+    /// <summary>
+    /// What the usage rate so far means for the rest of the window.
+    /// </summary>
+    public Helpers.PaceProjection Pace =>
+        Helpers.PaceCalculator.Project(Percent, WindowMinutes, ResetAt, DateTime.UtcNow);
+
+    /// <summary>
+    /// One-sentence pace summary for tooltips (empty when unknown).
+    /// </summary>
+    public string PaceSummary => Helpers.PaceCalculator.Summarize(Pace);
     public TimeSpan? TimeUntilReset => ResetAt.HasValue ? ResetAt.Value - DateTime.UtcNow : null;
 
     /// <summary>

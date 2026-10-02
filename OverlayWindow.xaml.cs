@@ -26,6 +26,8 @@ public sealed class OverlayRow
     public string SessionText { get; set; } = string.Empty;
     public double WeeklyPercent { get; set; }
     public double WeeklyTimePercent { get; set; } = -1;
+    public string SessionPace { get; set; } = string.Empty;
+    public string WeeklyPace { get; set; } = string.Empty;
     public string WeeklyText { get; set; } = string.Empty;
     public Microsoft.UI.Xaml.GridLength SessionNumberColumn { get; set; }
     public Microsoft.UI.Xaml.GridLength WeeklyNumberColumn { get; set; }
@@ -52,6 +54,7 @@ public sealed partial class OverlayWindow : Window
     private readonly IntPtr _hwnd;
     private readonly DispatcherTimer _topmostTimer;
     private int _tickCount;
+    private bool _hiddenForFullscreen;
     private WindowZOrder.ForegroundWatcher? _foregroundWatcher;
     private DesktopAcrylicController? _acrylicController;
     private SystemBackdropConfiguration? _backdropConfiguration;
@@ -87,6 +90,7 @@ public sealed partial class OverlayWindow : Window
         _topmostTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
         _topmostTimer.Tick += (_, _) =>
         {
+            UpdateFullscreenVisibility();
             WindowZOrder.AssertTopmost(_hwnd);
             ApplySize();   // follows display scale changes (e.g. remote desktop)
 
@@ -116,8 +120,30 @@ public sealed partial class OverlayWindow : Window
         WindowZOrder.RestoreForeground(previousForeground);
         WindowZOrder.AssertTopmost(_hwnd);
 
-        _foregroundWatcher ??= new WindowZOrder.ForegroundWatcher(() => WindowZOrder.AssertTopmost(_hwnd));
+        _foregroundWatcher ??= new WindowZOrder.ForegroundWatcher(() =>
+        {
+            UpdateFullscreenVisibility();
+            WindowZOrder.AssertTopmost(_hwnd);
+        });
         _topmostTimer.Start();
+    }
+
+    /// <summary>
+    /// Hides the overlay while a fullscreen game, video or presentation is running, and brings it back after.
+    /// </summary>
+    private void UpdateFullscreenVisibility()
+    {
+        var fullscreen = WindowZOrder.IsFullscreenAppActive();
+        if (fullscreen && !_hiddenForFullscreen)
+        {
+            _hiddenForFullscreen = true;
+            AppWindow.Hide();
+        }
+        else if (!fullscreen && _hiddenForFullscreen)
+        {
+            _hiddenForFullscreen = false;
+            AppWindow.Show(false);
+        }
     }
 
     private void ConfigureWindow()
@@ -221,6 +247,8 @@ public sealed partial class OverlayWindow : Window
             SessionText = session.Text,
             WeeklyPercent = weekly.Percent,
             WeeklyTimePercent = data.Weekly?.ElapsedPercent ?? -1,
+            SessionPace = data.Session?.PaceSummary ?? string.Empty,
+            WeeklyPace = data.Weekly?.PaceSummary ?? string.Empty,
             WeeklyText = weekly.Text
         };
     }

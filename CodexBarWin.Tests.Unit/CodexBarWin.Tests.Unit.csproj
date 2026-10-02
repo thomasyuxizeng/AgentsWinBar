@@ -26,6 +26,7 @@
   <ItemGroup>
     <Compile Include="..\Helpers\AsyncHelper.cs" Link="Linked\AsyncHelper.cs" />
     <Compile Include="..\Helpers\ResetTimeFormatter.cs" Link="Linked\ResetTimeFormatter.cs" />
+    <Compile Include="..\Helpers\PaceCalculator.cs" Link="Linked\PaceCalculator.cs" />
     <Compile Include="..\Models\AppSettings.cs" Link="Linked\AppSettings.cs" />
     <Compile Include="..\Models\UsageData.cs" Link="Linked\UsageData.cs" />
     <Compile Include="..\Models\SetupStatus.cs" Link="Linked\SetupStatus.cs" />
@@ -43,6 +44,7 @@
     <Compile Include="..\Services\CacheService.cs" Link="Linked\CacheService.cs" />
     <Compile Include="..\Services\SetupChecker.cs" Link="Linked\SetupChecker.cs" />
     <Compile Include="..\Services\SampleDataLoader.cs" Link="Linked\SampleDataLoader.cs" />
+    <Compile Include="..\Services\UsageAlertEvaluator.cs" Link="Linked\UsageAlertEvaluator.cs" />
   </ItemGroup>
 
 </Project>
