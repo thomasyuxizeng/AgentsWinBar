@@ -65,7 +65,9 @@ public static class ProviderConstants
         var normalized = ValidateAndNormalize(providerId);
         return normalized switch
         {
-            "claude" => "oauth",
+            // The OAuth usage endpoint is rate limited by Anthropic when polled regularly (exit code 3);
+            // the Claude CLI route is not, at the cost of a slower fetch (covered by the CLI timeouts).
+            "claude" => "cli",
             "codex" => "cli",
             "gemini" => "cli",
             _ => throw new InvalidOperationException($"Unhandled provider: {normalized}")

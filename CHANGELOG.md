@@ -7,7 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Flyout not appearing over other programs: it now takes the foreground reliably and stays above windows that become topmost
+- "Command failed (exit code 3)" for Claude: usage is now fetched through the Claude CLI instead of the rate-limited OAuth endpoint
+- Gemini windows are labelled "5-hour" and "Weekly" instead of "Pro" and "Flash"
+
 ### Added
+- Always-on overlay: a minimal, draggable usage readout that stays above other windows without taking focus (tray menu and Settings toggle; position is remembered)
+- Crash log at `%LOCALAPPDATA%\CodexBarWin\crash.log`
 - Developer mode for testing without CodexBar CLI
 - Sample JSON data files for Claude, Gemini, and Codex providers
 - Settings toggle to enable/disable developer mode

@@ -1,6 +1,7 @@
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Runtime.InteropServices;
+using CodexBarWin.Helpers;
 using CodexBarWin.Models;
 using CodexBarWin.Services;
 using CodexBarWin.ViewModels;
@@ -111,6 +112,9 @@ public sealed partial class MainWindow : Window
     private GCHandle _mouseProcHandle;
     private DesktopAcrylicController? _acrylicController;
     private SystemBackdropConfiguration? _backdropConfiguration;
+    private WindowZOrder.ForegroundWatcher? _flyoutForegroundWatcher;
+    private OverlayWindow? _overlay;
+    private ToggleMenuFlyoutItem? _overlayMenuItem;
 
     // Animation settings (from configuration)
     private int ShowAnimationDurationMs => _settingsService.Settings.Animation.ShowDurationMs;
@@ -278,6 +282,15 @@ public sealed partial class MainWindow : Window
             MenuFlyoutPresenterStyle = presenterStyle
         };
 
+        _overlayMenuItem = new ToggleMenuFlyoutItem
+        {
+            Text = "Always-on overlay",
+            Icon = new FontIcon { Glyph = "" },
+            IsChecked = _settingsService.Settings.AlwaysOnOverlayEnabled
+        };
+        _overlayMenuItem.Click += OnOverlayMenuItemClick;
+        contextMenu.Items.Add(_overlayMenuItem);
+
         var settingsItem = new MenuFlyoutItem
         {
             Text = "Settings",
@@ -306,7 +319,61 @@ public sealed partial class MainWindow : Window
 
         // Start hidden - user clicks tray to show
         HideWindow();
+
+        // Always-on overlay (restores the saved on/off state, and follows later settings changes)
+        _settingsService.SettingsChanged += OnSettingsChanged;
+        ApplyOverlaySetting();
     }
+
+    #region Always-on Overlay
+
+    private void OnOverlayMenuItemClick(object sender, RoutedEventArgs e)
+    {
+        _settingsService.Settings.AlwaysOnOverlayEnabled = _overlayMenuItem?.IsChecked ?? false;
+        // Quiet save: toggling the overlay must not trigger a usage refetch
+        _settingsService.SaveQuietAsync().SafeFireAndForget(onError: _ => { });
+        ApplyOverlaySetting();
+    }
+
+    private void OnSettingsChanged(object? sender, EventArgs e)
+    {
+        DispatcherQueue.TryEnqueue(ApplyOverlaySetting);
+    }
+
+    /// <summary>
+    /// Creates or closes the overlay so it matches the saved setting.
+    /// </summary>
+    private void ApplyOverlaySetting()
+    {
+        var enabled = _settingsService.Settings.AlwaysOnOverlayEnabled;
+
+        if (_overlayMenuItem != null)
+        {
+            _overlayMenuItem.IsChecked = enabled;
+        }
+
+        if (enabled && _overlay == null)
+        {
+            _overlay = new OverlayWindow();
+            _overlay.OpenDetailsRequested += (_, _) => ToggleWindow();
+            _overlay.HideRequested += (_, _) =>
+            {
+                _settingsService.Settings.AlwaysOnOverlayEnabled = false;
+                _settingsService.SaveQuietAsync().SafeFireAndForget(onError: _ => { });
+                ApplyOverlaySetting();
+            };
+            _overlay.Closed += (_, _) => _overlay = null;
+            _overlay.ShowOverlay();
+        }
+        else if (!enabled && _overlay != null)
+        {
+            var overlay = _overlay;
+            _overlay = null;
+            overlay.Close();
+        }
+    }
+
+    #endregion
 
     /// <summary>
     /// Updates the tray icon based on current theme.
@@ -419,8 +486,18 @@ public sealed partial class MainWindow : Window
         }
         StopAnimationTimer();
         UninstallMouseHook();
+        StopFlyoutForegroundWatcher();
+        _settingsService.SettingsChanged -= OnSettingsChanged;
+        _overlay?.Close();
+        _overlay = null;
         _acrylicController?.Dispose();
         _trayIcon?.Dispose();
+    }
+
+    private void StopFlyoutForegroundWatcher()
+    {
+        _flyoutForegroundWatcher?.Dispose();
+        _flyoutForegroundWatcher = null;
     }
 
     private void ToggleWindow()
@@ -460,6 +537,19 @@ public sealed partial class MainWindow : Window
         WindowExtensions.Show(this);
         Activate();
         _isWindowVisible = true;
+
+        // Win the foreground even when another app (or a topmost window) owns it
+        var hwnd = WindowNative.GetWindowHandle(this);
+        WindowZOrder.ForceForeground(hwnd);
+
+        // Stay above windows that become topmost while the flyout is open
+        _flyoutForegroundWatcher ??= new WindowZOrder.ForegroundWatcher(() =>
+        {
+            if (_isWindowVisible)
+            {
+                WindowZOrder.AssertTopmost(hwnd);
+            }
+        });
 
         // Install mouse hook for light dismiss
         InstallMouseHook();
@@ -537,6 +627,7 @@ public sealed partial class MainWindow : Window
             {
                 WindowExtensions.Hide(this);
                 _isWindowVisible = false;
+                StopFlyoutForegroundWatcher();
             }
         }
     }

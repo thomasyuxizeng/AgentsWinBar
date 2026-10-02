@@ -28,6 +28,9 @@ public partial class SettingsViewModel : ObservableObject
     private bool _startMinimized;
 
     [ObservableProperty]
+    private bool _alwaysOnOverlay;
+
+    [ObservableProperty]
     private int _selectedThemeIndex;
 
     [ObservableProperty]
@@ -66,6 +69,7 @@ public partial class SettingsViewModel : ObservableObject
         RefreshInterval = settings.RefreshIntervalSeconds;
         StartWithWindows = settings.StartWithWindows;
         StartMinimized = settings.StartMinimized;
+        AlwaysOnOverlay = settings.AlwaysOnOverlayEnabled;
         SelectedThemeIndex = (int)settings.Theme;
         DeveloperModeEnabled = settings.DeveloperModeEnabled;
     }
@@ -119,6 +123,7 @@ public partial class SettingsViewModel : ObservableObject
         settings.RefreshIntervalSeconds = RefreshInterval;
         settings.StartWithWindows = StartWithWindows;
         settings.StartMinimized = StartMinimized;
+        settings.AlwaysOnOverlayEnabled = AlwaysOnOverlay;
         settings.Theme = (AppTheme)SelectedThemeIndex;
         settings.DeveloperModeEnabled = DeveloperModeEnabled;
 

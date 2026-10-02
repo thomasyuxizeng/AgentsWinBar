@@ -51,6 +51,17 @@ public class AppSettings
     public bool DeveloperModeEnabled { get; set; } = false;
 
     /// <summary>
+    /// Shows a minimal, always-visible usage overlay in addition to the tray flyout.
+    /// </summary>
+    public bool AlwaysOnOverlayEnabled { get; set; } = false;
+
+    /// <summary>
+    /// Saved overlay position in screen pixels (null = default corner).
+    /// </summary>
+    public int? OverlayX { get; set; }
+    public int? OverlayY { get; set; }
+
+    /// <summary>
     /// Gets the default settings.
     /// </summary>
     public static AppSettings GetDefaults() => new()
@@ -64,6 +75,7 @@ public class AppSettings
         Timeouts = new TimeoutSettings(),
         Animation = new AnimationSettings(),
         CodexBarGuideUrl = "https://github.com/steipete/CodexBar#installation",
-        DeveloperModeEnabled = false
+        DeveloperModeEnabled = false,
+        AlwaysOnOverlayEnabled = false
     };
 }

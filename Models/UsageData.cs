@@ -22,22 +22,18 @@ public record UsageData
     public bool HasError => !string.IsNullOrEmpty(Error);
 
     /// <summary>
-    /// Gets the display label for the session usage (e.g., "Session" for Claude/Codex, "Pro" for Gemini).
+    /// Gets the display label for the session usage (e.g., "Session" for Claude/Codex, "5-hour" for Gemini).
     /// </summary>
     public string SessionLabel => Provider.ToLowerInvariant() switch
     {
-        "gemini" => "Pro",
+        "gemini" => "5-hour",
         _ => "Session"
     };
 
     /// <summary>
-    /// Gets the display label for the weekly usage (e.g., "Weekly" for Claude/Codex, "Flash" for Gemini).
+    /// Gets the display label for the weekly usage ("Weekly" for all providers).
     /// </summary>
-    public string WeeklyLabel => Provider.ToLowerInvariant() switch
-    {
-        "gemini" => "Flash",
-        _ => "Weekly"
-    };
+    public string WeeklyLabel => "Weekly";
 
     /// <summary>
     /// Gets the display label for the tertiary usage (e.g., "Sonnet Weekly" for Claude).

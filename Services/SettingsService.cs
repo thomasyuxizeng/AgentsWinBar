@@ -65,16 +65,30 @@ public class SettingsService : ISettingsService
 
     public async Task SaveAsync()
     {
+        if (await PersistAsync())
+        {
+            SettingsChanged?.Invoke(this, EventArgs.Empty);
+        }
+    }
+
+    public async Task SaveQuietAsync()
+    {
+        await PersistAsync();
+    }
+
+    private async Task<bool> PersistAsync()
+    {
         try
         {
             var json = System.Text.Json.JsonSerializer.Serialize(_settings, AppJsonSerializerContext.Default.AppSettings);
             await File.WriteAllTextAsync(SettingsFilePath, json);
             _logger.LogInformation("Settings saved to {Path}", SettingsFilePath);
-            SettingsChanged?.Invoke(this, EventArgs.Empty);
+            return true;
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to save settings");
+            return false;
         }
     }
 

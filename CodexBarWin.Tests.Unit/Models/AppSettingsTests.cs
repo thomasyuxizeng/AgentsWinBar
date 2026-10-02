@@ -93,6 +93,53 @@ public class AppSettingsTests
         settings.CodexBarGuideUrl.Should().NotBeNullOrEmpty();
         settings.CodexBarGuideUrl.Should().StartWith("https://");
     }
+
+    [TestMethod]
+    public void GetDefaults_OverlayIsOffAndHasNoSavedPosition()
+    {
+        // Act
+        var settings = AppSettings.GetDefaults();
+
+        // Assert
+        settings.AlwaysOnOverlayEnabled.Should().BeFalse();
+        settings.OverlayX.Should().BeNull();
+        settings.OverlayY.Should().BeNull();
+    }
+
+    [TestMethod]
+    public void Overlay_SettingsRoundTripThroughJson()
+    {
+        // Arrange
+        var settings = AppSettings.GetDefaults();
+        settings.AlwaysOnOverlayEnabled = true;
+        settings.OverlayX = -1500;   // negative = a monitor left of the primary
+        settings.OverlayY = 42;
+
+        // Act
+        var json = System.Text.Json.JsonSerializer.Serialize(settings, AppJsonSerializerContext.Default.AppSettings);
+        var loaded = System.Text.Json.JsonSerializer.Deserialize(json, AppJsonSerializerContext.Default.AppSettings);
+
+        // Assert
+        loaded.Should().NotBeNull();
+        loaded!.AlwaysOnOverlayEnabled.Should().BeTrue();
+        loaded.OverlayX.Should().Be(-1500);
+        loaded.OverlayY.Should().Be(42);
+    }
+
+    [TestMethod]
+    public void Overlay_OldSettingsFileWithoutOverlayFieldsStillLoads()
+    {
+        // Arrange - settings.json written by a version before the overlay existed
+        const string json = """{"Version":1,"RefreshIntervalSeconds":120}""";
+
+        // Act
+        var loaded = System.Text.Json.JsonSerializer.Deserialize(json, AppJsonSerializerContext.Default.AppSettings);
+
+        // Assert
+        loaded.Should().NotBeNull();
+        loaded!.AlwaysOnOverlayEnabled.Should().BeFalse();
+        loaded.OverlayX.Should().BeNull();
+    }
 }
 
 [TestClass]

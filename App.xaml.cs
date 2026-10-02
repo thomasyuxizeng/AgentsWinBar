@@ -41,6 +41,33 @@ public partial class App : Application
     {
         InitializeComponent();
         Services = ConfigureServices();
+        RegisterCrashLogging();
+    }
+
+    /// <summary>
+    /// Writes unhandled exceptions to %LOCALAPPDATA%\CodexBarWin\crash.log so crashes can be diagnosed.
+    /// </summary>
+    private void RegisterCrashLogging()
+    {
+        UnhandledException += (_, e) => LogCrash($"Xaml.UnhandledException: {e.Message}", e.Exception);
+        AppDomain.CurrentDomain.UnhandledException += (_, e) => LogCrash("AppDomain.UnhandledException", e.ExceptionObject as Exception);
+        TaskScheduler.UnobservedTaskException += (_, e) => LogCrash("UnobservedTaskException", e.Exception);
+    }
+
+    private static void LogCrash(string source, Exception? ex)
+    {
+        try
+        {
+            var folder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CodexBarWin");
+            Directory.CreateDirectory(folder);
+            File.AppendAllText(
+                Path.Combine(folder, "crash.log"),
+                $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {source}{Environment.NewLine}{ex}{Environment.NewLine}{Environment.NewLine}");
+        }
+        catch
+        {
+            // Never throw from the crash logger
+        }
     }
 
     /// <summary>

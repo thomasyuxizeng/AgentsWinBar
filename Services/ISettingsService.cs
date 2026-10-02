@@ -28,6 +28,12 @@ public interface ISettingsService
     Task SaveAsync();
 
     /// <summary>
+    /// Saves settings to file without raising <see cref="SettingsChanged"/>
+    /// (for UI-only state such as overlay position, which must not trigger a data refresh).
+    /// </summary>
+    Task SaveQuietAsync();
+
+    /// <summary>
     /// Resets settings to defaults.
     /// </summary>
     void Reset();

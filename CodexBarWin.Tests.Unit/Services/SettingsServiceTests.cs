@@ -528,6 +528,12 @@ public class SettingsServiceTests
             }
         }
 
+        public async Task SaveQuietAsync()
+        {
+            var json = JsonSerializer.Serialize(_settings, AppJsonSerializerContext.Default.AppSettings);
+            await File.WriteAllTextAsync(SettingsFilePath, json);
+        }
+
         public async Task SaveAsync()
         {
             try

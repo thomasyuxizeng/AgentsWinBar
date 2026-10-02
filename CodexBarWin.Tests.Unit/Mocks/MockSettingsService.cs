@@ -32,6 +32,11 @@ public class MockSettingsService : ISettingsService
         return Task.CompletedTask;
     }
 
+    public Task SaveQuietAsync()
+    {
+        return Task.CompletedTask;
+    }
+
     public void Reset()
     {
         _settings = AppSettings.GetDefaults();
