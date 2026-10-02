@@ -35,10 +35,10 @@ public sealed class OverlayRow
 public sealed partial class OverlayWindow : Window
 {
     internal const double RowHeightDip = 22;
-    // Spacing rules (DIP), shared with the taskbar strip: 12 padding + 1 border on every side,
-    // uniform 8 between columns. Columns = 16 icon + 44 bar + 26 number + 44 bar + 26 number.
-    private const double WidthDip = 12 * 2 + 2 + (16 + 44 + 26 + 44 + 26) + 4 * 8;
-    private const double VerticalPaddingDip = 12 * 2 + 2;
+    // Spacing (DIP): 12 horizontal and 8 vertical padding + 1 border on every side,
+    // uniform 8 between columns. Columns = 16 icon + 44 bar + 30 number + 44 bar + 30 number.
+    private const double WidthDip = 12 * 2 + 2 + (16 + 44 + 30 + 44 + 30) + 4 * 8;
+    private const double VerticalPaddingDip = 8 * 2 + 2;
     private const double ScreenMarginDip = 16;
 
     private readonly MainViewModel _viewModel;

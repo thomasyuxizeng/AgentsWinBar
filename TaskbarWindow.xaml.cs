@@ -37,10 +37,10 @@ public sealed class TaskbarItem
 /// </summary>
 public sealed partial class TaskbarWindow : Window
 {
-    // Item = 16 icon + 8 gap + 44 bar + 8 gap + 26 number; strip = 12 padding + 1 border on each side
-    private const double ItemWidthDip = 102;
-    private const double ItemSpacingDip = 16;
-    private const double HorizontalPaddingDip = 26;
+    // Item = 16 icon + 10 gap + 56 bar + 8 gap + 30 number; strip = 18 padding + 1 border on each side
+    private const double ItemWidthDip = 120;
+    private const double ItemSpacingDip = 24;
+    private const double HorizontalPaddingDip = 38;
     private const double LeftMarginDip = 8;
     private const double VerticalInsetDip = 4;
     private const double FallbackHeightDip = 40;

@@ -9,10 +9,10 @@
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     mc:Ignorable="d">
 
-    <!-- Spacing rules (DIP): 12 outer padding, 16 between providers, uniform 8 between icon, bar and number, 4 between rows -->
+    <!-- Spacing (DIP): 18 outer padding, 24 between providers, 10 icon to bars, 8 bar to number, bars close together -->
     <Grid
         x:Name="RootGrid"
-        Padding="12,0"
+        Padding="18,0"
         Background="Transparent"
         BorderBrush="{ThemeResource SurfaceStrokeColorDefaultBrush}"
         BorderThickness="1"
@@ -41,13 +41,13 @@
             VerticalAlignment="Center">
             <ItemsControl.ItemsPanel>
                 <ItemsPanelTemplate>
-                    <StackPanel Orientation="Horizontal" Spacing="16"/>
+                    <StackPanel Orientation="Horizontal" Spacing="24"/>
                 </ItemsPanelTemplate>
             </ItemsControl.ItemsPanel>
             <ItemsControl.ItemTemplate>
                 <DataTemplate x:DataType="local:TaskbarItem">
                     <Grid
-                        ColumnSpacing="8"
+                        ColumnSpacing="10"
                         VerticalAlignment="Center"
                         ToolTipService.ToolTip="{x:Bind ToolTip}">
                         <Grid.ColumnDefinitions>
@@ -64,14 +64,14 @@
                             VerticalAlignment="Center"
                             Fill="{ThemeResource TextFillColorPrimaryBrush}"/>
 
-                        <Grid Grid.Column="1" RowSpacing="4" ColumnSpacing="8">
+                        <Grid Grid.Column="1" RowSpacing="0" ColumnSpacing="8">
                             <Grid.RowDefinitions>
-                                <RowDefinition Height="16"/>
-                                <RowDefinition Height="16"/>
+                                <RowDefinition Height="13"/>
+                                <RowDefinition Height="13"/>
                             </Grid.RowDefinitions>
                             <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="44"/>
-                                <ColumnDefinition Width="26"/>
+                                <ColumnDefinition Width="56"/>
+                                <ColumnDefinition Width="30"/>
                             </Grid.ColumnDefinitions>
 
                             <controls:UsageMeter
