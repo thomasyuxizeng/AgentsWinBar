@@ -30,5 +30,16 @@
             HorizontalAlignment="Left"
             RadiusX="3"
             RadiusY="3"/>
+
+        <!-- Marker line at the time-elapsed position; only shown when usage is outpacing the schedule -->
+        <Rectangle
+            x:Name="TimeMarker"
+            Width="2"
+            HorizontalAlignment="Left"
+            RadiusX="1"
+            RadiusY="1"
+            Fill="{ThemeResource TextFillColorPrimaryBrush}"
+            Opacity="0.9"
+            Visibility="Collapsed"/>
     </Grid>
 </UserControl>

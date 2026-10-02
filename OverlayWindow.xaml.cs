@@ -27,6 +27,8 @@ public sealed class OverlayRow
     public double WeeklyPercent { get; set; }
     public double WeeklyTimePercent { get; set; } = -1;
     public string WeeklyText { get; set; } = string.Empty;
+    public Microsoft.UI.Xaml.GridLength SessionNumberColumn { get; set; }
+    public Microsoft.UI.Xaml.GridLength WeeklyNumberColumn { get; set; }
     public double RowHeight => OverlayWindow.RowHeightDip;
 }
 
@@ -37,11 +39,10 @@ public sealed class OverlayRow
 public sealed partial class OverlayWindow : Window
 {
     internal const double RowHeightDip = 22;
-    // Spacing (DIP): 12 horizontal and 8 vertical padding + 1 border on every side,
-    // uniform 8 between columns. Columns = 16 icon + 44 bar + 28 number (left-aligned, hugging its bar)
-    // + 44 bar + 26 number. This is only a lower bound: ApplySize() grows the window to the measured
-    // content if needed.
-    private const double WidthDip = 12 * 2 + 2 + (16 + 44 + 28 + 44 + 26) + 4 * 8;
+    // Spacing (DIP): 12 horizontal and 8 vertical padding + 1 border on every side, uniform 8 between
+    // columns. The width is worked out in Rebuild() from the actual number widths; ApplySize() also
+    // grows the window to the measured content if that is ever larger.
+    private double _contentWidthDip = 214;
     private const double VerticalPaddingDip = 8 * 2 + 2;
     private const double ScreenMarginDip = 16;
     private const double ClipSlackDip = 2;
@@ -173,14 +174,35 @@ public sealed partial class OverlayWindow : Window
 
     private void Rebuild()
     {
+        var rows = _viewModel.Providers.Select(ToRow).ToList();
+
+        // Number columns are sized from the actual text, with two digits ("88%") as the typical minimum,
+        // so 1-2 digit values sit snugly next to their bars and "%" signs line up; a rare "100%" just
+        // widens the columns (and the window) for as long as it is shown.
+        var typical = MeasureNumber("88%");
+        var sessionWidth = Math.Ceiling(Math.Max(typical, rows.Select(r => MeasureNumber(r.SessionText)).DefaultIfEmpty(0).Max())) + 1;
+        var weeklyWidth = Math.Ceiling(Math.Max(typical, rows.Select(r => MeasureNumber(r.WeeklyText)).DefaultIfEmpty(0).Max())) + 1;
+
         Rows.Clear();
-        foreach (var data in _viewModel.Providers)
+        foreach (var row in rows)
         {
-            Rows.Add(ToRow(data));
+            row.SessionNumberColumn = new GridLength(sessionWidth);
+            row.WeeklyNumberColumn = new GridLength(weeklyWidth);
+            Rows.Add(row);
         }
+
+        // 12 padding + 1 border per side, 4 gaps of 8; columns = icon + bar + number + bar + number
+        _contentWidthDip = 2 * (12 + 1) + (16 + 44 + sessionWidth + 44 + weeklyWidth) + 4 * 8;
 
         ApplySize();
         ClampToScreen();
+    }
+
+    private static double MeasureNumber(string text)
+    {
+        var block = new Microsoft.UI.Xaml.Controls.TextBlock { Text = text, FontSize = 11 };
+        block.Measure(new Windows.Foundation.Size(double.PositiveInfinity, double.PositiveInfinity));
+        return block.DesiredSize.Width;
     }
 
     private static OverlayRow ToRow(UsageData data)
@@ -204,7 +226,7 @@ public sealed partial class OverlayWindow : Window
     }
 
     /// <summary>
-    /// Sizes the window to its content. Uses the formula as a minimum and the measured content size
+    /// Sizes the window to its content. Uses the computed width as a minimum and the measured content size
     /// when that is larger, so the right edge can never be clipped (e.g. after a display scale change).
     /// Only resizes when the size actually changed.
     /// </summary>
@@ -216,7 +238,7 @@ public sealed partial class OverlayWindow : Window
         RootGrid.Measure(new Windows.Foundation.Size(double.PositiveInfinity, double.PositiveInfinity));
         var measured = RootGrid.DesiredSize;
 
-        var widthDip = Math.Max(WidthDip, measured.Width) + ClipSlackDip;
+        var widthDip = Math.Max(_contentWidthDip, measured.Width) + ClipSlackDip;
         var heightDip = Math.Max(rows * RowHeightDip + VerticalPaddingDip, measured.Height);
 
         var target = new SizeInt32((int)Math.Ceiling(widthDip * scale), (int)Math.Ceiling(heightDip * scale));

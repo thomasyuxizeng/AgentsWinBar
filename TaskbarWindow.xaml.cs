@@ -39,15 +39,15 @@ public sealed class TaskbarItem
 /// </summary>
 public sealed partial class TaskbarWindow : Window
 {
-    // Item = 16 icon + 10 gap + 56 bar + 8 gap + 26 number; strip = 18 padding + 1 border on each side.
+    // Item = 16 icon + 10 gap + 56 bar + 8 gap + 22 number (a typical 1-2 digit value; the number column
+    // sizes itself to its text, so a rare "100%" just widens it); strip = 18 padding per side, no border.
     // These give a lower bound only: Reposition() grows the strip to the measured content if needed.
+    // The strip sits flush: full taskbar height, starting at the taskbar's left edge.
     private const double ClipSlackDip = 2;
-    private const double ItemWidthDip = 116;
+    private const double ItemWidthDip = 112;
     private const double ItemSpacingDip = 24;
-    private const double HorizontalPaddingDip = 38;
-    private const double LeftMarginDip = 8;
-    private const double VerticalInsetDip = 4;
-    private const double FallbackHeightDip = 40;
+    private const double HorizontalPaddingDip = 36;
+    private const double FallbackHeightDip = 48;
 
     private readonly MainViewModel _viewModel;
     private readonly IntPtr _hwnd;
@@ -139,7 +139,8 @@ public sealed partial class TaskbarWindow : Window
         AppWindow.IsShownInSwitchers = false;
         AppWindow.Title = string.Empty;
 
-        NativeMethods.ApplyRoundedCorners(_hwnd);
+        // Flush with the taskbar: square corners (no rounding) and, via the XAML, no border
+        WindowZOrder.DisableRoundedCorners(_hwnd);
     }
 
     private void SetupAcrylicBackdrop()
@@ -234,23 +235,18 @@ public sealed partial class TaskbarWindow : Window
             count * ItemWidthDip + (count - 1) * ItemSpacingDip + HorizontalPaddingDip,
             RootGrid.DesiredSize.Width);
         var width = (int)Math.Ceiling((contentDip + ClipSlackDip) * scale);
-        var margin = (int)(LeftMarginDip * scale);
-        var inset = (int)(VerticalInsetDip * scale);
 
+        // Flush: exactly the taskbar's top-left corner and full height, no margins
         RectInt32 target;
         if (WindowZOrder.GetTaskbarBounds() is { Edge: WindowZOrder.TaskbarEdge.Bottom } bar)
         {
-            target = new RectInt32(
-                bar.Left + margin,
-                bar.Top + inset,
-                width,
-                Math.Max(1, bar.Bottom - bar.Top - 2 * inset));
+            target = new RectInt32(bar.Left, bar.Top, width, Math.Max(1, bar.Bottom - bar.Top));
         }
         else
         {
             var screen = DisplayArea.Primary.OuterBounds;
             var height = (int)(FallbackHeightDip * scale);
-            target = new RectInt32(screen.X + margin, screen.Y + screen.Height - height - inset, width, height);
+            target = new RectInt32(screen.X, screen.Y + screen.Height - height, width, height);
         }
 
         var position = AppWindow.Position;

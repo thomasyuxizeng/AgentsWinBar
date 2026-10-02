@@ -6,9 +6,9 @@ using Windows.UI;
 namespace CodexBarWin.Controls;
 
 /// <summary>
-/// A meter control for displaying usage percentage, with an optional underlying bar showing how much
-/// of the usage window's time has passed. Blue running past the underlay means usage is ahead of time
-/// (using it too fast); the underlay peeking out past the blue means usage is behind (plenty to spare).
+/// A meter control for displaying usage percentage, with an optional underlying bar showing how much of
+/// the usage window's time has passed (visible when usage is behind schedule: plenty to spare) and a marker
+/// line at the same position that appears only when usage is ahead of schedule (using it too fast).
 /// </summary>
 public sealed partial class UsageMeter : UserControl
 {
@@ -75,6 +75,7 @@ public sealed partial class UsageMeter : UserControl
         if (TimePercent < 0)
         {
             TimeBar.Visibility = Visibility.Collapsed;
+            TimeMarker.Visibility = Visibility.Collapsed;
             ToolTipService.SetToolTip(this, null);
             return;
         }
@@ -82,6 +83,13 @@ public sealed partial class UsageMeter : UserControl
         var time = Math.Clamp(TimePercent, 0, 100);
         TimeBar.Visibility = Visibility.Visible;
         TimeBar.Width = ActualWidth * (time / 100.0);
+
+        // The marker only appears when usage is outpacing the schedule (the blue has run past the time
+        // position, so the violet layer is hidden). Otherwise the violet layer already shows the headroom.
+        // Keep it fully inside the bar, even at 0% and 100%.
+        TimeMarker.Visibility = percent > time && ActualWidth > TimeMarker.Width ? Visibility.Visible : Visibility.Collapsed;
+        var markerX = Math.Clamp(ActualWidth * (time / 100.0) - TimeMarker.Width / 2, 0, Math.Max(0, ActualWidth - TimeMarker.Width));
+        TimeMarker.Margin = new Thickness(markerX, 0, 0, 0);
 
         var pace = percent > time + 5 ? "ahead of time: using it fast"
             : percent < time - 5 ? "behind time: using it slowly"

@@ -9,14 +9,12 @@
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     mc:Ignorable="d">
 
-    <!-- Spacing (DIP): 18 outer padding, 24 between providers, 10 icon to bars, 8 bar to number, bars close together -->
+    <!-- Flush with the taskbar: full taskbar height, square corners, no border.
+         Spacing (DIP): 18 side padding, 24 between providers, 10 icon to bars, 8 bar to number, bars close together -->
     <Grid
         x:Name="RootGrid"
         Padding="18,0"
         Background="Transparent"
-        BorderBrush="{ThemeResource SurfaceStrokeColorDefaultBrush}"
-        BorderThickness="1"
-        CornerRadius="8"
         PointerPressed="OnPointerPressed">
 
         <Grid.ContextFlyout>
@@ -71,7 +69,7 @@
                             </Grid.RowDefinitions>
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="56"/>
-                                <ColumnDefinition Width="26"/>
+                                <ColumnDefinition Width="Auto" MinWidth="22"/>
                             </Grid.ColumnDefinitions>
 
                             <controls:UsageMeter

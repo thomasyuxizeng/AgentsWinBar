@@ -124,6 +124,18 @@ internal static class WindowZOrder
     private const int DWMWA_BORDER_COLOR = 34;
     private const int DWMWA_COLOR_NONE = unchecked((int)0xFFFFFFFE);
 
+    private const int DWMWA_WINDOW_CORNER_PREFERENCE = 33;
+    private const int DWMWCP_DONOTROUND = 1;
+
+    /// <summary>
+    /// Makes the window's corners square (Windows 11), e.g. for a strip that sits flush against the taskbar.
+    /// </summary>
+    public static void DisableRoundedCorners(IntPtr hwnd)
+    {
+        var preference = DWMWCP_DONOTROUND;
+        _ = DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, ref preference, sizeof(int));
+    }
+
     private const int GWL_STYLE = -16;
     private const long WS_THICKFRAME = 0x00040000;
     private const long WS_SYSMENU = 0x00080000;
