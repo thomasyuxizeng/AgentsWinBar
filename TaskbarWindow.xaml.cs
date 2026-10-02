@@ -46,13 +46,17 @@ public sealed partial class TaskbarWindow : Window
     private const double ClipSlackDip = 2;
     private const double ItemWidthDip = 112;
     private const double ItemSpacingDip = 24;
-    private const double HorizontalPaddingDip = 36;
+    private const double SidePaddingDip = 18;
+    private const double HorizontalPaddingDip = 2 * SidePaddingDip;
+    private const double OverhangDip = 12;   // how far the left end is pushed off-screen to hide its rounded corners
     private const double FallbackHeightDip = 48;
+    private const double TopLineDip = 1;   // the thin line along the taskbar's top edge
 
     private readonly MainViewModel _viewModel;
     private readonly IntPtr _hwnd;
     private readonly DispatcherTimer _keepOnTopTimer;
     private int _tickCount;
+    private bool _roundedRightEnd;
     private WindowZOrder.ForegroundWatcher? _foregroundWatcher;
     private DesktopAcrylicController? _acrylicController;
     private SystemBackdropConfiguration? _backdropConfiguration;
@@ -229,18 +233,46 @@ public sealed partial class TaskbarWindow : Window
     {
         var scale = WindowZOrder.GetScale(_hwnd);
         var count = Math.Max(1, Items.Count);
+        var bar = WindowZOrder.GetTaskbarBounds() is { Edge: WindowZOrder.TaskbarEdge.Bottom } b ? b : ((int, int, int, int, WindowZOrder.TaskbarEdge)?)null;
+
+        // Rounded right end, square left end: DWM rounds all four corners or none, so when nothing is
+        // to the left of the taskbar we push the window's left end just past the screen edge, where
+        // its (rounded) left corners are off-screen, and add the same amount of left padding.
+        var overhangDip = 0.0;
+        if (bar is { } probe)
+        {
+            var probePoint = new PointInt32(probe.Item1 - 1, probe.Item2 + (probe.Item4 - probe.Item2) / 2);
+            if (DisplayArea.GetFromPoint(probePoint, DisplayAreaFallback.None) == null)
+            {
+                overhangDip = OverhangDip;
+            }
+        }
+
+        var rounded = overhangDip > 0;
+        if (rounded != _roundedRightEnd)
+        {
+            _roundedRightEnd = rounded;
+            if (rounded) NativeMethods.ApplyRoundedCorners(_hwnd); else WindowZOrder.DisableRoundedCorners(_hwnd);
+        }
+
+        RootGrid.Padding = new Thickness(SidePaddingDip + overhangDip, 0, SidePaddingDip, 0);
+
         // Never narrower than the content, so the right edge can't be clipped (e.g. after a display scale change)
         RootGrid.Measure(new Windows.Foundation.Size(double.PositiveInfinity, double.PositiveInfinity));
         var contentDip = Math.Max(
-            count * ItemWidthDip + (count - 1) * ItemSpacingDip + HorizontalPaddingDip,
+            count * ItemWidthDip + (count - 1) * ItemSpacingDip + HorizontalPaddingDip + overhangDip,
             RootGrid.DesiredSize.Width);
         var width = (int)Math.Ceiling((contentDip + ClipSlackDip) * scale);
+        var overhang = (int)Math.Ceiling(overhangDip * scale);
 
-        // Flush: exactly the taskbar's top-left corner and full height, no margins
+        // Flush with the taskbar's left and bottom edges, but starting just below the thin line that
+        // runs along the taskbar's top edge so the strip never covers it
+        var topLine = (int)Math.Ceiling(TopLineDip * scale);
         RectInt32 target;
-        if (WindowZOrder.GetTaskbarBounds() is { Edge: WindowZOrder.TaskbarEdge.Bottom } bar)
+        if (bar is { } taskbar)
         {
-            target = new RectInt32(bar.Left, bar.Top, width, Math.Max(1, bar.Bottom - bar.Top));
+            target = new RectInt32(taskbar.Item1 - overhang, taskbar.Item2 + topLine, width,
+                Math.Max(1, taskbar.Item4 - taskbar.Item2 - topLine));
         }
         else
         {
