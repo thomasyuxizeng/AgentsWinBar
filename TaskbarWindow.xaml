@@ -71,7 +71,7 @@
                             </Grid.RowDefinitions>
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="56"/>
-                                <ColumnDefinition Width="30"/>
+                                <ColumnDefinition Width="26"/>
                             </Grid.ColumnDefinitions>
 
                             <controls:UsageMeter

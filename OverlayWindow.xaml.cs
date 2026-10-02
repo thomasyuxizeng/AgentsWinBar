@@ -36,10 +36,12 @@ public sealed partial class OverlayWindow : Window
 {
     internal const double RowHeightDip = 22;
     // Spacing (DIP): 12 horizontal and 8 vertical padding + 1 border on every side,
-    // uniform 8 between columns. Columns = 16 icon + 44 bar + 30 number + 44 bar + 30 number.
-    private const double WidthDip = 12 * 2 + 2 + (16 + 44 + 30 + 44 + 30) + 4 * 8;
+    // uniform 8 between columns. Columns = 16 icon + 44 bar + 26 number + 44 bar + 26 number.
+    // This is only a lower bound: ApplySize() grows the window to the measured content if needed.
+    private const double WidthDip = 12 * 2 + 2 + (16 + 44 + 26 + 44 + 26) + 4 * 8;
     private const double VerticalPaddingDip = 8 * 2 + 2;
     private const double ScreenMarginDip = 16;
+    private const double ClipSlackDip = 2;
 
     private readonly MainViewModel _viewModel;
     private readonly ISettingsService _settingsService;
@@ -78,7 +80,11 @@ public sealed partial class OverlayWindow : Window
 
         // Reassert topmost periodically as a safety net; the foreground watcher handles the immediate cases.
         _topmostTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
-        _topmostTimer.Tick += (_, _) => WindowZOrder.AssertTopmost(_hwnd);
+        _topmostTimer.Tick += (_, _) =>
+        {
+            WindowZOrder.AssertTopmost(_hwnd);
+            ApplySize();   // follows display scale changes (e.g. remote desktop)
+        };
 
         App.Windows.Add(this);
         App.ApplyTheme();
@@ -185,13 +191,28 @@ public sealed partial class OverlayWindow : Window
         };
     }
 
+    /// <summary>
+    /// Sizes the window to its content. Uses the formula as a minimum and the measured content size
+    /// when that is larger, so the right edge can never be clipped (e.g. after a display scale change).
+    /// Only resizes when the size actually changed.
+    /// </summary>
     private void ApplySize()
     {
         var scale = WindowZOrder.GetScale(_hwnd);
         var rows = Math.Max(1, Rows.Count);
-        AppWindow.Resize(new SizeInt32(
-            (int)(WidthDip * scale),
-            (int)((rows * RowHeightDip + VerticalPaddingDip) * scale)));
+
+        RootGrid.Measure(new Windows.Foundation.Size(double.PositiveInfinity, double.PositiveInfinity));
+        var measured = RootGrid.DesiredSize;
+
+        var widthDip = Math.Max(WidthDip, measured.Width) + ClipSlackDip;
+        var heightDip = Math.Max(rows * RowHeightDip + VerticalPaddingDip, measured.Height);
+
+        var target = new SizeInt32((int)Math.Ceiling(widthDip * scale), (int)Math.Ceiling(heightDip * scale));
+        var current = AppWindow.Size;
+        if (current.Width != target.Width || current.Height != target.Height)
+        {
+            AppWindow.Resize(target);
+        }
     }
 
     private void PositionWindow()

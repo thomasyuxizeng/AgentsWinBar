@@ -37,8 +37,10 @@ public sealed class TaskbarItem
 /// </summary>
 public sealed partial class TaskbarWindow : Window
 {
-    // Item = 16 icon + 10 gap + 56 bar + 8 gap + 30 number; strip = 18 padding + 1 border on each side
-    private const double ItemWidthDip = 120;
+    // Item = 16 icon + 10 gap + 56 bar + 8 gap + 26 number; strip = 18 padding + 1 border on each side.
+    // These give a lower bound only: Reposition() grows the strip to the measured content if needed.
+    private const double ClipSlackDip = 2;
+    private const double ItemWidthDip = 116;
     private const double ItemSpacingDip = 24;
     private const double HorizontalPaddingDip = 38;
     private const double LeftMarginDip = 8;
@@ -215,7 +217,12 @@ public sealed partial class TaskbarWindow : Window
     {
         var scale = WindowZOrder.GetScale(_hwnd);
         var count = Math.Max(1, Items.Count);
-        var width = (int)((count * ItemWidthDip + (count - 1) * ItemSpacingDip + HorizontalPaddingDip) * scale);
+        // Never narrower than the content, so the right edge can't be clipped (e.g. after a display scale change)
+        RootGrid.Measure(new Windows.Foundation.Size(double.PositiveInfinity, double.PositiveInfinity));
+        var contentDip = Math.Max(
+            count * ItemWidthDip + (count - 1) * ItemSpacingDip + HorizontalPaddingDip,
+            RootGrid.DesiredSize.Width);
+        var width = (int)Math.Ceiling((contentDip + ClipSlackDip) * scale);
         var margin = (int)(LeftMarginDip * scale);
         var inset = (int)(VerticalInsetDip * scale);
 
