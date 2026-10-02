@@ -12,8 +12,9 @@ namespace CodexBarWin.Controls;
 /// </summary>
 public sealed partial class UsageMeter : UserControl
 {
-    // Muted violet: distinct from the blue/amber/red usage colours and readable on light and dark themes
-    private static readonly SolidColorBrush TimeBrush = new(Color.FromArgb(0xC0, 0x9B, 0x8A, 0xFB));
+    // Soft, translucent lavender: distinct from the blue/amber/red usage colours but blends into the
+    // empty track, so it reads as a quiet background hint rather than a second bar competing for attention
+    private static readonly SolidColorBrush TimeBrush = new(Color.FromArgb(0x58, 0xA9, 0x9D, 0xEE));
 
     public static readonly DependencyProperty PercentProperty =
         DependencyProperty.Register(

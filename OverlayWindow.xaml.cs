@@ -38,9 +38,10 @@ public sealed partial class OverlayWindow : Window
 {
     internal const double RowHeightDip = 22;
     // Spacing (DIP): 12 horizontal and 8 vertical padding + 1 border on every side,
-    // uniform 8 between columns. Columns = 16 icon + 44 bar + 26 number + 44 bar + 26 number.
-    // This is only a lower bound: ApplySize() grows the window to the measured content if needed.
-    private const double WidthDip = 12 * 2 + 2 + (16 + 44 + 26 + 44 + 26) + 4 * 8;
+    // uniform 8 between columns. Columns = 16 icon + 44 bar + 28 number (left-aligned, hugging its bar)
+    // + 44 bar + 26 number. This is only a lower bound: ApplySize() grows the window to the measured
+    // content if needed.
+    private const double WidthDip = 12 * 2 + 2 + (16 + 44 + 28 + 44 + 26) + 4 * 8;
     private const double VerticalPaddingDip = 8 * 2 + 2;
     private const double ScreenMarginDip = 16;
     private const double ClipSlackDip = 2;
