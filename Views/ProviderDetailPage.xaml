@@ -95,10 +95,13 @@
                         <TextBlock
                             Grid.Column="0"
                             x:Name="SessionPercentText"
+                            TextWrapping="NoWrap"
                             Style="{StaticResource CaptionTextBlockStyle}"/>
                         <TextBlock
                             Grid.Column="1"
                             x:Name="SessionResetText"
+                            TextWrapping="NoWrap"
+                            TextTrimming="CharacterEllipsis"
                             Style="{StaticResource CaptionTextBlockStyle}"
                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                             VerticalAlignment="Center"/>
@@ -142,10 +145,13 @@
                         <TextBlock
                             Grid.Column="0"
                             x:Name="WeeklyPercentText"
+                            TextWrapping="NoWrap"
                             Style="{StaticResource CaptionTextBlockStyle}"/>
                         <TextBlock
                             Grid.Column="1"
                             x:Name="WeeklyResetText"
+                            TextWrapping="NoWrap"
+                            TextTrimming="CharacterEllipsis"
                             Style="{StaticResource CaptionTextBlockStyle}"
                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                             VerticalAlignment="Center"/>
@@ -189,10 +195,13 @@
                         <TextBlock
                             Grid.Column="0"
                             x:Name="TertiaryPercentText"
+                            TextWrapping="NoWrap"
                             Style="{StaticResource CaptionTextBlockStyle}"/>
                         <TextBlock
                             Grid.Column="1"
                             x:Name="TertiaryResetText"
+                            TextWrapping="NoWrap"
+                            TextTrimming="CharacterEllipsis"
                             Style="{StaticResource CaptionTextBlockStyle}"
                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                             VerticalAlignment="Center"/>

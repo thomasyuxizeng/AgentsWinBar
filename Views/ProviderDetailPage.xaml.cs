@@ -55,9 +55,7 @@ public sealed partial class ProviderDetailPage : Page
             SessionSection.Visibility = Visibility.Visible;
             SessionMeter.Percent = _data.Session.Percent;
             SessionPercentText.Text = $"{_data.Session.PercentText} used";
-            SessionResetText.Text = !string.IsNullOrEmpty(_data.Session.ResetIn)
-                ? $"Resets {_data.Session.ResetIn}"
-                : string.Empty;
+            SessionResetText.Text = _data.Session.ResetText;
         }
         else
         {
@@ -70,9 +68,7 @@ public sealed partial class ProviderDetailPage : Page
             WeeklySection.Visibility = Visibility.Visible;
             WeeklyMeter.Percent = _data.Weekly.Percent;
             WeeklyPercentText.Text = $"{_data.Weekly.PercentText} used";
-            WeeklyResetText.Text = !string.IsNullOrEmpty(_data.Weekly.ResetIn)
-                ? $"Resets {_data.Weekly.ResetIn}"
-                : string.Empty;
+            WeeklyResetText.Text = _data.Weekly.ResetText;
         }
         else
         {
@@ -85,9 +81,7 @@ public sealed partial class ProviderDetailPage : Page
             TertiarySection.Visibility = Visibility.Visible;
             TertiaryMeter.Percent = _data.Tertiary.Percent;
             TertiaryPercentText.Text = $"{_data.Tertiary.PercentText} used";
-            TertiaryResetText.Text = !string.IsNullOrEmpty(_data.Tertiary.ResetIn)
-                ? $"Resets {_data.Tertiary.ResetIn}"
-                : string.Empty;
+            TertiaryResetText.Text = _data.Tertiary.ResetText;
         }
         else
         {

@@ -57,6 +57,14 @@ public record UsageWindow
     public DateTime? ResetAt { get; init; }
     public string? ResetIn { get; init; }
     public TimeSpan? TimeUntilReset => ResetAt.HasValue ? ResetAt.Value - DateTime.UtcNow : null;
+
+    /// <summary>
+    /// Consistent "Resets in ..." text computed from <see cref="ResetAt"/>.
+    /// Falls back to the CLI's own description when no reset time is available.
+    /// </summary>
+    public string ResetText =>
+        Helpers.ResetTimeFormatter.Format(ResetAt, DateTime.UtcNow)
+        ?? (string.IsNullOrWhiteSpace(ResetIn) ? string.Empty : ResetIn.Trim());
 }
 
 /// <summary>

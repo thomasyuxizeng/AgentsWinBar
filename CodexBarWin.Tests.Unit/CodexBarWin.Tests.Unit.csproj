@@ -25,6 +25,7 @@
   <!-- Link source files from main project (no Windows App SDK dependency) -->
   <ItemGroup>
     <Compile Include="..\Helpers\AsyncHelper.cs" Link="Linked\AsyncHelper.cs" />
+    <Compile Include="..\Helpers\ResetTimeFormatter.cs" Link="Linked\ResetTimeFormatter.cs" />
     <Compile Include="..\Models\AppSettings.cs" Link="Linked\AppSettings.cs" />
     <Compile Include="..\Models\UsageData.cs" Link="Linked\UsageData.cs" />
     <Compile Include="..\Models\SetupStatus.cs" Link="Linked\SetupStatus.cs" />

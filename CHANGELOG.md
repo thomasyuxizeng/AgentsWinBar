@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- Reset times read consistently as "Resets in 4h 59m" on the cards and detail page, and the detail page no longer squeezes or garbles the usage text
 - Flyout not appearing over other programs: it now takes the foreground reliably and stays above windows that become topmost
 - "Command failed (exit code 3)" for Claude: usage is now fetched through the Claude CLI instead of the rate-limited OAuth endpoint
 - Gemini windows are labelled "5-hour" and "Weekly" instead of "Pro" and "Flash"
@@ -23,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - N/A
 
 ### Fixed
+- Reset times read consistently as "Resets in 4h 59m" on the cards and detail page, and the detail page no longer squeezes or garbles the usage text
 - N/A
 
 ## [0.1.0] - TBD
