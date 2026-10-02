@@ -127,6 +127,17 @@ internal static class WindowZOrder
     private const int DWMWA_WINDOW_CORNER_PREFERENCE = 33;
     private const int DWMWCP_DONOTROUND = 1;
 
+    private const int DWMWCP_ROUNDSMALL = 3;
+
+    /// <summary>
+    /// Gives the window Windows 11's smaller corner radius (about half the default one).
+    /// </summary>
+    public static void UseSmallRoundedCorners(IntPtr hwnd)
+    {
+        var preference = DWMWCP_ROUNDSMALL;
+        _ = DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, ref preference, sizeof(int));
+    }
+
     /// <summary>
     /// Makes the window's corners square (Windows 11), e.g. for a strip that sits flush against the taskbar.
     /// </summary>

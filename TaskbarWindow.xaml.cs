@@ -252,7 +252,7 @@ public sealed partial class TaskbarWindow : Window
         if (rounded != _roundedRightEnd)
         {
             _roundedRightEnd = rounded;
-            if (rounded) NativeMethods.ApplyRoundedCorners(_hwnd); else WindowZOrder.DisableRoundedCorners(_hwnd);
+            if (rounded) WindowZOrder.UseSmallRoundedCorners(_hwnd); else WindowZOrder.DisableRoundedCorners(_hwnd);
         }
 
         RootGrid.Padding = new Thickness(SidePaddingDip + overhangDip, 0, SidePaddingDip, 0);
