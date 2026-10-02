@@ -11,7 +11,7 @@
 
     <Grid
         x:Name="RootGrid"
-        Padding="10,8"
+        Padding="12"
         Background="Transparent"
         BorderBrush="{ThemeResource SurfaceStrokeColorDefaultBrush}"
         BorderThickness="1"
@@ -38,21 +38,22 @@
                 <DataTemplate x:DataType="local:OverlayRow">
                     <Grid Height="{x:Bind RowHeight}" ColumnSpacing="8">
                         <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="54"/>
-                            <ColumnDefinition Width="46"/>
-                            <ColumnDefinition Width="32"/>
-                            <ColumnDefinition Width="46"/>
-                            <ColumnDefinition Width="32"/>
+                            <ColumnDefinition Width="16"/>
+                            <ColumnDefinition Width="44"/>
+                            <ColumnDefinition Width="26"/>
+                            <ColumnDefinition Width="44"/>
+                            <ColumnDefinition Width="26"/>
                         </Grid.ColumnDefinitions>
 
-                        <TextBlock
+                        <Path
                             Grid.Column="0"
-                            Text="{x:Bind Name}"
-                            FontSize="12"
-                            FontWeight="SemiBold"
+                            Data="{x:Bind Icon}"
+                            Width="16"
+                            Height="16"
+                            Stretch="Uniform"
                             VerticalAlignment="Center"
-                            TextTrimming="CharacterEllipsis"
-                            Foreground="{ThemeResource TextFillColorPrimaryBrush}"/>
+                            Fill="{ThemeResource TextFillColorPrimaryBrush}"
+                            ToolTipService.ToolTip="{x:Bind Name}"/>
 
                         <controls:UsageMeter
                             Grid.Column="1"
@@ -62,7 +63,7 @@
                         <TextBlock
                             Grid.Column="2"
                             Text="{x:Bind SessionText}"
-                            FontSize="12"
+                            FontSize="11"
                             TextAlignment="Right"
                             VerticalAlignment="Center"
                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
@@ -75,7 +76,7 @@
                         <TextBlock
                             Grid.Column="4"
                             Text="{x:Bind WeeklyText}"
-                            FontSize="12"
+                            FontSize="11"
                             TextAlignment="Right"
                             VerticalAlignment="Center"
                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>

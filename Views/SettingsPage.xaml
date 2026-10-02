@@ -269,6 +269,37 @@
                         VerticalAlignment="Center"/>
                 </Grid>
 
+                <!-- Taskbar Display Card -->
+                <Grid
+                    Padding="16,12"
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                    BorderThickness="1,0,1,1"
+                    CornerRadius="0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+
+                    <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                        <TextBlock Text="Taskbar display" Style="{StaticResource BodyTextBlockStyle}"/>
+                        <TextBlock
+                            Text="Show a compact usage strip on the taskbar, bottom-left corner"
+                            Style="{StaticResource CaptionTextBlockStyle}"
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                            TextWrapping="Wrap"/>
+                    </StackPanel>
+
+                    <ToggleSwitch
+                        Grid.Column="1"
+                        x:Name="TaskbarDisplayToggle"
+                        OnContent=""
+                        OffContent=""
+                        MinWidth="0"
+                        Margin="0,-4,0,-4"
+                        VerticalAlignment="Center"/>
+                </Grid>
+
                 <!-- Developer Mode Card -->
                 <Grid
                     Padding="16,12"

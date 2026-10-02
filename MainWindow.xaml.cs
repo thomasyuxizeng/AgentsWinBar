@@ -114,6 +114,7 @@ public sealed partial class MainWindow : Window
     private SystemBackdropConfiguration? _backdropConfiguration;
     private WindowZOrder.ForegroundWatcher? _flyoutForegroundWatcher;
     private OverlayWindow? _overlay;
+    private TaskbarWindow? _taskbarWindow;
     private ToggleMenuFlyoutItem? _overlayMenuItem;
 
     // Animation settings (from configuration)
@@ -323,6 +324,7 @@ public sealed partial class MainWindow : Window
         // Always-on overlay (restores the saved on/off state, and follows later settings changes)
         _settingsService.SettingsChanged += OnSettingsChanged;
         ApplyOverlaySetting();
+        ApplyTaskbarSetting();
     }
 
     #region Always-on Overlay
@@ -337,7 +339,39 @@ public sealed partial class MainWindow : Window
 
     private void OnSettingsChanged(object? sender, EventArgs e)
     {
-        DispatcherQueue.TryEnqueue(ApplyOverlaySetting);
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            ApplyOverlaySetting();
+            ApplyTaskbarSetting();
+        });
+    }
+
+    /// <summary>
+    /// Creates or closes the taskbar strip so it matches the saved setting.
+    /// </summary>
+    private void ApplyTaskbarSetting()
+    {
+        var enabled = _settingsService.Settings.TaskbarDisplayEnabled;
+
+        if (enabled && _taskbarWindow == null)
+        {
+            _taskbarWindow = new TaskbarWindow();
+            _taskbarWindow.OpenDetailsRequested += (_, _) => ToggleWindow();
+            _taskbarWindow.HideRequested += (_, _) =>
+            {
+                _settingsService.Settings.TaskbarDisplayEnabled = false;
+                _settingsService.SaveQuietAsync().SafeFireAndForget(onError: _ => { });
+                ApplyTaskbarSetting();
+            };
+            _taskbarWindow.Closed += (_, _) => _taskbarWindow = null;
+            _taskbarWindow.ShowStrip();
+        }
+        else if (!enabled && _taskbarWindow != null)
+        {
+            var strip = _taskbarWindow;
+            _taskbarWindow = null;
+            strip.Close();
+        }
     }
 
     /// <summary>
@@ -490,6 +524,8 @@ public sealed partial class MainWindow : Window
         _settingsService.SettingsChanged -= OnSettingsChanged;
         _overlay?.Close();
         _overlay = null;
+        _taskbarWindow?.Close();
+        _taskbarWindow = null;
         _acrylicController?.Dispose();
         _trayIcon?.Dispose();
     }

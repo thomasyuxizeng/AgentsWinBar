@@ -107,6 +107,36 @@ public class AppSettingsTests
     }
 
     [TestMethod]
+    public void TaskbarDisplay_IsOffByDefaultAndIndependentOfOverlay()
+    {
+        // Arrange
+        var settings = AppSettings.GetDefaults();
+
+        // Act
+        settings.AlwaysOnOverlayEnabled = true;
+
+        // Assert
+        settings.TaskbarDisplayEnabled.Should().BeFalse();
+    }
+
+    [TestMethod]
+    public void TaskbarDisplay_RoundTripsThroughJsonAndMissingFieldDefaultsToOff()
+    {
+        // Arrange
+        var settings = AppSettings.GetDefaults();
+        settings.TaskbarDisplayEnabled = true;
+
+        // Act
+        var json = System.Text.Json.JsonSerializer.Serialize(settings, AppJsonSerializerContext.Default.AppSettings);
+        var loaded = System.Text.Json.JsonSerializer.Deserialize(json, AppJsonSerializerContext.Default.AppSettings);
+        var older = System.Text.Json.JsonSerializer.Deserialize("""{"Version":1}""", AppJsonSerializerContext.Default.AppSettings);
+
+        // Assert
+        loaded!.TaskbarDisplayEnabled.Should().BeTrue();
+        older!.TaskbarDisplayEnabled.Should().BeFalse();
+    }
+
+    [TestMethod]
     public void Overlay_SettingsRoundTripThroughJson()
     {
         // Arrange

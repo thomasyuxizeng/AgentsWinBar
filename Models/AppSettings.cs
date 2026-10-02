@@ -56,6 +56,11 @@ public class AppSettings
     public bool AlwaysOnOverlayEnabled { get; set; } = false;
 
     /// <summary>
+    /// Shows a compact usage strip on the taskbar (bottom-left corner), independent of the floating overlay.
+    /// </summary>
+    public bool TaskbarDisplayEnabled { get; set; } = false;
+
+    /// <summary>
     /// Saved overlay position in screen pixels (null = default corner).
     /// </summary>
     public int? OverlayX { get; set; }
@@ -76,6 +81,7 @@ public class AppSettings
         Animation = new AnimationSettings(),
         CodexBarGuideUrl = "https://github.com/steipete/CodexBar#installation",
         DeveloperModeEnabled = false,
-        AlwaysOnOverlayEnabled = false
+        AlwaysOnOverlayEnabled = false,
+        TaskbarDisplayEnabled = false
     };
 }

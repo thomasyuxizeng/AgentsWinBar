@@ -62,6 +62,7 @@ public sealed partial class SettingsPage : Page
         StartWithWindowsToggle.IsOn = ViewModel.StartWithWindows;
         StartMinimizedToggle.IsOn = ViewModel.StartMinimized;
         AlwaysOnOverlayToggle.IsOn = ViewModel.AlwaysOnOverlay;
+        TaskbarDisplayToggle.IsOn = ViewModel.TaskbarDisplay;
         DeveloperModeToggle.IsOn = ViewModel.DeveloperModeEnabled;
     }
 
@@ -85,6 +86,7 @@ public sealed partial class SettingsPage : Page
             ViewModel.StartWithWindows = StartWithWindowsToggle.IsOn;
             ViewModel.StartMinimized = StartMinimizedToggle.IsOn;
             ViewModel.AlwaysOnOverlay = AlwaysOnOverlayToggle.IsOn;
+            ViewModel.TaskbarDisplay = TaskbarDisplayToggle.IsOn;
             ViewModel.DeveloperModeEnabled = DeveloperModeToggle.IsOn;
 
             await ViewModel.SaveCommand.ExecuteAsync(null);

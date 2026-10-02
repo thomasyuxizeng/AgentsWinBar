@@ -149,6 +149,57 @@ internal static class WindowZOrder
         _ = DwmSetWindowAttribute(hwnd, DWMWA_BORDER_COLOR, ref none, sizeof(int));
     }
 
+    private const uint ABM_GETTASKBARPOS = 0x00000005;
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct AppBarRect
+    {
+        public int Left;
+        public int Top;
+        public int Right;
+        public int Bottom;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct AppBarData
+    {
+        public uint cbSize;
+        public IntPtr hWnd;
+        public uint uCallbackMessage;
+        public uint uEdge;
+        public AppBarRect rc;
+        public IntPtr lParam;
+    }
+
+    [DllImport("shell32.dll")]
+    private static extern UIntPtr SHAppBarMessage(uint dwMessage, ref AppBarData pData);
+
+    /// <summary>
+    /// Screen edge the taskbar is docked to.
+    /// </summary>
+    public enum TaskbarEdge
+    {
+        Left = 0,
+        Top = 1,
+        Right = 2,
+        Bottom = 3
+    }
+
+    /// <summary>
+    /// Position of the primary taskbar in physical screen pixels, or null if it can't be determined.
+    /// </summary>
+    public static (int Left, int Top, int Right, int Bottom, TaskbarEdge Edge)? GetTaskbarBounds()
+    {
+        var data = new AppBarData { cbSize = (uint)Marshal.SizeOf<AppBarData>() };
+        if (SHAppBarMessage(ABM_GETTASKBARPOS, ref data) == UIntPtr.Zero)
+        {
+            return null;
+        }
+
+        var edge = Enum.IsDefined(typeof(TaskbarEdge), (int)data.uEdge) ? (TaskbarEdge)data.uEdge : TaskbarEdge.Bottom;
+        return (data.rc.Left, data.rc.Top, data.rc.Right, data.rc.Bottom, edge);
+    }
+
     public static IntPtr GetForeground() => GetForegroundWindow();
 
     /// <summary>

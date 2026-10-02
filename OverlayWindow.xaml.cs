@@ -20,6 +20,7 @@ namespace CodexBarWin;
 public sealed class OverlayRow
 {
     public string Name { get; set; } = string.Empty;
+    public Microsoft.UI.Xaml.Media.Geometry Icon { get; set; } = null!;
     public double SessionPercent { get; set; }
     public string SessionText { get; set; } = string.Empty;
     public double WeeklyPercent { get; set; }
@@ -34,8 +35,10 @@ public sealed class OverlayRow
 public sealed partial class OverlayWindow : Window
 {
     internal const double RowHeightDip = 22;
-    private const double WidthDip = 274;
-    private const double VerticalPaddingDip = 20;
+    // Spacing rules (DIP), shared with the taskbar strip: 12 padding + 1 border on every side,
+    // uniform 8 between columns. Columns = 16 icon + 44 bar + 26 number + 44 bar + 26 number.
+    private const double WidthDip = 12 * 2 + 2 + (16 + 44 + 26 + 44 + 26) + 4 * 8;
+    private const double VerticalPaddingDip = 12 * 2 + 2;
     private const double ScreenMarginDip = 16;
 
     private readonly MainViewModel _viewModel;
@@ -166,10 +169,6 @@ public sealed partial class OverlayWindow : Window
 
     private static OverlayRow ToRow(UsageData data)
     {
-        var name = data.Provider.Length == 0
-            ? "?"
-            : char.ToUpperInvariant(data.Provider[0]) + data.Provider[1..];
-
         (double Percent, string Text) Cell(UsageWindow? window) =>
             window != null ? (window.Percent, window.PercentText) : (0, data.IsLoading ? "…" : "–");
 
@@ -177,7 +176,8 @@ public sealed partial class OverlayWindow : Window
         var weekly = Cell(data.Weekly);
         return new OverlayRow
         {
-            Name = name,
+            Name = ProviderIcons.GetDisplayName(data.Provider),
+            Icon = ProviderIcons.GetGeometry(data.Provider),
             SessionPercent = session.Percent,
             SessionText = session.Text,
             WeeklyPercent = weekly.Percent,

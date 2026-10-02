@@ -14,6 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Gemini windows are labelled "5-hour" and "Weekly" instead of "Pro" and "Flash"
 
 ### Added
+- Taskbar display: a compact usage strip on the taskbar, bottom-left corner, with its own Settings toggle (independent of the floating overlay)
+- Provider logos replace the text labels in the overlay and taskbar strip to save space
 - Always-on overlay: a minimal, draggable usage readout that stays above other windows without taking focus (tray menu and Settings toggle; position is remembered)
 - Crash log at `%LOCALAPPDATA%\CodexBarWin\crash.log`
 - Developer mode for testing without CodexBar CLI
