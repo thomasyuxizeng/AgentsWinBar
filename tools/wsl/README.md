@@ -29,6 +29,10 @@ This downloads the CodexBar CLI (checksum verified) to `/opt/codexbar`, installs
 ## Sign in (once, inside WSL)
 
 - **Claude:** run `claude` and log in with your Claude account.
+- **Codex:** install the Linux CLI with `npm install -g @openai/codex` (it needs its own copy inside WSL:
+  a Windows `codex` found on the PATH cannot run there), then run `codex login` and sign in with your
+  ChatGPT account. If the browser redirect doesn't reach WSL, use `codex login --device-auth` instead.
+  Then turn Codex on in CodexBarWin under Settings, Providers.
 - **Gemini:** install Antigravity's CLI with `curl -fsSL https://antigravity.google/cli/install.sh | bash`,
   run `agy` once and sign in with Google. Exit it straight away: it is an agent and will start working
   on anything you type.
