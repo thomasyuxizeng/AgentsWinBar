@@ -122,26 +122,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 return;
             }
 
-            if (isFirstLoad)
+            // Follow Settings on every refresh: add newly enabled providers, drop disabled ones, keep the order
+            ProviderListSynchronizer.Sync(Providers, enabledProviders.Select(p => p.Id).ToList());
+
+            // Everything is loading again (existing data stays visible while it refreshes)
+            for (int i = 0; i < Providers.Count; i++)
             {
-                // First load: add placeholder items
-                foreach (var config in enabledProviders)
-                {
-                    Providers.Add(new UsageData
-                    {
-                        Provider = config.Id,
-                        IsLoading = true,
-                        FetchedAt = DateTime.UtcNow
-                    });
-                }
-            }
-            else
-            {
-                // Refresh: set loading state on existing items
-                for (int i = 0; i < Providers.Count; i++)
-                {
-                    Providers[i] = Providers[i] with { IsLoading = true };
-                }
+                Providers[i] = Providers[i] with { IsLoading = true };
             }
 
             // Stream results and update as they complete

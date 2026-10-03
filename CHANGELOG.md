@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- Enabling, disabling or reordering providers in Settings now takes effect immediately; previously the list was only built at startup, so a newly enabled provider didn't appear until the app was restarted
 - Reset times read consistently as "Resets in 4h 59m" on the cards and detail page, and the detail page no longer squeezes or garbles the usage text
 - Flyout not appearing over other programs: it now takes the foreground reliably and stays above windows that become topmost
 - "Command failed (exit code 3)" for Claude: usage is now fetched through the Claude CLI instead of the rate-limited OAuth endpoint
