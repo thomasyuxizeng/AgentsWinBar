@@ -32,9 +32,24 @@ public sealed partial class DashboardProviderPanel : UserControl
     public IReadOnlyList<DashboardFact> CostFacts { get; private set; } = [];
     public int WindowCount => Data?.Windows.Count ?? 0;
 
+    private const double SplitMinWidth = 580;
+
+    private readonly Dictionary<string, DashboardWindowRow> _rows = new();
+    private string _windowsLayout = string.Empty;
+    private bool _stacked;
+
     public DashboardProviderPanel()
     {
         InitializeComponent();
+    }
+
+    private void OnWindowsHostSizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        // Two columns need room; a narrow panel stacks them
+        var stacked = e.NewSize.Width > 0 && e.NewSize.Width < SplitMinWidth;
+        if (stacked == _stacked) return;
+        _stacked = stacked;
+        BuildWindows(Data);
     }
 
     private static void OnDataChanged(DependencyObject d, DependencyPropertyChangedEventArgs e) =>
@@ -43,6 +58,7 @@ public sealed partial class DashboardProviderPanel : UserControl
     private void Refresh()
     {
         var data = Data;
+        BuildWindows(data);
         BuildCostRows(data?.Cost);
 
         CreditsText.Text = data?.Credits is { } credits
@@ -54,6 +70,58 @@ public sealed partial class DashboardProviderPanel : UserControl
             : "Usage history: no samples yet";
 
         Bindings.Update();
+    }
+
+    /// <summary>
+    /// Lays the usage windows out. A provider with an External pool (Gemini through Antigravity) gets two columns,
+    /// its own models on the left and the External windows on the right, paired row by row so the bars line up;
+    /// every other provider lists its windows in one column.
+    /// </summary>
+    private void BuildWindows(DashboardProvider? data)
+    {
+        var windows = data?.Windows ?? [];
+        var split = !_stacked && windows.Any(w => w.Kind == DashboardWindowKind.Extra && w.Accent == WindowAccent.ClaudeAndOpenAi);
+        var left = split ? windows.Where(w => w.Kind != DashboardWindowKind.Extra).ToList() : windows.ToList();
+        var right = split ? windows.Where(w => w.Kind == DashboardWindowKind.Extra).ToList() : [];
+
+        foreach (var window in windows)
+        {
+            if (!_rows.TryGetValue(window.Key, out var row))
+            {
+                row = new DashboardWindowRow { VerticalAlignment = VerticalAlignment.Top };
+                _rows[window.Key] = row;
+            }
+            row.Data = window;
+        }
+
+        var layout = $"{split}|{string.Join(',', left.Select(w => w.Key))}|{string.Join(',', right.Select(w => w.Key))}|{data?.DisplayName}";
+        if (layout == _windowsLayout) return;
+        _windowsLayout = layout;
+
+        foreach (var stale in _rows.Keys.Where(k => windows.All(w => w.Key != k)).ToList()) _rows.Remove(stale);
+        WindowsHost.Children.Clear();
+        WindowsHost.ColumnDefinitions.Clear();
+        WindowsHost.RowDefinitions.Clear();
+        if (windows.Count == 0) return;
+
+        var columns = split ? 2 : 1;
+        for (var c = 0; c < columns; c++) WindowsHost.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        var caption = (Style)Resources["SectionCaption"];
+        var rows = Math.Max(left.Count, right.Count);
+        for (var r = 0; r < rows + 1; r++) WindowsHost.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+
+        void Place(UIElement element, int row, int column)
+        {
+            Grid.SetRow((FrameworkElement)element, row);
+            Grid.SetColumn((FrameworkElement)element, column);
+            WindowsHost.Children.Add(element);
+        }
+
+        // The caption sits closer to its first row than the rows are to each other
+        Place(new TextBlock { Text = split ? $"{data!.DisplayName.ToUpperInvariant()} MODELS" : "USAGE WINDOWS", Style = caption, Margin = new Thickness(0, 0, 0, -8) }, 0, 0);
+        if (split) Place(new TextBlock { Text = "EXTERNAL · CLAUDE AND GPT", Style = caption, Margin = new Thickness(0, 0, 0, -8) }, 0, 1);
+        for (var i = 0; i < left.Count; i++) Place(_rows[left[i].Key], i + 1, 0);
+        for (var i = 0; i < right.Count; i++) Place(_rows[right[i].Key], i + 1, 1);
     }
 
     private void BuildCostRows(DashboardCost? cost)

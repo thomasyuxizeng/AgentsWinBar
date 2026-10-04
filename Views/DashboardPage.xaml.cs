@@ -12,7 +12,7 @@ namespace CodexBarWin.Views;
 public sealed record DashboardTile(string Label, string Value, string Sub, Brush Accent);
 
 /// <summary>
-/// The dashboard's content: toolbar, headline tiles, one panel per provider and the diagnostics column.
+/// The dashboard's content: toolbar, headline tiles, one panel per provider and the diagnostics cards below them.
 /// It only draws a <see cref="DashboardSnapshot"/>; fetching and timers live in <see cref="DashboardAppWindow"/>.
 /// </summary>
 public sealed partial class DashboardPage : Page
@@ -120,25 +120,23 @@ public sealed partial class DashboardPage : Page
         }
 
         EmptyPanel.Visibility = providers.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
-        Arrange(force: _arrangedOrder != string.Join('|', ids));
+        Arrange(force: false);
     }
 
     private void OnScrollSizeChanged(object sender, SizeChangedEventArgs e) => Arrange(force: false);
 
-    private void OnLayoutStateChanged(object sender, VisualStateChangedEventArgs e) => Arrange(force: false);
-
     /// <summary>Lays the provider panels out in as many columns as fit (each at least <see cref="MinPanelWidth"/> wide).</summary>
     private void Arrange(bool force)
     {
-        // Same threshold as the AdaptiveTrigger, read directly so it never lags behind the visual state
-        var wide = (XamlRoot?.Size.Width ?? 0) >= 1500;
-        var diagnosticsWidth = wide ? 380 + ColumnGap : 0;
-        var available = Math.Max(0, MainScroll.ActualWidth - 12 - diagnosticsWidth);
+        var available = Math.Max(0, MainScroll.ActualWidth - 12);
         var count = Math.Max(1, _panels.Count);
         var columns = Math.Clamp((int)Math.Floor((available + ColumnGap) / (MinPanelWidth + ColumnGap)), 1, count);
 
         var order = _panels.Keys.ToList();
-        var orderKey = string.Join('|', order);
+        // Panels with an External pool (Gemini) show two window columns of their own, so with two or more
+        // columns they take a full-width row below the others instead of sharing a narrow column
+        var spanning = columns >= 2 ? order.Where(id => SpansRow(_panels[id].Data)).ToList() : [];
+        var orderKey = string.Join('|', order) + "#" + string.Join('|', spanning);
         if (!force && columns == _arrangedColumns && orderKey == _arrangedOrder) return;
 
         _arrangedColumns = columns;
@@ -151,6 +149,8 @@ public sealed partial class DashboardPage : Page
         ProvidersGrid.RowDefinitions.Clear();
         ProvidersGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
 
+        var regular = order.Where(id => !spanning.Contains(id)).ToList();
+
         // Balanced columns: each panel goes into the currently shortest column, so a tall panel next to a short
         // one doesn't leave a hole (three providers in two columns become tall | short + short)
         var heights = new double[columns];
@@ -162,14 +162,26 @@ public sealed partial class DashboardPage : Page
             _columnStacks.Add(stack);
             ProvidersGrid.Children.Add(stack);
         }
-        foreach (var id in order)
+        foreach (var id in regular)
         {
             var panel = _panels[id];
             var shortest = Array.IndexOf(heights, heights.Min());
             _columnStacks[shortest].Children.Add(panel);
             heights[shortest] += EstimateHeight(panel.Data);
         }
+        foreach (var id in spanning)
+        {
+            ProvidersGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            var panel = _panels[id];
+            Grid.SetRow(panel, ProvidersGrid.RowDefinitions.Count - 1);
+            Grid.SetColumnSpan(panel, columns);
+            ProvidersGrid.Children.Add(panel);
+        }
     }
+
+    /// <summary>True for a provider whose windows split into its own models and an External pool.</summary>
+    private static bool SpansRow(DashboardProvider? provider) =>
+        provider != null && provider.Windows.Any(w => w.Kind == DashboardWindowKind.Extra && w.Accent == Helpers.WindowAccent.ClaudeAndOpenAi);
 
     /// <summary>A rough height for balancing columns (real heights aren't known before layout).</summary>
     private static double EstimateHeight(DashboardProvider? provider) =>

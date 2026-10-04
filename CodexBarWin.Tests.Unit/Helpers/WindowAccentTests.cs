@@ -18,6 +18,8 @@ public class WindowAccentTests
     [DataRow("Codex spark", WindowAccent.OpenAi)]
     [DataRow("Claude and GPT 5-hour", WindowAccent.ClaudeAndOpenAi)]
     [DataRow("Claude/GPT weekly", WindowAccent.ClaudeAndOpenAi)]
+    [DataRow("External 5h", WindowAccent.ClaudeAndOpenAi)]
+    [DataRow("External 7d", WindowAccent.ClaudeAndOpenAi)]
     [DataRow("Additional", WindowAccent.Other)]
     [DataRow("Gemini Pro", WindowAccent.Other)]
     public void FromTitle_ClassifiesByTheModelsNamed(string? title, WindowAccent expected)

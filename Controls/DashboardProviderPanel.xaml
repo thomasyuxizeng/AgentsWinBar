@@ -103,60 +103,9 @@
                 </StackPanel>
             </Border>
 
-            <!-- Usage windows -->
-            <StackPanel Spacing="10"
-                        Visibility="{x:Bind views:DashboardFormat.VisCount(WindowCount), Mode=OneWay}">
-                <TextBlock Text="USAGE WINDOWS" Style="{StaticResource SectionCaption}"/>
-                <ItemsControl ItemsSource="{x:Bind Data.Windows, Mode=OneWay}" IsTabStop="False">
-                    <ItemsControl.ItemsPanel>
-                        <ItemsPanelTemplate>
-                            <StackPanel Spacing="18"/>
-                        </ItemsPanelTemplate>
-                    </ItemsControl.ItemsPanel>
-                    <ItemsControl.ItemTemplate>
-                        <DataTemplate x:DataType="models:DashboardWindow">
-                            <StackPanel Spacing="6">
-                                <Grid>
-                                    <StackPanel Orientation="Horizontal" Spacing="8">
-                                        <TextBlock Text="{x:Bind Title}" FontWeight="SemiBold" FontSize="14"/>
-                                        <Border CornerRadius="3" Padding="6,1" VerticalAlignment="Center"
-                                                Background="{x:Bind views:DashboardFormat.LimitBrush(UsedPercent)}"
-                                                Visibility="{x:Bind views:DashboardFormat.LimitVis(UsedPercent)}">
-                                            <TextBlock Text="{x:Bind views:DashboardFormat.LimitLabel(UsedPercent)}"
-                                                       FontSize="9" FontWeight="Bold" Foreground="#CC000000"/>
-                                        </Border>
-                                    </StackPanel>
-                                    <TextBlock HorizontalAlignment="Right" FontSize="14" FontWeight="SemiBold"
-                                               Text="{x:Bind views:DashboardFormat.Used(UsedPercent)}"/>
-                                </Grid>
-                                <controls:UsageMeter Height="10"
-                                    Percent="{x:Bind UsedPercent}"
-                                    TimePercent="{x:Bind views:DashboardFormat.Time(ElapsedPercent)}"
-                                    Accent="{x:Bind Accent}"
-                                    PaceText="{x:Bind PaceSummary}"/>
-                                <Grid ColumnSpacing="12">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*"/>
-                                        <ColumnDefinition Width="Auto"/>
-                                    </Grid.ColumnDefinitions>
-                                    <TextBlock Style="{StaticResource Meta}"
-                                               Text="{x:Bind views:DashboardFormat.ResetLine(ResetText, ResetsAtUtc)}"/>
-                                    <TextBlock Grid.Column="1" Style="{StaticResource Meta}" TextAlignment="Right"
-                                               Text="{x:Bind views:DashboardFormat.WindowMeta(WindowMinutes, ElapsedPercent)}"/>
-                                </Grid>
-                                <TextBlock Style="{StaticResource Meta}" Foreground="{ThemeResource TextFillColorPrimaryBrush}"
-                                           Text="{x:Bind PaceSummary}"
-                                           Visibility="{x:Bind views:DashboardFormat.VisText(PaceSummary)}"/>
-                                <TextBlock Style="{StaticResource Meta}"
-                                           Text="{x:Bind views:DashboardFormat.Changed(LastChangedAtUtc)}"
-                                           Visibility="{x:Bind views:DashboardFormat.VisNotNull(LastChangedAtUtc)}"/>
-                                <controls:BurndownChart IsCompact="True" Margin="0,2,0,0"
-                                                        Series="{x:Bind History}" Accent="{x:Bind Accent}"/>
-                            </StackPanel>
-                        </DataTemplate>
-                    </ItemsControl.ItemTemplate>
-                </ItemsControl>
-            </StackPanel>
+            <!-- Usage windows: one list, or two side by side (Gemini models | External) -->
+            <Grid x:Name="WindowsHost" ColumnSpacing="28" RowSpacing="18" SizeChanged="OnWindowsHostSizeChanged"
+                  Visibility="{x:Bind views:DashboardFormat.VisCount(WindowCount), Mode=OneWay}"/>
 
             <!-- Credits -->
             <StackPanel Spacing="4" Visibility="{x:Bind views:DashboardFormat.VisNotNull(Data.Credits), Mode=OneWay}">

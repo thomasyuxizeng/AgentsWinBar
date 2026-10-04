@@ -18,6 +18,9 @@ public sealed class CardExtraRow
     public string PaceText { get; set; } = string.Empty;
     public string PercentText { get; set; } = string.Empty;
     public string ResetText { get; set; } = string.Empty;
+
+    /// <summary>Shared label column width of the card, so every bar ends at the same x.</summary>
+    public double LabelWidth { get; set; }
 }
 
 /// <summary>
@@ -103,11 +106,16 @@ public sealed partial class ProviderCard : UserControl
         var hasWeeklyData = Data.Weekly != null;
         var hasAnyData = hasSessionData || hasWeeklyData;
 
-        // Extra windows (Fable only, Claude and GPT quota, ...) get their own bars under session/weekly
+        // Extra windows (Fable, External, ...) get their own bars under session/weekly
         var extras = hasAnyData ? Data.ExtraWindows : [];
+
+        // Right-aligned labels share one width, so the bars of session, weekly and the extras line up
+        var labelWidth = LabelColumnWidth(extras.Select(x => x.Title).Prepend(Data.WeeklyLabel).Prepend(Data.SessionLabel));
+        SessionLabelText.MinWidth = WeeklyLabelText.MinWidth = labelWidth;
         ExtraList.ItemsSource = extras.Select(x => new CardExtraRow
         {
             Title = x.Title,
+            LabelWidth = labelWidth,
             Accent = Helpers.WindowAccents.FromTitle(x.Title),
             Percent = x.Window.Percent,
             TimePercent = x.Window.ElapsedPercent ?? -1,
@@ -170,6 +178,23 @@ public sealed partial class ProviderCard : UserControl
             WeeklySection.Visibility = Visibility.Collapsed;
             ErrorPanel.Visibility = Visibility.Collapsed;
         }
+    }
+
+    private const double MinLabelWidth = 48;
+    private const double MaxLabelWidth = 150;
+
+    /// <summary>The width of the widest label (caption style), within the card's label limits.</summary>
+    private double LabelColumnWidth(IEnumerable<string> labels)
+    {
+        var style = (Style)Application.Current.Resources["CaptionTextBlockStyle"];
+        var widest = MinLabelWidth;
+        foreach (var label in labels.Where(l => !string.IsNullOrEmpty(l)))
+        {
+            var probe = new TextBlock { Text = label, Style = style, TextWrapping = TextWrapping.NoWrap };
+            probe.Measure(new Windows.Foundation.Size(double.PositiveInfinity, double.PositiveInfinity));
+            widest = Math.Max(widest, probe.DesiredSize.Width);
+        }
+        return Math.Min(MaxLabelWidth, Math.Ceiling(widest));
     }
 
     // SVG path data for provider icons (from Bootstrap Icons and UXWing)

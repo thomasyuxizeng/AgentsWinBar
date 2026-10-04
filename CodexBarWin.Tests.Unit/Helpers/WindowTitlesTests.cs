@@ -9,9 +9,9 @@ public class WindowTitlesTests
     [TestMethod]
     [DataRow("Fable only", "Fable")]
     [DataRow("  Fable only  ", "Fable")]
-    [DataRow("Claude and GPT 5-hour", "Claude+GPT 5h")]
-    [DataRow("Claude and GPT weekly", "Claude+GPT 7d")]
-    [DataRow("Claude and GPT", "Claude+GPT")]
+    [DataRow("Claude and GPT 5-hour", "External 5h")]
+    [DataRow("Claude and GPT weekly", "External 7d")]
+    [DataRow("Claude and GPT", "External")]
     [DataRow("Opus only", "Opus")]
     [DataRow("Fable", "Fable")]
     [DataRow("Some other window", "Some other window")]
@@ -27,14 +27,15 @@ public class WindowTitlesTests
 
     [TestMethod]
     [DataRow("Fable")]
-    [DataRow("Claude+GPT 5h")]
-    [DataRow("Claude+GPT 7d")]
+    [DataRow("External 5h")]
+    [DataRow("External 7d")]
     public void Short_AlreadyShort_IsUnchanged(string title) =>
         WindowTitles.Short(title).Should().Be(title);
 
     [TestMethod]
     [DataRow("Fable only", WindowAccent.Claude)]
     [DataRow("Claude and GPT weekly", WindowAccent.ClaudeAndOpenAi)]
+    [DataRow("Claude and GPT 5-hour", WindowAccent.ClaudeAndOpenAi)]
     public void Short_KeepsTheProviderAccent(string title, WindowAccent expected) =>
         WindowAccents.FromTitle(WindowTitles.Short(title)).Should().Be(expected);
 }

@@ -38,6 +38,13 @@ public static class WindowAccents
         }
 
         var lower = title.ToLowerInvariant();
+
+        // "External 5h" / "External 7d" is Antigravity's shared Claude and GPT pool (see WindowTitles.Short)
+        if (lower.StartsWith("external", StringComparison.Ordinal))
+        {
+            return WindowAccent.ClaudeAndOpenAi;
+        }
+
         var claude = ClaudeWords.Any(lower.Contains);
         var openAi = OpenAiWords.Any(lower.Contains);
 

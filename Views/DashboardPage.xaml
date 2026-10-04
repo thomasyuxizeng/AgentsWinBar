@@ -80,23 +80,19 @@
         <!-- Providers and diagnostics -->
         <ScrollViewer Grid.Row="2" x:Name="MainScroll" VerticalScrollBarVisibility="Auto" Padding="0,0,12,24"
                       SizeChanged="OnScrollSizeChanged">
-            <Grid x:Name="ContentGrid" ColumnSpacing="14" RowSpacing="14">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition x:Name="DiagnosticsColumn" Width="380"/>
-                </Grid.ColumnDefinitions>
+            <Grid x:Name="ContentGrid" RowSpacing="14">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/>
                 </Grid.RowDefinitions>
 
-                <Grid x:Name="ProvidersGrid" Grid.Column="0" Grid.Row="0" ColumnSpacing="14" RowSpacing="14"/>
+                <Grid x:Name="ProvidersGrid" Grid.Row="0" ColumnSpacing="14" RowSpacing="14"/>
 
-                <controls:DashboardDiagnosticsPanel x:Name="Diagnostics" Grid.Column="1" Grid.Row="0"
-                                                    VerticalAlignment="Top"/>
+                <!-- Always below the providers, at any window size -->
+                <controls:DashboardDiagnosticsPanel x:Name="Diagnostics" Grid.Row="1" VerticalAlignment="Top"/>
 
                 <!-- Shown when no provider is enabled -->
-                <StackPanel x:Name="EmptyPanel" Grid.Column="0" Grid.Row="0" Visibility="Collapsed"
+                <StackPanel x:Name="EmptyPanel" Grid.Row="0" Visibility="Collapsed"
                             HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="6" Padding="0,60">
                     <FontIcon FontFamily="Segoe Fluent Icons" Glyph="&#xE7BA;" FontSize="30"
                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
@@ -107,24 +103,5 @@
             </Grid>
         </ScrollViewer>
 
-        <VisualStateManager.VisualStateGroups>
-            <VisualStateGroup CurrentStateChanged="OnLayoutStateChanged">
-                <VisualState x:Name="WideLayout">
-                    <VisualState.StateTriggers>
-                        <AdaptiveTrigger MinWindowWidth="1500"/>
-                    </VisualState.StateTriggers>
-                </VisualState>
-                <VisualState x:Name="NarrowLayout">
-                    <VisualState.StateTriggers>
-                        <AdaptiveTrigger MinWindowWidth="0"/>
-                    </VisualState.StateTriggers>
-                    <VisualState.Setters>
-                        <Setter Target="Diagnostics.(Grid.Column)" Value="0"/>
-                        <Setter Target="Diagnostics.(Grid.Row)" Value="1"/>
-                        <Setter Target="DiagnosticsColumn.Width" Value="0"/>
-                    </VisualState.Setters>
-                </VisualState>
-            </VisualStateGroup>
-        </VisualStateManager.VisualStateGroups>
     </Grid>
 </Page>

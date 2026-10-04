@@ -8,15 +8,15 @@ namespace CodexBarWin.Helpers;
 public static class WindowTitles
 {
     /// <summary>
-    /// "Fable only" becomes "Fable"; "Claude and GPT 5-hour" and "Claude and GPT weekly" become
-    /// "Claude+GPT 5h" and "Claude+GPT 7d". Any other title is returned trimmed and unchanged.
+    /// "Fable only" becomes "Fable"; "Claude and GPT 5-hour" and "Claude and GPT weekly" (Antigravity's pool
+    /// for external models) become "External 5h" and "External 7d". Any other title is returned trimmed and unchanged.
     /// </summary>
     public static string Short(string? title)
     {
         var text = (title ?? string.Empty).Trim();
         if (text.Length == 0) return text;
 
-        text = text.Replace("Claude and GPT", "Claude+GPT", StringComparison.OrdinalIgnoreCase);
+        text = text.Replace("Claude and GPT", "External", StringComparison.OrdinalIgnoreCase);
         if (text.EndsWith(" only", StringComparison.OrdinalIgnoreCase)) text = text[..^5];
         if (text.EndsWith(" 5-hour", StringComparison.OrdinalIgnoreCase)) text = text[..^7] + " 5h";
         else if (text.EndsWith(" weekly", StringComparison.OrdinalIgnoreCase)) text = text[..^7] + " 7d";

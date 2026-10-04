@@ -165,7 +165,7 @@ Extra windows have their own colours so they stand apart from the main session a
 |--------|--------|
 | Anthropic orange | Claude windows, such as Claude's **Fable** limit. |
 | OpenAI green | OpenAI windows. |
-| Orange to green gradient | Antigravity's shared **Claude+GPT** quota (5h and 7d), shown on Gemini's card. |
+| Orange to green gradient | Antigravity's shared **External** quota (5h and 7d: Claude and GPT models), shown on Gemini's card. |
 
 ![Flyout](docs/images/flyout.png)
 
@@ -187,7 +187,7 @@ Compared with upstream, this fork adds:
 - **Estimated cost and token totals**, with Windows log discovery for Claude and Codex, daily cost bars and top models. Optional in Settings; never shown on the compact displays.
 - **Usage history charts** for session, weekly and extra windows, with an even-use guide, observed-rate projection, capture time and sample count. Snapshots are kept locally for 14 days; charts show "Collecting data" until two current-window samples have been captured.
 - **Codex support**, and **provider logos** in place of text labels on the compact displays.
-- **Extra windows**: Claude's Fable limit, and Antigravity's Claude+GPT quota under Gemini, on the flyout cards and detail page, in provider colours.
+- **Extra windows**: Claude's Fable limit, and Antigravity's External (Claude and GPT) quota under Gemini, on the flyout cards and detail page, in provider colours.
 - **Relevance-based bar selection** on the compact displays.
 - **A working Gemini.** Google shut down the Gemini CLI login for individual accounts, so Gemini is read from Antigravity and shown as 5-hour and weekly windows.
 - **Reliable Claude.** The OAuth usage endpoint is rate limited by Anthropic ("Command failed (exit code 3)"), and the CLI route became slow. The shim now uses OAuth first with a cooldown, falls back to the CLI, caches for 5 minutes and shows the last good result on failure.
