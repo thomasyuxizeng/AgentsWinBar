@@ -13,7 +13,7 @@ public sealed record DashboardTile(string Label, string Value, string Sub, Brush
 
 /// <summary>
 /// The dashboard's content: toolbar, headline tiles, one panel per provider and the diagnostics column.
-/// It only draws a <see cref="DashboardSnapshot"/>; fetching and timers live in <see cref="DashboardWindow"/>.
+/// It only draws a <see cref="DashboardSnapshot"/>; fetching and timers live in <see cref="DashboardAppWindow"/>.
 /// </summary>
 public sealed partial class DashboardPage : Page
 {

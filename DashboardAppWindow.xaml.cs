@@ -18,11 +18,11 @@ namespace CodexBarWin;
 /// The full-window dashboard: resizable, maximizable, full-screen capable, showing everything the app knows
 /// at once. It listens to the main view model for new results and redraws from a fresh snapshot.
 /// </summary>
-public sealed partial class DashboardWindow : Window
+public sealed partial class DashboardAppWindow : Window
 {
     private readonly MainViewModel _viewModel;
     private readonly IDashboardService _dashboardService;
-    private readonly ILogger<DashboardWindow> _logger;
+    private readonly ILogger<DashboardAppWindow> _logger;
     private readonly DashboardPage _page = new();
     private readonly DispatcherQueueTimer _redrawTimer;
     private readonly DispatcherQueueTimer _clockTimer;
@@ -31,13 +31,13 @@ public sealed partial class DashboardWindow : Window
     private readonly AppWindow _appWindow;
     private bool _closed;
 
-    public DashboardWindow()
+    public DashboardAppWindow()
     {
         InitializeComponent();
 
         _viewModel = App.Services.GetRequiredService<MainViewModel>();
         _dashboardService = App.Services.GetRequiredService<IDashboardService>();
-        _logger = App.Services.GetRequiredService<ILogger<DashboardWindow>>();
+        _logger = App.Services.GetRequiredService<ILogger<DashboardAppWindow>>();
 
         ExtendsContentIntoTitleBar = true;
         SetTitleBar(AppTitleBar);
