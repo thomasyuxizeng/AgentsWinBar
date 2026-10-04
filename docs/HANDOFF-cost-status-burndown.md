@@ -88,8 +88,14 @@ the minor presentation issues recorded below.
   regressions and card cost formatting. Release MSIX built with the same two existing environment warnings;
   signature verified and validation version `0.9.5.4` installed. The source manifest version was restored.
 - Codex can now inspect the app through computer use and reproduced the old UTC display on `0.9.5.3`.
-  After launching `0.9.5.4`, the hidden flyout was outside the captured monitor; opening it is required
-  before the follow-up visual checks can be completed.
+  On `0.9.5.4`, the tool did not expose the taskbar display or tray, so the offscreen flyout was brought
+  onto the monitor using its native window menu's Move action and keyboard input.
+- Follow-up screenshot and interaction checks passed on the signed `0.9.5.4` install: both card cost
+  periods fit, a live one-sample Claude window uses singular wording in the placeholder and caption,
+  collecting-data text has no line behind it, and "Last fetched" displays local time. The populated
+  Codex chart's even-use guide and legend are readable in light and dark themes. Changing back to dark
+  while the same chart stayed open also redrew the guide correctly. The original dark theme was restored
+  and the flyout was left open. No fixture or real-history modification was needed for these checks.
 - Claude left the in-flight cost-toggle race, alternate display scaling, clean tray-Quit flush and compact
   tooltips unverified. Its persistence check killed/relaunched the app; fixture costs were excluded by
   developer mode. Those checks were not counted as passed.
