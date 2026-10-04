@@ -255,6 +255,8 @@ public sealed partial class MainWindow : Window
         try
         {
             var dashboard = App.Windows.OfType<DashboardAppWindow>().FirstOrDefault() ?? new DashboardAppWindow();
+            if (dashboard.AppWindow.Presenter is OverlappedPresenter { State: OverlappedPresenterState.Minimized } presenter)
+                presenter.Restore();
             dashboard.Activate();
             // The flyout is a quick glance; once the full dashboard is open it only gets in the way
             HideWindow();

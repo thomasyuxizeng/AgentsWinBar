@@ -70,6 +70,10 @@ public sealed class DashboardService : IDashboardService
             available = await _cli.IsAvailableAsync(ct).ConfigureAwait(false);
             ct.ThrowIfCancellationRequested();
         }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            return; // Cancellation must not overwrite facts or start the cache backoff.
+        }
         catch (Exception ex)
         {
             version = null; available = null;

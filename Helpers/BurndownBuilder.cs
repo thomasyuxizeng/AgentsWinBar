@@ -33,14 +33,16 @@ public static class BurndownBuilder
         var current = samples.Where(s => s.ResetsAt.HasValue && Utc(s.ResetsAt.Value) == end &&
                 Utc(s.Timestamp) >= start && Utc(s.Timestamp) <= nowUtc &&
                 double.IsFinite(s.UsedPercent) && s.UsedPercent is >= 0 and <= 100)
-            .OrderBy(s => s.Timestamp).GroupBy(s => Utc(s.Timestamp)).Select(g => g.Last()).ToList();
+            .OrderBy(s => Utc(s.Timestamp)).GroupBy(s => Utc(s.Timestamp)).Select(g => g.Last()).ToList();
         var duration = (end - start).TotalSeconds;
         var points = current.Select(s => new BurndownPoint((Utc(s.Timestamp) - start).TotalSeconds / duration, s.UsedPercent)).ToList();
         var series = new BurndownSeries { Usage = points, Guide = [new(0, 0), new(1, 100)],
-            CapturedAt = current.LastOrDefault()?.Timestamp };
+            CapturedAt = current.LastOrDefault() is { } latest ? Utc(latest.Timestamp) : null };
         if (points.Count < 2) return series;
         var first = points[0]; var last = points[^1];
-        var rate = Math.Max(0, (last.UsedPercent - first.UsedPercent) / (last.ElapsedFraction - first.ElapsedFraction));
+        // Subtract timestamps before converting to fractions: adjacent ticks can round to the same fraction.
+        var observedSeconds = (Utc(current[^1].Timestamp) - Utc(current[0].Timestamp)).TotalSeconds;
+        var rate = Math.Max(0, (last.UsedPercent - first.UsedPercent) * duration / observedSeconds);
         var projected = last.UsedPercent + rate * (1 - last.ElapsedFraction);
         return series with { Projection = [last, new(1, projected)], ProjectedAtReset = projected, Message = string.Empty };
     }

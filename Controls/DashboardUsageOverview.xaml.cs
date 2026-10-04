@@ -42,7 +42,11 @@ public sealed partial class DashboardUsageOverview : UserControl
         foreach (var card in _cards.Values) card.RefreshTimes();
     }
 
-    private void OnSizeChanged(object sender, SizeChangedEventArgs e) => Arrange();
+    private void OnSizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        try { Arrange(); }
+        catch (Exception ex) { App.LogHandled("Dashboard layout update failed", ex); }
+    }
 
     private void Arrange()
     {

@@ -14,8 +14,10 @@ public record CostData
     public CostCoverage Coverage { get; init; } = new();
     public IReadOnlyList<DailyCost> Daily { get; init; } = [];
     public DateTime FetchedAt { get; init; } = DateTime.UtcNow;
-    public bool HasData => Last30DaysTokens > 0 || Last30DaysCostUSD > 0 ||
-        Daily.Any(d => d.TotalTokens > 0 || d.TotalCost > 0);
+    public bool HasData => TodayTokens > 0 || TodayCostUSD > 0 || Last30DaysTokens > 0 || Last30DaysCostUSD > 0 ||
+        (Daily ?? []).OfType<DailyCost>().Any(d => d.TotalTokens > 0 || d.TotalCost > 0 ||
+            d.InputTokens > 0 || d.OutputTokens > 0 || d.CacheReadTokens > 0 || d.CacheCreationTokens > 0 ||
+            d.ReasoningTokens > 0 || (d.ModelBreakdowns ?? []).OfType<ModelCost>().Any(m => m.TotalTokens > 0 || m.Cost > 0));
 }
 
 public record CostCoverage

@@ -12,7 +12,7 @@ public sealed class UsageHistoryStore
     public IReadOnlyList<UsageHistorySample> Samples { get { lock (_gate) return _samples.ToArray(); } }
 
     public static string ExtraWindowKey(ExtraUsageWindow extra) =>
-        "extra:" + (string.IsNullOrWhiteSpace(extra.Key) ? extra.Title.Trim().ToLowerInvariant() : extra.Key);
+        "extra:" + (string.IsNullOrWhiteSpace(extra.Key) ? (extra.Title ?? string.Empty).Trim().ToLowerInvariant() : extra.Key);
 
     public bool Add(UsageHistorySample sample, DateTime nowUtc)
     {

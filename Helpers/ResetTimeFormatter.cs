@@ -47,7 +47,7 @@ public static class ResetTimeFormatter
             return "Resetting now";
         }
 
-        var totalMinutes = (int)remaining.TotalMinutes;
+        var totalMinutes = (long)remaining.TotalMinutes;
         if (totalMinutes < 1)
         {
             return "Resets in <1m";

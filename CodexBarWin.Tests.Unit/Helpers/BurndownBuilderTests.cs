@@ -85,4 +85,39 @@ public class BurndownBuilderTests
     public void Build_WhenSamplesUnsorted_NormalizesToChronologicalOrder() =>
         BurndownBuilder.Build([Sample(120, 50), Sample(60, 20)], Window, Start.AddMinutes(130))
             .Usage.Select(p => p.ElapsedFraction).Should().Equal(0.2, 0.4);
+
+    [TestMethod]
+    public void Build_MixedTimestampKinds_SortsByInstantAndCapturesUtc()
+    {
+        var samples = new[] { Sample(120, 50) with { Timestamp = Sample(120, 50).Timestamp.ToLocalTime() },
+            Sample(60, 20) with { Timestamp = DateTime.SpecifyKind(Sample(60, 20).Timestamp, DateTimeKind.Unspecified) } };
+        var series = BurndownBuilder.Build(samples, Window, Start.AddMinutes(130));
+        series.Usage.Select(p => p.UsedPercent).Should().Equal(20, 50);
+        series.ProjectedAtReset.Should().BeApproximately(140, 0.001);
+        series.CapturedAt!.Value.Kind.Should().Be(DateTimeKind.Utc);
+    }
+
+    [TestMethod]
+    public void Build_AdjacentTicksInLongWindow_ProducesFiniteProjection()
+    {
+        var now = new DateTime(8000, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var window = new UsageWindow { WindowMinutes = int.MaxValue, ResetAt = now.AddDays(1) };
+        var series = BurndownBuilder.Build([
+            new() { Timestamp = now.AddTicks(-1), ResetsAt = window.ResetAt, UsedPercent = 10 },
+            new() { Timestamp = now, ResetsAt = window.ResetAt, UsedPercent = 20 }], window, now);
+        double.IsFinite(series.ProjectedAtReset!.Value).Should().BeTrue();
+        series.ProjectedAtReset.Should().BeGreaterThan(100);
+        series.Projection.Should().OnlyContain(p => double.IsFinite(p.UsedPercent) && double.IsFinite(p.ElapsedFraction));
+    }
+
+    [TestMethod]
+    public void Build_ThousandsOfSamples_ReturnsOrderedFiniteSeries()
+    {
+        var samples = Enumerable.Range(0, 5000).Select(i => new UsageHistorySample {
+            Timestamp = Start.AddSeconds(i), ResetsAt = Window.ResetAt, UsedPercent = i / 100d }).Reverse();
+        var series = BurndownBuilder.Build(samples, Window, Start.AddMinutes(100));
+        series.SampleCount.Should().Be(5000);
+        series.Usage.Should().BeInAscendingOrder(p => p.ElapsedFraction);
+        double.IsFinite(series.ProjectedAtReset!.Value).Should().BeTrue();
+    }
 }

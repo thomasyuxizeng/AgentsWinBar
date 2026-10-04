@@ -126,4 +126,9 @@ public class ResetTimeFormatterTests
 
         window.ResetText.Should().StartWith("Resets in 5h");
     }
+
+    [TestMethod]
+    public void Format_FarFutureReset_ReturnsDaysWithoutIntegerOverflow() =>
+        ResetTimeFormatter.Format(DateTime.SpecifyKind(DateTime.MaxValue, DateTimeKind.Utc), Now)
+            .Should().StartWith("Resets in ").And.Contain("d ").And.NotContain("<1m");
 }

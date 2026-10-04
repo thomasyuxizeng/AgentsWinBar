@@ -152,7 +152,11 @@ public sealed partial class DashboardPage : Page
         Arrange(force: false);
     }
 
-    private void OnScrollSizeChanged(object sender, SizeChangedEventArgs e) => Arrange(force: false);
+    private void OnScrollSizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        try { Arrange(force: false); }
+        catch (Exception ex) { App.LogHandled("Dashboard layout update failed", ex); }
+    }
 
     /// <summary>Lays the provider panels out in as many columns as fit (each at least <see cref="MinPanelWidth"/> wide).</summary>
     private void Arrange(bool force)

@@ -120,14 +120,14 @@ public sealed partial class UsageMeter : UserControl
         var signature = (Percent, TimePercent, Accent, PaceText, ActualWidth);
         if (_lastUpdate == signature) return;
         _lastUpdate = signature;
-        var percent = Math.Clamp(Percent, 0, 100);
+        var percent = DashboardValues.Percent(Percent);
 
         UsageBar.Width = ActualWidth * (percent / 100.0);
         var key = (Accent, percent >= 95 ? 2 : percent >= 80 ? 1 : 0);
         if (!_barBrushes.TryGetValue(key, out var barBrush)) _barBrushes[key] = barBrush = GetBarBrush(percent, Accent);
         if (!ReferenceEquals(UsageBar.Fill, barBrush)) UsageBar.Fill = barBrush;
 
-        if (TimePercent < 0)
+        if (!double.IsFinite(TimePercent) || TimePercent < 0)
         {
             TimeBar.Visibility = Visibility.Collapsed;
             TimeMarker.Visibility = Visibility.Collapsed;

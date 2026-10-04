@@ -43,7 +43,7 @@ public static class PaceCalculator
 
     public static PaceProjection Project(double usedPercent, int windowMinutes, DateTime? resetAt, DateTime nowUtc)
     {
-        if (resetAt is not { } value || windowMinutes <= 0)
+        if (!double.IsFinite(usedPercent) || resetAt is not { } value || windowMinutes <= 0)
         {
             return new PaceProjection(PaceKind.Unknown);
         }
@@ -98,7 +98,7 @@ public static class PaceCalculator
     /// </summary>
     public static string FormatDuration(double minutes)
     {
-        var total = (int)Math.Max(0, minutes);
+        var total = double.IsFinite(minutes) ? (long)Math.Clamp(minutes, 0, TimeSpan.MaxValue.TotalMinutes) : 0;
         if (total < 1) return "<1m";
         if (total < 60) return $"{total}m";
 

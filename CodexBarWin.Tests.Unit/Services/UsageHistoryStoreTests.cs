@@ -101,4 +101,8 @@ public class UsageHistoryStoreTests
         store.Record(data with { IsLoading = true }, Now.AddMinutes(20)).Should().Be(0);
         store.Record(data with { Error = "Failed" }, Now.AddMinutes(20)).Should().Be(0);
     }
+
+    [TestMethod]
+    public void ExtraWindowKey_NullTitle_ReturnsEmptyExtraKey() =>
+        UsageHistoryStore.ExtraWindowKey(new() { Title = null! }).Should().Be("extra:");
 }

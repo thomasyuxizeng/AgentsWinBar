@@ -142,4 +142,49 @@ public class DashboardServiceTests
         _service.GetSnapshot([], null).Diagnostics.CliAvailable.Should().BeNull();
         _cli.Verify(s => s.GetVersionAsync(It.IsAny<CancellationToken>()), Times.Never);
     }
+
+    [TestMethod]
+    public async Task RefreshDiagnosticsAsync_CanceledAttempt_PreservesFactsAndAllowsImmediateRetry()
+    {
+        await _service.RefreshDiagnosticsAsync();
+        _clock.Now = _clock.Now.AddMinutes(10);
+        using var cancellation = new CancellationTokenSource(); cancellation.Cancel();
+        await _service.RefreshDiagnosticsAsync(cancellation.Token);
+        _service.GetSnapshot([], null).Diagnostics.CliVersion.Should().Be("1.2.3");
+        _cli.Setup(s => s.GetVersionAsync(It.IsAny<CancellationToken>())).ReturnsAsync("retried");
+        await _service.RefreshDiagnosticsAsync();
+        _service.GetSnapshot([], null).Diagnostics.CliVersion.Should().Be("retried");
+    }
+
+    [TestMethod]
+    public async Task GetSnapshot_ConcurrentHistoryActivityAndDiagnosticsWrites_ReturnsStableSnapshots()
+    {
+        var now = _clock.Now.UtcDateTime;
+        var captured = _service.GetSnapshot([], null);
+        var writer = Task.Run(() =>
+        {
+            for (var i = 0; i < 2000; i++)
+            {
+                _history.Add(new() { Timestamp = now.AddSeconds(-2000 + i), Provider = "claude",
+                    WindowKey = "session", UsedPercent = i % 100 }, now);
+                _activity.RecordRefresh(new() { TimestampUtc = now.AddSeconds(i), DurationMs = i });
+                _activity.RecordAlert(new() { TimestampUtc = now.AddSeconds(i), Title = i.ToString() });
+            }
+        });
+        var reader = Task.Run(async () =>
+        {
+            for (var i = 0; i < 100; i++)
+            {
+                await _service.RefreshDiagnosticsAsync();
+                var snapshot = _service.GetSnapshot([], null);
+                snapshot.Diagnostics.RecentRefreshes.Count.Should().BeLessThanOrEqualTo(40);
+                snapshot.Diagnostics.RecentAlerts.Count.Should().BeLessThanOrEqualTo(20);
+                snapshot.Diagnostics.HistorySampleCount.Should().BeGreaterThanOrEqualTo(0);
+            }
+        });
+        await Task.WhenAll(writer, reader).WaitAsync(TimeSpan.FromSeconds(15));
+        captured.Diagnostics.RecentRefreshes.Should().BeEmpty();
+        captured.Diagnostics.HistorySampleCount.Should().Be(0);
+        _service.GetSnapshot([], null).Diagnostics.HistorySampleCount.Should().BeGreaterThan(1000);
+    }
 }

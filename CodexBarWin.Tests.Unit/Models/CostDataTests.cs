@@ -57,4 +57,14 @@ public class CostDataTests
     [TestMethod]
     public void HasData_WhenTokenOnly_IsVisible() =>
         new CostData { Last30DaysTokens = 100, Last30DaysCostUSD = 0 }.HasData.Should().BeTrue();
+
+    [TestMethod]
+    public void HasData_TodayOnlyOrUnpricedModelUsage_ReturnsTrue()
+    {
+        new CostData { TodayCostUSD = 1 }.HasData.Should().BeTrue();
+        new CostData { TodayTokens = 1 }.HasData.Should().BeTrue();
+        new CostData { Daily = [new() { ModelBreakdowns = [new() { TotalTokens = 1 }] }] }.HasData.Should().BeTrue();
+        new CostData { Daily = [new() { InputTokens = 1 }] }.HasData.Should().BeTrue();
+        new CostData { Daily = null! }.HasData.Should().BeFalse();
+    }
 }

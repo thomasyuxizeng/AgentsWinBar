@@ -25,9 +25,9 @@ internal static class DashboardFormat
     public static Visibility VisCount(int count) => count > 0 ? Visibility.Visible : Visibility.Collapsed;
     public static Visibility VisEmpty(int count) => count == 0 ? Visibility.Visible : Visibility.Collapsed;
 
-    public static string Percent(double value) => $"{value:F0}%";
-    public static string Used(double value) => $"{value:F0}% used";
-    public static double Time(double? elapsedPercent) => elapsedPercent ?? -1;
+    public static string Percent(double value) => $"{DashboardValues.Percent(value):F0}%";
+    public static string Used(double value) => $"{DashboardValues.Percent(value):F0}% used";
+    public static double Time(double? elapsedPercent) => elapsedPercent is { } value && double.IsFinite(value) ? DashboardValues.Percent(value) : -1;
 
     /// <summary>"Near limit" / "At limit" chip (80% / 95%, the same thresholds as the bars); hidden below 80%.</summary>
     public static string LimitLabel(double percent) => percent >= 95 ? "AT LIMIT" : percent >= 80 ? "NEAR LIMIT" : string.Empty;
@@ -42,25 +42,25 @@ internal static class DashboardFormat
     public static string Local(DateTime? utc)
     {
         if (utc is not { } value) return "—";
-        var local = TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(value, DateTimeKind.Utc), TimeZoneInfo.Local);
+        var local = TimeZoneInfo.ConvertTimeFromUtc(DashboardValues.Utc(value), TimeZoneInfo.Local);
         return local.ToString("ddd d MMM, h:mm tt", CultureInfo.CurrentCulture);
     }
 
     public static string LocalTime(DateTime utc) =>
-        TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(utc, DateTimeKind.Utc), TimeZoneInfo.Local)
+        TimeZoneInfo.ConvertTimeFromUtc(DashboardValues.Utc(utc), TimeZoneInfo.Local)
             .ToString("h:mm:ss tt", CultureInfo.CurrentCulture);
 
     public static string LocalDate(DateTime? utc)
     {
         if (utc is not { } value) return "—";
-        return TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(value, DateTimeKind.Utc), TimeZoneInfo.Local)
+        return TimeZoneInfo.ConvertTimeFromUtc(DashboardValues.Utc(value), TimeZoneInfo.Local)
             .ToString("d MMM yyyy", CultureInfo.CurrentCulture);
     }
 
     /// <summary>"2m ago", "3h ago" relative to now.</summary>
     public static string Ago(DateTime utc)
     {
-        var span = DateTime.UtcNow - DateTime.SpecifyKind(utc, DateTimeKind.Utc);
+        var span = DateTime.UtcNow - DashboardValues.Utc(utc);
         if (span < TimeSpan.Zero) span = TimeSpan.Zero;
         return span.TotalSeconds < 45 ? "just now"
             : span.TotalMinutes < 60 ? $"{(int)Math.Round(span.TotalMinutes)}m ago"
@@ -71,7 +71,7 @@ internal static class DashboardFormat
     public static string In(DateTime? utc)
     {
         if (utc is not { } value) return "—";
-        var span = DateTime.SpecifyKind(value, DateTimeKind.Utc) - DateTime.UtcNow;
+        var span = DashboardValues.Utc(value) - DateTime.UtcNow;
         if (span <= TimeSpan.Zero) return "now";
         return span.TotalMinutes < 1 ? "<1m" : "in " + PaceCalculator.FormatDuration(span.TotalMinutes);
     }
@@ -81,8 +81,8 @@ internal static class DashboardFormat
         : minutes % 60 == 0 ? $"{minutes / 60}-hour window" : $"{minutes}-minute window";
 
     /// <summary>"5-hour window · 62% of the time has passed".</summary>
-    public static string WindowMeta(int windowMinutes, double? elapsedPercent) => elapsedPercent is double elapsed
-        ? $"{WindowLength(windowMinutes)} · {elapsed:F0}% of the time has passed"
+    public static string WindowMeta(int windowMinutes, double? elapsedPercent) => elapsedPercent is double elapsed && double.IsFinite(elapsed)
+        ? $"{WindowLength(windowMinutes)} · {DashboardValues.Percent(elapsed):F0}% of the time has passed"
         : WindowLength(windowMinutes);
 
     public static string ResetLine(string? resetText, DateTime? resetsAtUtc) =>
@@ -104,7 +104,8 @@ internal static class DashboardFormat
     public static string ProviderName(string providerId) => ProviderIcons.GetDisplayName(providerId);
     public static string RefreshTitle(int count) => count == 0 ? "REFRESH LOG" : $"REFRESH LOG · LAST {count}";
 
-    public static string Freshness(DashboardProvider provider) => provider.IsLoading ? "Refreshing…"
+    public static string Freshness(DashboardProvider? provider) => provider == null ? string.Empty
+        : provider.IsLoading ? "Refreshing…"
         : $"Fetched {Local(provider.FetchedAtUtc)} · {Ago(provider.FetchedAtUtc)}";
 
     /// <summary>A short note for a provider card's header: what needs attention, or nothing.</summary>
@@ -117,7 +118,7 @@ internal static class DashboardFormat
     public static string MiniTip(DashboardWindow? window) => window == null ? string.Empty
         : string.Join('\n', new[]
         {
-            $"{window.Title}: {window.UsedPercent:F0}% used",
+            $"{window.Title}: {DashboardValues.Percent(window.UsedPercent):F0}% used",
             ResetLine(window.ResetText, window.ResetsAtUtc),
             window.PaceSummary
         }.Where(line => !string.IsNullOrWhiteSpace(line)));

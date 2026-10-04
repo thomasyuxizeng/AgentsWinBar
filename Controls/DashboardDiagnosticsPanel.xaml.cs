@@ -13,11 +13,11 @@ public sealed partial class DashboardDiagnosticsPanel : UserControl
 
     public DashboardDiagnostics Data
     {
-        get => (DashboardDiagnostics)GetValue(DataProperty);
-        set => SetValue(DataProperty, value with
+        get => (DashboardDiagnostics?)GetValue(DataProperty) ?? new DashboardDiagnostics();
+        set => SetValue(DataProperty, (value ?? new DashboardDiagnostics()) with
         {
-            RecentRefreshes = Data.RecentRefreshes.SequenceEqual(value.RecentRefreshes) ? Data.RecentRefreshes : value.RecentRefreshes,
-            RecentAlerts = Data.RecentAlerts.SequenceEqual(value.RecentAlerts) ? Data.RecentAlerts : value.RecentAlerts
+            RecentRefreshes = value != null && Data.RecentRefreshes.SequenceEqual(value.RecentRefreshes) ? Data.RecentRefreshes : value?.RecentRefreshes ?? [],
+            RecentAlerts = value != null && Data.RecentAlerts.SequenceEqual(value.RecentAlerts) ? Data.RecentAlerts : value?.RecentAlerts ?? []
         });
     }
 
@@ -100,7 +100,11 @@ public sealed partial class DashboardDiagnosticsPanel : UserControl
 
     private int _columns = -1;
 
-    private void OnSizeChanged(object sender, SizeChangedEventArgs e) => Arrange();
+    private void OnSizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        try { Arrange(); }
+        catch (Exception ex) { App.LogHandled("Dashboard layout update failed", ex); }
+    }
 
     /// <summary>Flows the cards into as many columns as fit (a 380-wide side column is one; the full-width layout is up to three).</summary>
     private void Arrange()

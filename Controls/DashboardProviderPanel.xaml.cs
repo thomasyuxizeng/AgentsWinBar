@@ -45,11 +45,15 @@ public sealed partial class DashboardProviderPanel : UserControl
 
     private void OnWindowsHostSizeChanged(object sender, SizeChangedEventArgs e)
     {
-        // Two columns need room; a narrow panel stacks them
-        var stacked = e.NewSize.Width > 0 && e.NewSize.Width < SplitMinWidth;
-        if (stacked == _stacked) return;
-        _stacked = stacked;
-        BuildWindows(Data);
+        try
+        {
+            // Two columns need room; a narrow panel stacks them
+            var stacked = e.NewSize.Width > 0 && e.NewSize.Width < SplitMinWidth;
+            if (stacked == _stacked) return;
+            _stacked = stacked;
+            BuildWindows(Data);
+        }
+        catch (Exception ex) { App.LogHandled("Dashboard window layout update failed", ex); }
     }
 
     private static void OnDataChanged(DependencyObject d, DependencyPropertyChangedEventArgs e) =>
@@ -66,6 +70,7 @@ public sealed partial class DashboardProviderPanel : UserControl
     private void Refresh()
     {
         var data = Data;
+        if (Content is UIElement content) content.Visibility = data == null ? Visibility.Collapsed : Visibility.Visible;
         BuildWindows(data);
         BuildCostRows(data?.Cost);
 
@@ -103,7 +108,7 @@ public sealed partial class DashboardProviderPanel : UserControl
             else row.RefreshTimes();
         }
 
-        var layout = $"{split}|{string.Join(',', left.Select(w => w.Key))}|{string.Join(',', right.Select(w => w.Key))}|{data?.DisplayName}";
+        var layout = $"{split}|{string.Join(',', left.Select(w => $"{w.Key.Length}:{w.Key}"))}|{string.Join(',', right.Select(w => $"{w.Key.Length}:{w.Key}"))}|{data?.DisplayName}";
         if (layout == _windowsLayout) return;
         _windowsLayout = layout;
 

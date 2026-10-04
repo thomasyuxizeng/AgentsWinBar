@@ -61,7 +61,13 @@ public sealed partial class DailyCostChart : UserControl
         _drawnWidth = Plot.ActualWidth;
         _drawnHeight = Plot.Height;
         Plot.Children.Clear();
-        if (_series.Count == 0 || Plot.ActualWidth <= 0) return;
+        if (_series.Count == 0)
+        {
+            StartLabel.Text = EndLabel.Text = string.Empty;
+            Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(this, string.Empty);
+            return;
+        }
+        if (Plot.ActualWidth <= 0) return;
         var max = Math.Max(0.01m, _series.Max(d => d.TotalCost));
         var slot = Plot.ActualWidth / _series.Count;
         var baseline = new Rectangle { Width = Plot.ActualWidth, Height = 1,

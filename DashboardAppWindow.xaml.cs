@@ -30,7 +30,10 @@ public sealed partial class DashboardAppWindow : Window
     private MicaController? _micaController;
     private SystemBackdropConfiguration? _backdropConfiguration;
     private readonly AppWindow _appWindow;
-    private bool _closed;
+    private volatile bool _closed;
+    private bool _redrawing;
+    private bool _topmost;
+    private readonly List<KeyboardAccelerator> _accelerators = [];
 
     public DashboardAppWindow()
     {
@@ -68,11 +71,11 @@ public sealed partial class DashboardAppWindow : Window
         _redrawTimer = queue.CreateTimer();
         _redrawTimer.Interval = TimeSpan.FromMilliseconds(250);
         _redrawTimer.IsRepeating = false;
-        _redrawTimer.Tick += (_, _) => Redraw();
+        _redrawTimer.Tick += OnTimerTick;
         _clockTimer = queue.CreateTimer();
         _clockTimer.Interval = TimeSpan.FromSeconds(30);
         _clockTimer.IsRepeating = true;
-        _clockTimer.Tick += (_, _) => Redraw();
+        _clockTimer.Tick += OnTimerTick;
         _clockTimer.Start();
 
         _viewModel.Providers.CollectionChanged += OnProvidersChanged;
@@ -83,10 +86,12 @@ public sealed partial class DashboardAppWindow : Window
         if (Content is UIElement root)
         {
             var f11 = new KeyboardAccelerator { Key = Windows.System.VirtualKey.F11 };
-            f11.Invoked += (_, e) => { ToggleFullScreen(); e.Handled = true; };
+            f11.Invoked += OnF11Invoked;
+            _accelerators.Add(f11);
             root.KeyboardAccelerators.Add(f11);
             var escape = new KeyboardAccelerator { Key = Windows.System.VirtualKey.Escape };
-            escape.Invoked += (_, e) => { if (_appWindow.Presenter.Kind == AppWindowPresenterKind.FullScreen) { ToggleFullScreen(); e.Handled = true; } };
+            escape.Invoked += OnEscapeInvoked;
+            _accelerators.Add(escape);
             root.KeyboardAccelerators.Add(escape);
         }
 
@@ -115,12 +120,13 @@ public sealed partial class DashboardAppWindow : Window
     private async Task RefreshDiagnosticsAsync()
     {
         await _dashboardService.RefreshDiagnosticsAsync();
-        if (!_closed) DispatcherQueue.TryEnqueue(Redraw);
+        Post(Redraw);
     }
 
     private void Redraw()
     {
-        if (_closed) return;
+        if (_closed || _redrawing) return;
+        _redrawing = true;
         try
         {
             var lastRefreshUtc = _viewModel.LastUpdated == default ? (DateTime?)null : _viewModel.LastUpdated.ToUniversalTime();
@@ -137,17 +143,17 @@ public sealed partial class DashboardAppWindow : Window
         {
             _logger.LogError(ex, "Dashboard redraw failed");
         }
+        finally { _redrawing = false; }
     }
 
     private void OnProvidersChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e) =>
-        DispatcherQueue.TryEnqueue(() => { if (!_closed) { _redrawTimer.Stop(); _redrawTimer.Start(); } });
+        Post(() => { _redrawTimer.Stop(); _redrawTimer.Start(); });
 
     private void OnViewModelPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
         if (e.PropertyName is not (nameof(MainViewModel.IsLoading) or nameof(MainViewModel.LastUpdated))) return;
-        DispatcherQueue.TryEnqueue(() =>
+        Post(() =>
         {
-            if (_closed) return;
             _page.SetBusy(_viewModel.IsLoading);
             if (e.PropertyName == nameof(MainViewModel.IsLoading)) return;
             _redrawTimer.Stop();
@@ -155,39 +161,62 @@ public sealed partial class DashboardAppWindow : Window
         });
     }
 
-    private void OnRefreshRequested(object? sender, EventArgs e) =>
+    private void OnRefreshRequested(object? sender, EventArgs e) => HandleEvent(() =>
         _viewModel.RefreshCommand.ExecuteAsync(null).SafeFireAndForget(
-            onError: ex => _logger.LogError(ex, "Dashboard refresh failed"));
+            onError: ex => _logger.LogError(ex, "Dashboard refresh failed")));
 
-    private void OnSettingsRequested(object? sender, EventArgs e)
+    private void OnSettingsRequested(object? sender, EventArgs e) => HandleEvent(() =>
     {
-        try
-        {
-            var settings = App.Windows.OfType<SettingsWindow>().FirstOrDefault() ?? new SettingsWindow();
-            settings.Activate();
-        }
-        catch (Exception ex) { _logger.LogError(ex, "Opening Settings failed"); }
-    }
+        var settings = App.Windows.OfType<SettingsWindow>().FirstOrDefault() ?? new SettingsWindow();
+        settings.Activate();
+    });
 
-    private void OnTopmostChanged(object? sender, bool on)
+    private void OnTopmostChanged(object? sender, bool on) => HandleEvent(() =>
     {
+        _topmost = on;
         if (_appWindow.Presenter is OverlappedPresenter presenter) presenter.IsAlwaysOnTop = on;
-    }
+    });
 
-    private void OnFullScreenChanged(object? sender, bool on) => SetFullScreen(on);
+    private void OnFullScreenChanged(object? sender, bool on) => HandleEvent(() => SetFullScreen(on));
 
     private void ToggleFullScreen() => SetFullScreen(_appWindow.Presenter.Kind != AppWindowPresenterKind.FullScreen);
 
     private void SetFullScreen(bool on)
     {
         _appWindow.SetPresenter(on ? AppWindowPresenterKind.FullScreen : AppWindowPresenterKind.Default);
+        if (_appWindow.Presenter is OverlappedPresenter presenter) presenter.IsAlwaysOnTop = _topmost;
         _page.SetFullScreen(on);
     }
 
-    private void OnAppWindowChanged(AppWindow sender, AppWindowChangedEventArgs args)
+    private void OnAppWindowChanged(AppWindow sender, AppWindowChangedEventArgs args) => HandleEvent(() =>
     {
         if (args.DidPresenterChange) _page.SetFullScreen(sender.Presenter.Kind == AppWindowPresenterKind.FullScreen);
+    });
+
+    private void Post(Action action) => HandleEvent(() =>
+        DispatcherQueue.TryEnqueue(() => HandleEvent(action)));
+
+    private void HandleEvent(Action action)
+    {
+        if (_closed) return;
+        try { action(); }
+        catch (Exception ex) { _logger.LogError(ex, "Dashboard event failed"); }
     }
+
+    private void OnTimerTick(DispatcherQueueTimer sender, object args) => Redraw();
+
+    private void OnF11Invoked(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args) => HandleEvent(() =>
+    {
+        ToggleFullScreen();
+        args.Handled = true;
+    });
+
+    private void OnEscapeInvoked(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args) => HandleEvent(() =>
+    {
+        if (_appWindow.Presenter.Kind != AppWindowPresenterKind.FullScreen) return;
+        ToggleFullScreen();
+        args.Handled = true;
+    });
 
     private void SetupMicaBackdrop()
     {
@@ -201,11 +230,11 @@ public sealed partial class DashboardAppWindow : Window
         if (Content is FrameworkElement root) root.ActualThemeChanged += OnActualThemeChanged;
     }
 
-    private void OnActualThemeChanged(FrameworkElement sender, object args)
+    private void OnActualThemeChanged(FrameworkElement sender, object args) => HandleEvent(() =>
     {
         UpdateBackdropTheme();
         UpdateWindowIcon();
-    }
+    });
 
     private void UpdateBackdropTheme()
     {
@@ -228,14 +257,30 @@ public sealed partial class DashboardAppWindow : Window
 
     private void OnClosed(object sender, WindowEventArgs args)
     {
+        if (_closed) return;
         _closed = true;
-        _redrawTimer.Stop();
-        _clockTimer.Stop();
+        Closed -= OnClosed;
+        _redrawTimer.Tick -= OnTimerTick;
+        _clockTimer.Tick -= OnTimerTick;
+        _page.RefreshRequested -= OnRefreshRequested;
+        _page.SettingsRequested -= OnSettingsRequested;
+        _page.TopmostChanged -= OnTopmostChanged;
+        _page.FullScreenChanged -= OnFullScreenChanged;
+        foreach (var accelerator in _accelerators)
+        {
+            accelerator.Invoked -= OnF11Invoked;
+            accelerator.Invoked -= OnEscapeInvoked;
+        }
+        _accelerators.Clear();
+        try { _redrawTimer.Stop(); _clockTimer.Stop(); }
+        catch (Exception ex) { _logger.LogError(ex, "Dashboard timer cleanup failed"); }
         _viewModel.Providers.CollectionChanged -= OnProvidersChanged;
         _viewModel.PropertyChanged -= OnViewModelPropertyChanged;
         _appWindow.Changed -= OnAppWindowChanged;
         if (Content is FrameworkElement root) root.ActualThemeChanged -= OnActualThemeChanged;
         App.Windows.Remove(this);
-        _micaController?.Dispose();
+        try { _micaController?.Dispose(); }
+        catch (Exception ex) { _logger.LogError(ex, "Dashboard backdrop cleanup failed"); }
+        _micaController = null;
     }
 }

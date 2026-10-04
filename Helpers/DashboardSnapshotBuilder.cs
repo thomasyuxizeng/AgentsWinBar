@@ -36,23 +36,36 @@ public static class DashboardSnapshotBuilder
         {
             var id = data.Provider ?? string.Empty;
             var history = byProvider[id].ToArray();
+            var extras = (data.ExtraWindows ?? []).OfType<ExtraUsageWindow>()
+                .Select(e => e with { Title = e.Title ?? string.Empty }).ToArray();
+            var ambiguousKeys = extras.GroupBy(UsageHistoryStore.ExtraWindowKey)
+                .Where(g => g.Count() > 1).Select(g => g.Key).ToHashSet(StringComparer.Ordinal);
             var windows = new List<DashboardWindow>();
+            var keys = new HashSet<string>(StringComparer.Ordinal);
             void Add(string key, DashboardWindowKind kind, string title, UsageWindow? window)
             {
                 if (window == null) return;
-                var pace = PaceCalculator.Project(window.Percent, window.WindowMinutes, window.ResetAt, now);
+                var historyKey = key;
+                var suffix = 2;
+                while (!keys.Add(key)) key = $"{historyKey}#{suffix++}";
+                var percent = DashboardValues.Percent(window.Percent);
+                var pace = double.IsFinite(window.Percent)
+                    ? PaceCalculator.Project(percent, window.WindowMinutes, window.ResetAt, now)
+                    : new PaceProjection(PaceKind.Unknown);
                 windows.Add(new DashboardWindow
                 {
                     Key = key, Kind = kind, Title = title,
                     Accent = kind is DashboardWindowKind.Session or DashboardWindowKind.Weekly
                         ? WindowAccent.None : WindowAccents.FromTitle(title),
-                    UsedPercent = window.Percent,
+                    UsedPercent = percent,
                     ElapsedPercent = ResetTimeFormatter.ElapsedPercent(window.ResetAt, window.WindowMinutes, now),
                     WindowMinutes = window.WindowMinutes, ResetsAtUtc = Utc(window.ResetAt),
                     ResetText = ResetTimeFormatter.Format(window.ResetAt, now) ?? window.ResetIn?.Trim() ?? string.Empty,
                     LastChangedAtUtc = Utc(window.LastChangedAt), Pace = pace,
                     PaceSummary = PaceCalculator.Summarize(pace),
-                    History = BurndownBuilder.Build(history.Where(s => s.WindowKey == key), window, now)
+                    // Duplicate source keys cannot identify which window produced a sample.
+                    History = BurndownBuilder.Build(ambiguousKeys.Contains(historyKey)
+                        ? [] : history.Where(s => s.WindowKey == historyKey), window, now)
                 });
             }
             // Labels on UsageData require a non-null provider id.
@@ -60,11 +73,8 @@ public static class DashboardSnapshotBuilder
             Add("session", DashboardWindowKind.Session, labeled.SessionLabel, data.Session);
             Add("weekly", DashboardWindowKind.Weekly, labeled.WeeklyLabel, data.Weekly);
             Add("tertiary", DashboardWindowKind.Tertiary, labeled.TertiaryLabel, data.Tertiary);
-            foreach (var extra in (data.ExtraWindows ?? []).OfType<ExtraUsageWindow>())
-            {
-                var safeExtra = extra with { Title = extra.Title ?? string.Empty };
-                Add(UsageHistoryStore.ExtraWindowKey(safeExtra), DashboardWindowKind.Extra, safeExtra.Title, extra.Window);
-            }
+            foreach (var extra in extras)
+                Add(UsageHistoryStore.ExtraWindowKey(extra), DashboardWindowKind.Extra, extra.Title, extra.Window);
             var cost = data.Cost is { } raw ? raw with { Daily = (raw.Daily ?? []).OfType<DailyCost>().ToArray() } : null;
             return new DashboardProvider
             {
@@ -138,11 +148,12 @@ public static class DashboardSnapshotBuilder
     {
         var daily = CostSeriesBuilder.Daily(cost, today, 30);
         var active = daily.Where(d => d.TotalTokens > 0 || d.TotalCost > 0 || d.InputTokens > 0 ||
-            d.OutputTokens > 0 || d.CacheReadTokens > 0 || d.CacheCreationTokens > 0 || d.ReasoningTokens > 0).ToArray();
+            d.OutputTokens > 0 || d.CacheReadTokens > 0 || d.CacheCreationTokens > 0 || d.ReasoningTokens > 0 ||
+            d.ModelBreakdowns.Any(m => m.TotalTokens > 0 || m.Cost > 0)).ToArray();
         return new DashboardCost
         {
-            Currency = cost.CurrencyCode, TodayCost = cost.TodayCostUSD, TodayTokens = cost.TodayTokens,
-            Last30DaysCost = cost.Last30DaysCostUSD, Last30DaysTokens = cost.Last30DaysTokens,
+            Currency = cost.CurrencyCode, TodayCost = Math.Max(0, cost.TodayCostUSD), TodayTokens = Math.Max(0, cost.TodayTokens),
+            Last30DaysCost = Math.Max(0, cost.Last30DaysCostUSD), Last30DaysTokens = Math.Max(0, cost.Last30DaysTokens),
             Provenance = cost.Provenance, CapturedAtUtc = Utc(cost.FetchedAt), Coverage = cost.Coverage,
             Daily = daily, TopModels = CostSeriesBuilder.TopModels(cost, today, 8),
             InputTokens = daily.Sum(d => d.InputTokens), OutputTokens = daily.Sum(d => d.OutputTokens),

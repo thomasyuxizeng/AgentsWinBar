@@ -35,7 +35,8 @@ public sealed partial class DashboardUsageCard : UserControl
     {
         var card = (DashboardUsageCard)d;
         card.BuildRows(card.Data);
-        if (card.Data != null) card.Bindings.Update();
+        if (card.Content is UIElement content) content.Visibility = card.Data == null ? Visibility.Collapsed : Visibility.Visible;
+        card.Bindings.Update();
     }
 
     private void BuildRows(DashboardProvider? data)
@@ -48,7 +49,7 @@ public sealed partial class DashboardUsageCard : UserControl
             else row.RefreshTimes();
         }
 
-        var layout = string.Join(',', windows.Select(w => w.Key));
+        var layout = string.Join(',', windows.Select(w => $"{w.Key.Length}:{w.Key}:{w.Kind}:{w.Accent}"));
         if (layout == _layout) return;
         _layout = layout;
 

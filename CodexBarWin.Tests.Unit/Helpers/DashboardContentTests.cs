@@ -99,4 +99,76 @@ public class DashboardContentTests
         var a = Provider();
         DashboardContent.ProviderEquals(a, a).Should().BeTrue();
     }
+
+    [TestMethod]
+    public void Equals_EveryRecordPropertyMutation_ReturnsFalse()
+    {
+        Verify(new DashboardProvider(), DashboardContent.ProviderEquals);
+        Verify(new DashboardWindow(), DashboardContent.WindowEquals);
+        Verify(new DashboardCost(), DashboardContent.CostEquals);
+        Verify(new BurndownSeries(), DashboardContent.SeriesEquals);
+        Verify(new DailyCost(), DashboardContent.DailyEquals);
+        Verify(new DashboardDiagnostics(), DashboardContent.DiagnosticsEquals);
+        Verify(new ProviderStatus(), (a, b) => DashboardContent.ProviderEquals(
+            new() { ServiceStatus = a }, new() { ServiceStatus = b }));
+        Verify(new CreditsInfo(), (a, b) => DashboardContent.ProviderEquals(
+            new() { Credits = a }, new() { Credits = b }));
+        Verify(new CostCoverage(), (a, b) => DashboardContent.CostEquals(
+            new() { Coverage = a }, new() { Coverage = b }));
+        Verify(new PaceProjection(PaceKind.Unknown), (a, b) => DashboardContent.WindowEquals(
+            new() { Pace = a }, new() { Pace = b }));
+        Verify(new ModelCost(), (a, b) => DashboardContent.CostEquals(
+            new() { TopModels = [a] }, new() { TopModels = [b] }));
+        Verify(new ModelCost(), (a, b) => DashboardContent.DailyEquals(
+            new() { ModelBreakdowns = [a] }, new() { ModelBreakdowns = [b] }));
+        Verify(new DailyCost(), (a, b) => DashboardContent.CostEquals(
+            new() { Daily = [a] }, new() { Daily = [b] }));
+        Verify(new DailyCost(), (a, b) => DashboardContent.CostEquals(
+            new() { PeakDay = a }, new() { PeakDay = b }));
+        foreach (var list in new[] { nameof(BurndownSeries.Usage), nameof(BurndownSeries.Guide), nameof(BurndownSeries.Projection) })
+            Verify(new BurndownPoint(0, 0), (a, b) =>
+            {
+                var first = new BurndownSeries(); var second = new BurndownSeries();
+                typeof(BurndownSeries).GetProperty(list)!.SetValue(first, new[] { a });
+                typeof(BurndownSeries).GetProperty(list)!.SetValue(second, new[] { b });
+                return DashboardContent.SeriesEquals(first, second);
+            });
+        Verify(new DashboardRefreshEntry(), (a, b) => DashboardContent.DiagnosticsEquals(
+            new() { RecentRefreshes = [a] }, new() { RecentRefreshes = [b] }));
+        Verify(new DashboardAlertEntry(), (a, b) => DashboardContent.DiagnosticsEquals(
+            new() { RecentAlerts = [a] }, new() { RecentAlerts = [b] }));
+        Verify(new DashboardCostCacheEntry(), (a, b) => DashboardContent.DiagnosticsEquals(
+            new() { CostCache = [a] }, new() { CostCache = [b] }));
+    }
+
+    private static void Verify<T>(T original, Func<T, T, bool> equals) where T : class
+    {
+        equals(original, (T)typeof(T).GetMethod("<Clone>$")!.Invoke(original, null)!).Should().BeTrue();
+        foreach (var property in typeof(T).GetProperties().Where(p => p.SetMethod != null))
+        {
+            var changed = (T)typeof(T).GetMethod("<Clone>$")!.Invoke(original, null)!;
+            var type = Nullable.GetUnderlyingType(property.PropertyType) ?? property.PropertyType;
+            object? value = type == typeof(string) ? "changed"
+                : type == typeof(bool) ? !(bool)(property.GetValue(original) ?? false)
+                : type == typeof(int) ? 1
+                : type == typeof(long) ? 1L
+                : type == typeof(double) ? 1d
+                : type == typeof(decimal) ? 1m
+                : type == typeof(DateTime) ? new DateTime(2026, 10, 5, 0, 0, 0, DateTimeKind.Utc)
+                : type == typeof(DateOnly) ? new DateOnly(2026, 10, 5)
+                : type.IsEnum ? Enum.GetValues(type).GetValue(1)!
+                : type.IsGenericType && type.GetGenericTypeDefinition() == typeof(IReadOnlyList<>)
+                    ? OneItem(type.GetGenericArguments()[0])
+                    : property.GetValue(original) != null ? null : Activator.CreateInstance(type);
+            property.SetValue(changed, value);
+            equals(original, changed).Should().BeFalse($"{typeof(T).Name}.{property.Name} must be compared");
+        }
+    }
+
+    private static Array OneItem(Type type)
+    {
+        var array = Array.CreateInstance(type, 1);
+        array.SetValue(type == typeof(BurndownPoint) ? new BurndownPoint(0, 0) : Activator.CreateInstance(type), 0);
+        return array;
+    }
 }

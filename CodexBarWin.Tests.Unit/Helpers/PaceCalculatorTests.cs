@@ -104,4 +104,22 @@ public class PaceCalculatorTests
         window.Pace.Kind.Should().Be(PaceKind.WillRunOut);
         window.PaceSummary.Should().StartWith("At this pace you'll hit the limit in");
     }
+
+    [TestMethod]
+    public void FormatDuration_ExtremeOrNonFiniteMinutes_DoesNotOverflow()
+    {
+        PaceCalculator.FormatDuration((DateTime.MaxValue - DateTime.MinValue).TotalMinutes).Should().Contain("d ");
+        PaceCalculator.FormatDuration(double.NaN).Should().Be("<1m");
+        PaceCalculator.FormatDuration(double.PositiveInfinity).Should().Be("<1m");
+    }
+
+    [TestMethod]
+    [DataRow(double.NaN)]
+    [DataRow(double.PositiveInfinity)]
+    [DataRow(double.NegativeInfinity)]
+    public void Project_NonFiniteUsage_ReturnsUnknown(double percent)
+    {
+        var now = new DateTime(2026, 10, 5, 0, 0, 0, DateTimeKind.Utc);
+        PaceCalculator.Project(percent, 300, now.AddMinutes(100), now).Kind.Should().Be(PaceKind.Unknown);
+    }
 }

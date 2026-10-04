@@ -119,7 +119,7 @@ public class DashboardSnapshotBuilderTests
                 new() { Date = Today.AddDays(1), TotalCost = 999, InputTokens = 999 }] };
         var snapshot = DashboardSnapshotBuilder.Build(Inputs(Provider() with { Cost = cost },
             Provider("codex") with { Cost = new() { TodayCostUSD = 3, TodayTokens = 30, Last30DaysCostUSD = 5, Last30DaysTokens = 50 } },
-            Provider("gemini") with { Cost = new() { TodayCostUSD = 999 } }));
+            Provider("gemini") with { Cost = new() }));
         snapshot.Summary.CostAvailable.Should().BeTrue();
         snapshot.Summary.TotalCostToday.Should().Be(7);
         snapshot.Summary.TotalCost30Days.Should().Be(17);
@@ -231,5 +231,96 @@ public class DashboardSnapshotBuilderTests
         snapshot.Diagnostics.CostCache.Should().BeEmpty();
         DashboardSnapshotBuilder.Build(Inputs(Provider() with { ExtraWindows = null!, Cost = new() { Daily = null! } }))
             .Providers.Single().Cost.Should().BeNull();
+    }
+
+    [TestMethod]
+    public void Build_DuplicateAndEmptyExtraKeys_AssignsDistinctDeterministicKeys()
+    {
+        var input = Inputs(Provider() with { ExtraWindows = [
+            new() { Key = "pool", Window = Window(1) },
+            new() { Key = "pool", Window = Window(2) },
+            new() { Key = "pool#2", Window = Window(3) },
+            new() { Window = Window(4) }, new() { Title = null!, Window = Window(5) }] });
+        var windows = DashboardSnapshotBuilder.Build(input).Providers[0].Windows;
+        windows.Select(w => w.Key).Distinct().Count().Should().Be(5);
+        windows.Select(w => w.Key).Should().Equal(DashboardSnapshotBuilder.Build(input).Providers[0].Windows.Select(w => w.Key));
+        windows.Select(w => w.UsedPercent).Should().Equal(1, 2, 3, 4, 5);
+    }
+
+    [TestMethod]
+    [DataRow(double.NaN, 0d)]
+    [DataRow(double.PositiveInfinity, 0d)]
+    [DataRow(-10d, 0d)]
+    [DataRow(140d, 100d)]
+    public void Build_InvalidPercent_ReturnsFiniteBoundedUsageAndPace(double percent, double expected)
+    {
+        var snapshot = DashboardSnapshotBuilder.Build(Inputs(Provider() with { Session = Window(percent) }));
+        var window = snapshot.Providers[0].Windows[0];
+        window.UsedPercent.Should().Be(expected);
+        double.IsFinite(window.Pace.ProjectedUsedAtReset).Should().BeTrue();
+        snapshot.Summary.MostUsedWindow!.UsedPercent.Should().Be(expected);
+        if (!double.IsFinite(percent)) window.Pace.Kind.Should().Be(PaceKind.Unknown);
+    }
+
+    [TestMethod]
+    public void Build_TodayOnlyAndUnpricedModelUsage_PreservesCostAvailability()
+    {
+        var input = Inputs(Provider() with { Cost = new() { TodayTokens = 12, TodayCostUSD = 1 } });
+        input = input with { Settings = new() { ShowCostTotals = true } };
+        var snapshot = DashboardSnapshotBuilder.Build(input);
+        snapshot.Summary.TotalCostToday.Should().Be(1);
+        snapshot.Providers[0].Cost!.TopModels.Should().BeEmpty();
+        input = input with { Providers = [Provider() with { Cost = new() { Daily = [new() {
+            Date = Today, ModelBreakdowns = [new() { ModelName = "unpriced", TotalTokens = 10 }] }] } }] };
+        var cost = DashboardSnapshotBuilder.Build(input).Providers[0].Cost!;
+        cost.TopModels.Single().Cost.Should().BeNull();
+        cost.AverageDailyCost.Should().Be(0);
+        cost.PeakDay.Should().NotBeNull();
+        DashboardSnapshotBuilder.Build(input with { Settings = new() { ShowCostTotals = false } }).Summary.CostAvailable.Should().BeFalse();
+    }
+
+    [TestMethod]
+    public void Build_FarFutureReset_DoesNotOverflowDurationText()
+    {
+        var window = DashboardSnapshotBuilder.Build(Inputs(Provider() with { Session = Window(10) with {
+            ResetAt = DateTime.SpecifyKind(DateTime.MaxValue, DateTimeKind.Utc) } })).Providers[0].Windows[0];
+        window.ResetText.Should().Contain("d ").And.NotContain("<1m");
+        window.PaceSummary.Should().NotContain("NaN").And.NotContain("Infinity");
+    }
+
+    [TestMethod]
+    public void Build_ProvidersRemovedAndAddedBetweenSnapshots_HasNoRetainedTotalsOrWindows()
+    {
+        var first = DashboardSnapshotBuilder.Build(Inputs(Provider() with { Session = Window(99) }, Provider("codex")));
+        var second = DashboardSnapshotBuilder.Build(Inputs(Provider("gemini")));
+        var empty = DashboardSnapshotBuilder.Build(Inputs());
+        first.Summary.WindowsAtLimit.Should().Be(1);
+        second.Providers.Select(p => p.Id).Should().Equal("gemini");
+        second.Summary.WindowCount.Should().Be(0);
+        second.Summary.MostUsedWindow.Should().BeNull();
+        empty.Providers.Should().BeEmpty(); empty.Summary.ProviderCount.Should().Be(0);
+        first.Providers.Should().HaveCount(2);
+    }
+
+    [TestMethod]
+    public void Build_DuplicateHistoryKeys_DoesNotAttributeAmbiguousSamplesToEitherWindow()
+    {
+        var input = Inputs(Provider() with { ExtraWindows = [
+            new() { Key = "pool", Window = Window(10) }, new() { Key = "pool", Window = Window(90) }] });
+        input = input with { HistorySamples = [new() { Provider = "claude", WindowKey = "extra:pool",
+            Timestamp = Now.AddMinutes(-1), ResetsAt = Window(10).ResetAt, UsedPercent = 10 }] };
+        var windows = DashboardSnapshotBuilder.Build(input).Providers[0].Windows;
+        windows.Should().OnlyContain(w => w.History.SampleCount == 0);
+        windows.Select(w => w.UsedPercent).Should().Equal(10, 90);
+    }
+
+    [TestMethod]
+    public void Build_NegativeCostTotals_ClampsTotalsConsistentlyWithDailySeries()
+    {
+        var snapshot = DashboardSnapshotBuilder.Build(Inputs(Provider() with { Cost = new() {
+            TodayCostUSD = -5, TodayTokens = -5, Last30DaysCostUSD = -10, Last30DaysTokens = -10,
+            Daily = [new() { Date = Today, TotalTokens = 1 }] } }));
+        snapshot.Summary.TotalCostToday.Should().Be(0); snapshot.Summary.TotalCost30Days.Should().Be(0);
+        snapshot.Summary.TotalTokensToday.Should().Be(0); snapshot.Summary.TotalTokens30Days.Should().Be(0);
     }
 }

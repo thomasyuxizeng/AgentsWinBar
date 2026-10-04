@@ -25,6 +25,8 @@ public sealed partial class DashboardMiniBar : UserControl
 
     private static void OnDataChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
     {
-        if (e.NewValue != null) ((DashboardMiniBar)d).Bindings.Update();
+        var control = (DashboardMiniBar)d;
+        if (control.Content is UIElement content) content.Visibility = control.Data == null ? Visibility.Collapsed : Visibility.Visible;
+        control.Bindings.Update();
     }
 }
