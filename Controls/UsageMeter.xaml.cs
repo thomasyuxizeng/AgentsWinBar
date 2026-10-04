@@ -177,13 +177,20 @@ public sealed partial class UsageMeter : UserControl
     private static Color WithAlpha(Color color, byte alpha) => Color.FromArgb(alpha, color.R, color.G, color.B);
 
     /// <summary>
-    /// Orange (Claude) to teal (OpenAI), for a pool shared by Claude and GPT models.
+    /// Orange (Claude) on the left, teal (OpenAI) on the right, for a pool shared by Claude and GPT models.
+    /// Orange and teal are near-opposites, so a smooth blend passes through muddy brown-grey; instead the two
+    /// halves meet in a very narrow transition.
     /// </summary>
     private static LinearGradientBrush ClaudeToOpenAiGradient(byte alpha = 255)
     {
+        var orange = WithAlpha(ClaudeOrange, alpha);
+        var teal = WithAlpha(OpenAiTeal, alpha);
+
         var brush = new LinearGradientBrush { StartPoint = new Windows.Foundation.Point(0, 0.5), EndPoint = new Windows.Foundation.Point(1, 0.5) };
-        brush.GradientStops.Add(new GradientStop { Color = WithAlpha(ClaudeOrange, alpha), Offset = 0 });
-        brush.GradientStops.Add(new GradientStop { Color = WithAlpha(OpenAiTeal, alpha), Offset = 1 });
+        brush.GradientStops.Add(new GradientStop { Color = orange, Offset = 0 });
+        brush.GradientStops.Add(new GradientStop { Color = orange, Offset = 0.47 });
+        brush.GradientStops.Add(new GradientStop { Color = teal, Offset = 0.53 });
+        brush.GradientStops.Add(new GradientStop { Color = teal, Offset = 1 });
         return brush;
     }
 }
