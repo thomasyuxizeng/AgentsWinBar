@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Gemini windows are labelled "5-hour" and "Weekly" instead of "Pro" and "Flash"
 
 ### Added
+- Dashboard data snapshots with usage and cost summaries, history, cached CLI diagnostics and session refresh/alert activity.
 - Per-window usage history charts with an even-use guide, observed-rate projection, capture time and sample count. Snapshots persist atomically beside Settings for 14 days, deduplicated at half-point changes, ten-minute intervals and window resets. New installations show a collecting-data state until enough samples are available
 - Estimated cost and token totals from local Windows Claude/Codex logs and WSL Antigravity logs, with a 15-minute scan cadence, manual refresh, daily cost bars and top models on the detail page, and a Settings toggle. Cost commands bypass the shim's usage cache so log-path changes cannot reuse a zero-cost result
 - Provider service status badges: green operational, amber minor incidents or maintenance, red major or critical incidents, and grey when status is unavailable. Detail pages show the provider's report and a status-page link; compact displays show a small logo dot only during incidents

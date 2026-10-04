@@ -8,6 +8,7 @@ namespace CodexBarWin.Tests.Unit.Mocks;
 /// </summary>
 public class MockCodexBarService : ICodexBarService
 {
+    public IReadOnlyList<DashboardCostCacheEntry> GetCostCacheInfo() => [];
     public Task<CostData?> GetCostAsync(string provider, bool forceRefresh = false, CancellationToken ct = default) =>
         Task.FromResult<CostData?>(null);
     private readonly Dictionary<string, UsageData?> _usageData = new();

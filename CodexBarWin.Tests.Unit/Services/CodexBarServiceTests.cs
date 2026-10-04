@@ -61,6 +61,46 @@ public class CodexBarServiceTests
     }
 
     [TestMethod]
+    public async Task GetCostCacheInfo_ScanInFlight_ReturnsAttemptWithoutWaitingThenPublishesData()
+    {
+        var wsl = new Mock<IWslService>();
+        var clock = new CostClock();
+        var scan = new TaskCompletionSource<WslResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        wsl.Setup(s => s.ExecuteAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).Returns(scan.Task);
+        var service = new CodexBarService(wsl.Object, _mockCacheService, _mockSettingsService, _mockSampleDataLoader,
+            _mockLogger.Object, clock, userProfile: () => "C:\\Users\\Test", directoryExists: _ => true);
+        service.GetCostCacheInfo().Should().BeEmpty();
+        var fetching = service.GetCostAsync("claude");
+        var entries = await Task.Run(service.GetCostCacheInfo).WaitAsync(TimeSpan.FromSeconds(5));
+        entries.Should().ContainSingle().Which.Should().BeEquivalentTo(new DashboardCostCacheEntry
+        { ProviderId = "claude", LastAttemptUtc = clock.Now.UtcDateTime, HasData = false });
+        scan.SetResult(new() { Success = true, Output = """{"provider":"claude","last30DaysTokens":10}""" });
+        await fetching.WaitAsync(TimeSpan.FromSeconds(5));
+        service.GetCostCacheInfo().Single().HasData.Should().BeTrue();
+        entries.Single().HasData.Should().BeFalse();
+    }
+
+    [TestMethod]
+    public async Task GetCostCacheInfo_FailedAndCanceledScans_ReportsBackoffAndRestoresPriorAttempt()
+    {
+        var wsl = new Mock<IWslService>();
+        var clock = new CostClock();
+        wsl.Setup(s => s.ExecuteAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(new WslResult());
+        var service = new CodexBarService(wsl.Object, _mockCacheService, _mockSettingsService, _mockSampleDataLoader,
+            _mockLogger.Object, clock, userProfile: () => "C:\\Users\\Test", directoryExists: _ => true);
+        await service.GetCostAsync("claude");
+        var initial = service.GetCostCacheInfo().Single();
+        initial.HasData.Should().BeFalse(); initial.LastAttemptUtc.Should().Be(clock.Now.UtcDateTime);
+        var scan = new TaskCompletionSource<WslResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        wsl.Setup(s => s.ExecuteAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).Returns(scan.Task);
+        clock.Now = clock.Now.AddMinutes(1);
+        using var cts = new CancellationTokenSource();
+        var fetching = service.GetCostAsync("claude", forceRefresh: true, ct: cts.Token);
+        cts.Cancel(); scan.SetResult(new()); await fetching;
+        service.GetCostCacheInfo().Single().Should().BeEquivalentTo(initial);
+    }
+
+    [TestMethod]
     public async Task GetCostAsync_DisabledWhileAnotherScanHoldsGate_DoesNotPublishOrRunQueuedScan()
     {
         var wsl = new Mock<IWslService>();

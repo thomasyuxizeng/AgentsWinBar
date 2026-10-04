@@ -232,6 +232,8 @@ public partial class App : Application
         services.AddSingleton<UsageAlertEvaluator>();
         services.AddSingleton<UsageHistoryStore>();
         services.AddSingleton<UsageHistoryPersistence>();
+        services.AddSingleton<IActivityLog, ActivityLog>();
+        services.AddSingleton<IDashboardService, DashboardService>();
         services.AddSingleton<IToastNotifier, ToastNotifier>();
 
         // ViewModels

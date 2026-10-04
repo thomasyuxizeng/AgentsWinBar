@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using CodexBarWin.Helpers;
@@ -20,6 +21,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private readonly ILogger<MainViewModel> _logger;
     private readonly UsageHistoryStore _history;
     private readonly UsageHistoryPersistence _historyPersistence;
+    private readonly IActivityLog _activityLog;
     private PeriodicTimer? _refreshTimer;
     private CancellationTokenSource? _refreshCts;
     private CancellationTokenSource? _timerCts;
@@ -53,7 +55,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
         IToastNotifier toastNotifier,
         ILogger<MainViewModel> logger,
         UsageHistoryStore history,
-        UsageHistoryPersistence historyPersistence)
+        UsageHistoryPersistence historyPersistence,
+        IActivityLog activityLog)
     {
         _codexBarService = codexBarService;
         _settingsService = settingsService;
@@ -62,6 +65,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _logger = logger;
         _history = history;
         _historyPersistence = historyPersistence;
+        _activityLog = activityLog;
 
         _settingsService.SettingsChanged += OnSettingsChanged;
     }
@@ -118,6 +122,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         _refreshCompletion = completion;
         var developerMode = _settingsService.Settings.DeveloperModeEnabled;
+        var refreshStarted = Stopwatch.GetTimestamp();
 
         try
         {
@@ -150,6 +155,16 @@ public partial class MainViewModel : ObservableObject, IDisposable
             {
                 // Services may finish despite cancellation; obsolete results must never reach UI or history.
                 ct.ThrowIfCancellationRequested();
+                try
+                {
+                    _activityLog.RecordRefresh(new DashboardRefreshEntry
+                    {
+                        TimestampUtc = DateTime.UtcNow, ProviderId = data.Provider, Success = !data.HasError,
+                        DurationMs = (int)Math.Min(int.MaxValue, Stopwatch.GetElapsedTime(refreshStarted).TotalMilliseconds),
+                        Message = data.Error
+                    });
+                }
+                catch (Exception ex) { _logger.LogDebug(ex, "Refresh activity could not be recorded"); }
                 if (!developerMode) _history.Record(data, DateTime.UtcNow);
                 // Find the index of this provider
                 var index = -1;
@@ -255,6 +270,15 @@ public partial class MainViewModel : ObservableObject, IDisposable
             {
                 _logger.LogInformation("Usage alert: {Title}", alert.Title);
                 _toastNotifier.Show(alert.Title, alert.Message);
+                try
+                {
+                    _activityLog.RecordAlert(new DashboardAlertEntry
+                    {
+                        TimestampUtc = DateTime.UtcNow, ProviderId = alert.Key.Split('|', 2)[0],
+                        Title = alert.Title, Message = alert.Message
+                    });
+                }
+                catch (Exception ex) { _logger.LogDebug(ex, "Alert activity could not be recorded"); }
             }
         }
         catch (Exception ex)
