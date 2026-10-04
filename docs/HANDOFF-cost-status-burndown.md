@@ -2,8 +2,9 @@
 
 Paste the prompt below into the coding agent, with the repository root (`CodexBarWin`, branch
 `overlay-and-cli-fixes`) as its working directory. The original research and spec are preserved below.
-All three features are implemented on `codex/provider-status-badges`. Visual verification remains subject
-to the Windows computer-use tool's approval gate, as recorded below.
+All three features are implemented on `codex/provider-status-badges`. Initial Codex visual checks were
+blocked by the computer-use gate. A later Claude visual review of `0.9.5.3` passed the features and found
+the minor presentation issues recorded below.
 
 ### Feature 1 verification (2026-10-04)
 
@@ -70,6 +71,28 @@ to the Windows computer-use tool's approval gate, as recorded below.
 - Release MSIX build passed with the same two environment warnings as feature 1. Signed, verified the
   signature, and installed local validation package `0.9.5.3`. Native visual checks and runtime launch
   of this final package remain unverified because the computer-use tool denies access to CodexBarWin.
+
+---
+
+### Claude visual review and follow-up fixes (2026-10-04)
+
+- The user supplied Claude's review of the real `0.9.5.3` install and an isolated signed fixture package.
+  Status states and links, costs against live CLI data, range selection, bar tooltips, cost-toggle behavior,
+  history capture/restart persistence/current-window filtering, projections, navigation and scrolling passed.
+- Claude reported four presentation issues: a "1 samples" caption, faint even-use text/line in light theme,
+  UTC displayed as "Last fetched", and collecting-data text overlapping the guide. Card cost totals were
+  also truncated at the normal flyout width. The fixes use shared local timestamp formatting, singular
+  captions, an opaque guide with theme-aware lavender, theme text for the legend, no lines while collecting,
+  and one wrapping line per cost period.
+- Baseline 370 tests passed; 378 pass after the fixes, including timezone/kind/date-rollover/culture
+  regressions and card cost formatting. Release MSIX built with the same two existing environment warnings;
+  signature verified and validation version `0.9.5.4` installed. The source manifest version was restored.
+- Codex can now inspect the app through computer use and reproduced the old UTC display on `0.9.5.3`.
+  After launching `0.9.5.4`, the hidden flyout was outside the captured monitor; opening it is required
+  before the follow-up visual checks can be completed.
+- Claude left the in-flight cost-toggle race, alternate display scaling, clean tray-Quit flush and compact
+  tooltips unverified. Its persistence check killed/relaunched the app; fixture costs were excluded by
+  developer mode. Those checks were not counted as passed.
 
 ---
 

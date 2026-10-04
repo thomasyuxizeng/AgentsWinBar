@@ -23,4 +23,8 @@ public static class CostFormatter
 
     public static string Summary(CostData data) =>
         $"Est. today {Money(data.TodayCostUSD, data.CurrencyCode)}, {Tokens(data.TodayTokens)} tokens · 30 days {Money(data.Last30DaysCostUSD, data.CurrencyCode)}, {Tokens(data.Last30DaysTokens)} tokens";
+
+    public static string CardSummary(CostData data) =>
+        $"Est. today {Money(data.TodayCostUSD, data.CurrencyCode)} · {Tokens(data.TodayTokens)} tokens\n" +
+        $"Est. 30 days {Money(data.Last30DaysCostUSD, data.CurrencyCode)} · {Tokens(data.Last30DaysTokens)} tokens";
 }

@@ -30,4 +30,18 @@ public class CostFormatterTests
         var text = CostFormatter.Summary(new CostData { TodayCostUSD = 1.25m, TodayTokens = 15000, Last30DaysCostUSD = 12m, Last30DaysTokens = 218000000 });
         text.Should().Be("Est. today $1.25, 15K tokens · 30 days $12.00, 218M tokens");
     }
+
+    [TestMethod]
+    public void CardSummary_WhenDataPresent_SeparatesPeriodsWithoutLosingTotals()
+    {
+        var text = CostFormatter.CardSummary(new CostData { TodayCostUSD = 21.67m, TodayTokens = 76400000, Last30DaysCostUSD = 71.85m, Last30DaysTokens = 226356190 });
+        text.Should().Be("Est. today $21.67 · 76.4M tokens\nEst. 30 days $71.85 · 226.4M tokens");
+    }
+
+    [TestMethod]
+    public void CardSummary_WhenOtherCurrency_KeepsCurrencyOnBothLines()
+    {
+        var text = CostFormatter.CardSummary(new CostData { CurrencyCode = "EUR", TodayTokens = 15000, Last30DaysCostUSD = 12m });
+        text.Should().Be("Est. today EUR 0.00 · 15K tokens\nEst. 30 days EUR 12.00 · 0 tokens");
+    }
 }

@@ -242,7 +242,7 @@
         </ItemsControl>
 
         <TextBlock Grid.Row="4" x:Name="CostSummary" Visibility="Collapsed" Margin="0,8,0,0"
-                   FontSize="10" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"
+                   FontSize="10" TextWrapping="Wrap"
                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
 
         <!-- Error message overlay (shown when error and no data) -->

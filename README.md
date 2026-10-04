@@ -36,8 +36,8 @@ This is the Wave-OCE fork of [nek0der/CodexBarWin](https://github.com/nek0der/Co
 | **Usage alerts** | Windows notifications when you're burning through a limit too fast, nearly out, or out. |
 | **Pace awareness** | Every bar also shows how much of the window's time has passed, so you can tell "50% used" at the start of a window from "50% used" near the end. |
 | **Provider status** | Service health on each card, incident details with a status-page link, and a small incident dot on compact displays. Grey means no status is available (including Gemini through Antigravity). |
-| **Cost and tokens** | Today's and last-30-days totals from local logs. Detail pages show daily costs and top models. Amounts are list-price estimates, not bills. |
-| **Usage history** | Detail pages plot each limit window's usage against an even-use guide, with a projection from the observed rate. History builds as the app runs and is kept for 14 days. |
+| **Cost and tokens** | Today's and last-30-days totals from local logs, each on its own wrapping card line. Detail pages show daily costs and top models. Amounts are list-price estimates, not bills. |
+| **Usage history** | Detail pages plot each limit window's usage against an even-use guide readable in light and dark themes, with a projection from the observed rate and local capture times. History builds as the app runs and is kept for 14 days. |
 
 Supported providers: **Claude**, **Codex** (OpenAI) and **Gemini** (read through Google's Antigravity).
 
@@ -194,7 +194,7 @@ Compared with upstream, this fork adds:
 - **No more hidden 30-second cap** on WSL commands, which was the cause of "Command timed out after 30 seconds".
 - **Providers apply immediately** when enabled, disabled or reordered in Settings.
 - **`tools/wsl`**: one-step setup for the CLI and shim.
-- 370 unit tests.
+- 378 unit tests.
 
 The full list is in the [changelog](CHANGELOG.md).
 

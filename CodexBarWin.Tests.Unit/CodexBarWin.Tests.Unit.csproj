@@ -26,6 +26,7 @@
   <ItemGroup>
     <Compile Include="..\Helpers\AsyncHelper.cs" Link="Linked\AsyncHelper.cs" />
     <Compile Include="..\Helpers\ResetTimeFormatter.cs" Link="Linked\ResetTimeFormatter.cs" />
+    <Compile Include="..\Helpers\TimestampFormatter.cs" Link="Linked\TimestampFormatter.cs" />
     <Compile Include="..\Helpers\PaceCalculator.cs" Link="Linked\PaceCalculator.cs" />
     <Compile Include="..\Helpers\WidgetBarSelector.cs" Link="Linked\WidgetBarSelector.cs" />
     <Compile Include="..\Helpers\WindowAccent.cs" Link="Linked\WindowAccent.cs" />

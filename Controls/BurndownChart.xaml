@@ -15,7 +15,7 @@
         </Grid>
         <StackPanel Orientation="Horizontal" Spacing="12">
             <TextBlock x:Name="UsageLegend" Text="Usage" FontSize="10"/>
-            <TextBlock x:Name="GuideLegend" Text="Even use" FontSize="10"/>
+            <TextBlock Text="Even use" FontSize="10" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
             <TextBlock Text="Dashed: projection" FontSize="10" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
         </StackPanel>
         <TextBlock x:Name="CaptureText" FontSize="10" TextWrapping="Wrap"
