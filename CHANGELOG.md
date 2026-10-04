@@ -1,16 +1,29 @@
 # Changelog
 
+
+
 All notable changes to this project will be documented in this file.
 
+
+
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+
 
 ## [Unreleased]
 
 
+
+
+
 ### Added
+
 - Dashboard: a full window (resizable, maximizable, full screen with F11, optional keep-on-top) opened from the new button in the flyout footer. It shows everything the app knows at once: headline tiles (provider health, incidents, limits, most-used window, next reset, cost today and 30 days), a panel per provider with every usage window (pace, reset times, burndown), service status, cost and token mix, top models and history, plus a diagnostics column (CLI and app versions, effective settings, history store, cost scans, refresh log and alerts this session)
+
 - In-memory activity log of refresh results and alerts, for the dashboard
+
 ### Fixed
 - Settings saves are serialized and replace the complete file atomically; failed saves restore uncommitted values, keep Settings open and scroll to a visible error. Descriptions clear their switches at 150% scaling. Malformed provider lists, timer intervals, timeouts and animation settings recover safely
 - Settings changes cancel obsolete refreshes, including late cost results; canceled cost scans preserve prior totals and allow immediate retries instead of creating a 15-minute empty-cache backoff. Developer samples no longer overwrite real usage caches or leak into history. Quit stops refreshes and flushes history before exiting
