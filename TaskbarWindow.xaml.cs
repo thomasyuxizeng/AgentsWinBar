@@ -21,6 +21,9 @@ namespace CodexBarWin;
 public sealed class TaskbarItem
 {
     public string Name { get; set; } = string.Empty;
+    public Microsoft.UI.Xaml.Media.Brush StatusBrush { get; set; } = null!;
+    public Visibility IncidentVisibility { get; set; }
+    public string StatusDescription { get; set; } = string.Empty;
     public Geometry Icon { get; set; } = null!;
     public double SessionPercent { get; set; }
     public double WeeklyPercent { get; set; }
@@ -228,6 +231,9 @@ public sealed partial class TaskbarWindow : Window
             {
                 Name = name,
                 Icon = ProviderIcons.GetGeometry(data.Provider),
+                StatusBrush = Controls.ProviderStatusVisuals.Brush(data.ServiceStatus),
+                IncidentVisibility = ProviderStatusPresentation.IsIncident(data.ServiceStatus) ? Visibility.Visible : Visibility.Collapsed,
+                StatusDescription = ProviderStatusPresentation.Description(data.ServiceStatus),
                 SessionPercent = first?.Window.Percent ?? 0,
                 WeeklyPercent = second?.Window.Percent ?? 0,
                 SessionTimePercent = first?.Window.ElapsedPercent ?? -1,

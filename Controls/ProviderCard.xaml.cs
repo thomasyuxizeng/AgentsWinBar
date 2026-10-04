@@ -81,15 +81,12 @@ public sealed partial class ProviderCard : UserControl
         // Update status indicator
         StatusNormal.Visibility = Visibility.Collapsed;
         StatusLoading.Visibility = Visibility.Collapsed;
-        StatusError.Visibility = Visibility.Collapsed;
+        StatusNormal.Fill = ProviderStatusVisuals.Brush(Data.ServiceStatus);
+        ToolTipService.SetToolTip(StatusNormal, Helpers.ProviderStatusPresentation.Description(Data.ServiceStatus));
 
         if (isLoading)
         {
             StatusLoading.Visibility = Visibility.Visible;
-        }
-        else if (hasError)
-        {
-            StatusError.Visibility = Visibility.Visible;
         }
         else
         {

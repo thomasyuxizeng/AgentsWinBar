@@ -58,6 +58,14 @@ public sealed partial class ProviderDetailPage : Page
         ProviderIcon.Data = GetProviderIconGeometry(_data.Provider);
         ProviderName.Text = FormatProviderName(_data.Provider);
 
+        var status = _data.ServiceStatus;
+        ServiceStatusBanner.Visibility = Helpers.ProviderStatusPresentation.ShowBanner(status)
+            ? Visibility.Visible : Visibility.Collapsed;
+        ServiceStatusBanner.BorderBrush = Controls.ProviderStatusVisuals.Brush(status);
+        ServiceStatusDescription.Text = Helpers.ProviderStatusPresentation.Description(status);
+        ServiceStatusLink.NavigateUri = Helpers.ProviderStatusPresentation.StatusPageUri(status);
+        ServiceStatusLink.Visibility = ServiceStatusLink.NavigateUri != null ? Visibility.Visible : Visibility.Collapsed;
+
         // Update section titles based on provider (e.g., "Session/Weekly" for Claude/Codex, "Pro/Flash" for Gemini)
         SessionSectionTitle.Text = $"{_data.SessionLabel} Usage";
         WeeklySectionTitle.Text = $"{_data.WeeklyLabel} Usage";

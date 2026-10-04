@@ -41,7 +41,7 @@ public class CodexBarServiceTests
         // ParseUsageJson expects a single object, not an array
         var jsonResponse = """{"provider":"claude","usage":{"loginMethod":"test","primary":{"usedPercent":50,"windowMinutes":60}}}""";
         _mockWslService.SetCommandResult(
-            "codexbar --provider claude --format json --source cli",
+            "codexbar --provider claude --format json --source cli --status",
             new WslResult { Success = true, Output = jsonResponse, ExitCode = 0 });
 
         // Act
@@ -51,6 +51,43 @@ public class CodexBarServiceTests
         result.Should().NotBeNull();
         _mockWslService.ExecutedCommands.Should().ContainSingle()
             .Which.Should().Contain("--provider claude");
+        _mockWslService.ExecutedCommands[0].Should().Contain("--status");
+    }
+
+    [TestMethod]
+    [DataRow("claude", "")]
+    [DataRow("codex", "")]
+    [DataRow("gemini", " --verbose")]
+    public async Task GetAllUsageAsync_WhenStatusRequested_ParsesHealthWithoutChangingUsage(string provider, string verbose)
+    {
+        _mockSettingsService.SetProviders([new() { Id = provider, IsEnabled = true }]);
+        var command = $"codexbar usage --provider {provider} --format json --source cli --status{verbose}";
+        _mockWslService.SetCommandResult(command, new WslResult { Success = true, Output = $$$"""
+            [{"provider":"{{{provider}}}","source":"cli","usage":{"primary":{"usedPercent":25}},
+              "status":{"indicator":"major","description":"Service outage"}}]
+            """ });
+
+        var data = (await _service.GetAllUsageAsync()).Single();
+        _mockWslService.ExecutedCommands.Should().Equal(command);
+        data.ServiceStatus!.Indicator.Should().Be(ProviderStatusIndicator.Major);
+        data.Session!.Percent.Should().Be(25);
+        data.HasError.Should().BeFalse();
+        _mockCacheService.Get(provider)!.ServiceStatus.Should().Be(data.ServiceStatus);
+    }
+
+    [TestMethod]
+    public async Task GetAllUsageStreamAsync_WhenGeminiHasNoStatus_KeepsUsageWithoutError()
+    {
+        _mockSettingsService.SetProviders([new() { Id = "gemini", IsEnabled = true }]);
+        _mockWslService.SetCommandResult("codexbar usage --provider gemini --format json --source cli --status --verbose",
+            new WslResult { Success = true, Output = """[{"provider":"gemini","usage":{"primary":{"usedPercent":10}}}]""" });
+        var results = new List<UsageData>();
+        await foreach (var data in _service.GetAllUsageStreamAsync()) results.Add(data);
+
+        var result = results.Single();
+        result.Session!.Percent.Should().Be(10);
+        result.ServiceStatus.Should().BeNull();
+        result.HasError.Should().BeFalse();
     }
 
     [TestMethod]
@@ -79,7 +116,7 @@ public class CodexBarServiceTests
         _mockCacheService.PreloadCache("claude", cachedData);
 
         _mockWslService.SetCommandResult(
-            "codexbar --provider claude --format json --source cli",
+            "codexbar --provider claude --format json --source cli --status",
             new WslResult { Success = false, Error = "Command failed", ExitCode = 1 });
 
         // Act
@@ -236,7 +273,7 @@ public class CodexBarServiceTests
         // ParseUsageJson expects a single object, not an array
         var jsonResponse = """{"provider":"claude","usage":{"primary":{"usedPercent":75,"windowMinutes":60}}}""";
         _mockWslService.SetCommandResult(
-            "codexbar --provider claude --format json --source cli",
+            "codexbar --provider claude --format json --source cli --status",
             new WslResult { Success = true, Output = jsonResponse, ExitCode = 0 });
 
         // Act

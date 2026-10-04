@@ -36,7 +36,7 @@ public class CodexBarService : ICodexBarService
         {
             var normalizedProvider = ProviderConstants.ValidateAndNormalize(provider);
             var source = ProviderConstants.GetSource(normalizedProvider);
-            var result = await _wslService.ExecuteAsync($"codexbar --provider {normalizedProvider} --format json --source {source}", ct);
+            var result = await _wslService.ExecuteAsync($"codexbar --provider {normalizedProvider} --format json --source {source} --status", ct);
 
             if (!result.Success)
             {
@@ -174,7 +174,7 @@ public class CodexBarService : ICodexBarService
             // Workaround: gemini crashes without --verbose (codexbar bug)
             var verboseFlag = normalizedProvider == "gemini" ? " --verbose" : "";
             var result = await _wslService.ExecuteAsync(
-                $"codexbar usage --provider {normalizedProvider} --format json --source {source}{verboseFlag}", cts.Token);
+                $"codexbar usage --provider {normalizedProvider} --format json --source {source} --status{verboseFlag}", cts.Token);
 
             if (result.Success && !string.IsNullOrWhiteSpace(result.Output))
             {

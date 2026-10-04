@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Gemini windows are labelled "5-hour" and "Weekly" instead of "Pro" and "Flash"
 
 ### Added
+- Provider service status badges: green operational, amber minor incidents or maintenance, red major or critical incidents, and grey when status is unavailable. Detail pages show the provider's report and a status-page link; compact displays show a small logo dot only during incidents
 - Usage alerts also cover the extra windows (Claude and GPT quota, Fable only, ...) with the same three levels
 - Extra bars are coloured by provider: Anthropic orange (#D97757) for Claude windows (e.g. Fable only), OpenAI green (#10A37F) for OpenAI, and an orange to teal gradient for the shared Claude and GPT quota (routed through gold and green so the middle stays clean instead of turning brown); the time-passed layer behind these bars takes the same colour, softened (so Fable looks orange even at 0% used); amber and red still apply
 - Extra usage windows now appear on the main flyout cards too: Claude's "Fable only" bar, and Antigravity's Claude and GPT quota on Gemini's card. They are coloured differently from the main session and weekly bars

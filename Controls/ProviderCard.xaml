@@ -49,12 +49,12 @@
 
             <!-- Status indicator (right aligned) -->
             <Grid Grid.Column="2" VerticalAlignment="Center">
-                <!-- Normal state: green dot -->
+                <!-- Provider service health (neutral when unavailable) -->
                 <Ellipse
                     x:Name="StatusNormal"
                     Width="8"
                     Height="8"
-                    Fill="#10B981"
+                    Fill="#9CA3AF"
                     Visibility="Collapsed"/>
                 <!-- Loading state: small spinner -->
                 <ProgressRing
@@ -62,13 +62,6 @@
                     Width="14"
                     Height="14"
                     IsActive="True"
-                    Visibility="Collapsed"/>
-                <!-- Error state: orange dot -->
-                <Ellipse
-                    x:Name="StatusError"
-                    Width="8"
-                    Height="8"
-                    Fill="#F59E0B"
                     Visibility="Collapsed"/>
             </Grid>
         </Grid>

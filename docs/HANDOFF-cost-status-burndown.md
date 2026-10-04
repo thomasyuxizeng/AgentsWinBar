@@ -1,8 +1,29 @@
 # Handoff: cost totals, provider status badges, burndown chart
 
 Paste the prompt below into the coding agent, with the repository root (`CodexBarWin`, branch
-`overlay-and-cli-fixes`) as its working directory. Nothing for these features is implemented yet:
-what exists is research, recorded here so it doesn't have to be redone.
+`overlay-and-cli-fixes`) as its working directory. The original research and spec are preserved below.
+Provider status badges are implemented on `codex/provider-status-badges`; cost totals and history remain pending.
+
+### Feature 1 verification (2026-10-04)
+
+- Baseline: 249 unit tests passed. Status support adds 41 cases (290 passing in total), including
+  source-generated JSON parsing, cache round trip, service commands, palette/severity, missing Gemini status,
+  unknown indicators and safe status-page URLs.
+- Re-ran the installed shim in WSL with `usage --provider <id> --format json --source cli --status`.
+  Claude returned `none` / "All Systems Operational" in about 1 second; Codex returned the same in about
+  4 seconds; Gemini returned usage without `status` in about 10 seconds. All three returned usable usage
+  data without errors. Timings vary with WSL startup and provider/cache state.
+- Incident notifications are optional and were not added. Missing status stays grey on cards and has no
+  banner or compact incident dot; unknown reported indicators are grey with a detail banner.
+- Release MSIX build passed (two existing environment warnings: missing `win-x64.pubxml` and symbol
+  packaging tool `mspdbcmf.exe`). Signed with the existing trusted certificate, verified the signature,
+  installed local validation version `0.9.5.1`, and launched the packaged app. The installed process
+  remained responsive with no new crash log. Interactive visual checks of the card tooltip, incident
+  banner/link and compact incident dots were not possible with the available desktop controls; live
+  providers were operational or had no status. These visual states remain unverified.
+- Local packaging pitfall: `dotnet build ... -p:AppxVersion=...` alone left the package at the manifest's
+  `0.0.0.0`. Temporarily set the source manifest's Identity Version to `0.9.5.1` for validation, then
+  restored its original version and encoding. No release version, tag or remote push was made.
 
 ---
 

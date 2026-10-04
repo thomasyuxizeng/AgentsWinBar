@@ -13,6 +13,8 @@ namespace CodexBarWin.Models;
 [JsonSerializable(typeof(CacheData))]
 [JsonSerializable(typeof(UsageDataDto))]
 [JsonSerializable(typeof(List<UsageDataDto>))]
+[JsonSerializable(typeof(ProviderStatusDto))]
+[JsonSerializable(typeof(ProviderStatus))]
 public partial class AppJsonSerializerContext : JsonSerializerContext
 {
 }
@@ -33,6 +35,7 @@ public record UsageDataDto
 {
     public string Provider { get; init; } = string.Empty;
     public string? Source { get; init; }
+    public ProviderStatusDto? Status { get; init; }
     public UsageDto? Usage { get; init; }
     public string? Error { get; init; }
 
@@ -48,8 +51,26 @@ public record UsageDataDto
             .Select(x => new ExtraUsageWindow { Title = x.Title!.Trim(), Window = x.Window!.ToUsageWindow() })
             .ToList(),
         Status = Source,
+        ServiceStatus = Status?.ToProviderStatus(),
         Error = Error,
         FetchedAt = DateTime.UtcNow
+    };
+}
+
+/// <summary>Raw status strings tolerate new or missing CLI indicators.</summary>
+public record ProviderStatusDto
+{
+    public string? Indicator { get; init; }
+    public string? Description { get; init; }
+    public string? Url { get; init; }
+    public DateTime? UpdatedAt { get; init; }
+
+    public ProviderStatus ToProviderStatus() => new()
+    {
+        Indicator = Helpers.ProviderStatusPresentation.ParseIndicator(Indicator),
+        Description = Description,
+        Url = Url,
+        UpdatedAt = UpdatedAt
     };
 }
 

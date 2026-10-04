@@ -20,6 +20,7 @@ public record UsageData
     public DateTime FetchedAt { get; init; } = DateTime.UtcNow;
     public bool IsStale => DateTime.UtcNow - FetchedAt > TimeSpan.FromMinutes(5);
     public string? Status { get; init; }
+    public ProviderStatus? ServiceStatus { get; init; }
     public string? Error { get; init; }
     public bool IsLoading { get; init; }
 
@@ -50,6 +51,25 @@ public record UsageData
         "claude" => "Current week (Sonnet)",
         _ => "Additional"
     };
+}
+
+/// <summary>Health reported by the provider's status page, independent of CLI fetch errors.</summary>
+public record ProviderStatus
+{
+    public ProviderStatusIndicator Indicator { get; init; }
+    public string? Description { get; init; }
+    public string? Url { get; init; }
+    public DateTime? UpdatedAt { get; init; }
+}
+
+public enum ProviderStatusIndicator
+{
+    Unknown,
+    None,
+    Minor,
+    Major,
+    Critical,
+    Maintenance
 }
 
 /// <summary>

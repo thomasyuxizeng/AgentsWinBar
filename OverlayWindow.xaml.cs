@@ -20,6 +20,9 @@ namespace CodexBarWin;
 public sealed class OverlayRow
 {
     public string Name { get; set; } = string.Empty;
+    public Microsoft.UI.Xaml.Media.Brush StatusBrush { get; set; } = null!;
+    public Visibility IncidentVisibility { get; set; }
+    public string StatusDescription { get; set; } = string.Empty;
     public Microsoft.UI.Xaml.Media.Geometry Icon { get; set; } = null!;
     public double SessionPercent { get; set; }
     public double SessionTimePercent { get; set; } = -1;
@@ -250,6 +253,9 @@ public sealed partial class OverlayWindow : Window
         {
             Name = ProviderIcons.GetDisplayName(data.Provider),
             Icon = ProviderIcons.GetGeometry(data.Provider),
+            StatusBrush = Controls.ProviderStatusVisuals.Brush(data.ServiceStatus),
+            IncidentVisibility = ProviderStatusPresentation.IsIncident(data.ServiceStatus) ? Visibility.Visible : Visibility.Collapsed,
+            StatusDescription = ProviderStatusPresentation.Description(data.ServiceStatus),
             SessionPercent = firstCell.Percent,
             SessionTimePercent = first?.Window.ElapsedPercent ?? -1,
             SessionText = firstCell.Text,

@@ -35,6 +35,7 @@ This is the Wave-OCE fork of [nek0der/CodexBarWin](https://github.com/nek0der/Co
 | **Floating overlay** | The same readout as a small draggable window that stays above your apps. Position is remembered. |
 | **Usage alerts** | Windows notifications when you're burning through a limit too fast, nearly out, or out. |
 | **Pace awareness** | Every bar also shows how much of the window's time has passed, so you can tell "50% used" at the start of a window from "50% used" near the end. |
+| **Provider status** | Service health on each card, incident details with a status-page link, and a small incident dot on compact displays. Grey means no status is available (including Gemini through Antigravity). |
 
 Supported providers: **Claude**, **Codex** (OpenAI) and **Gemini** (read through Google's Antigravity).
 
@@ -175,6 +176,7 @@ Compared with upstream, this fork adds:
 - **A flyout that reliably appears over other programs**, instead of sometimes opening behind them.
 - **Pace layer, marker and run-out projections** on every bar.
 - **Usage alerts** as Windows notifications, with a test button.
+- **Provider service status badges** with incident details and status-page links. The overlay and taskbar logos show a dot only for reported incidents or maintenance.
 - **Codex support**, and **provider logos** in place of text labels on the compact displays.
 - **Extra windows**: Claude's Fable-only limit, and Antigravity's Claude and GPT quota under Gemini, on the flyout cards and detail page, in provider colours.
 - **Relevance-based bar selection** on the compact displays.
@@ -183,7 +185,7 @@ Compared with upstream, this fork adds:
 - **No more hidden 30-second cap** on WSL commands, which was the cause of "Command timed out after 30 seconds".
 - **Providers apply immediately** when enabled, disabled or reordered in Settings.
 - **`tools/wsl`**: one-step setup for the CLI and shim.
-- 249 unit tests.
+- 290 unit tests.
 
 The full list is in the [changelog](CHANGELOG.md).
 

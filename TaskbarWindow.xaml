@@ -53,14 +53,17 @@
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
 
-                        <Path
-                            Grid.Column="0"
-                            Data="{x:Bind Icon}"
-                            Width="16"
-                            Height="16"
-                            Stretch="Uniform"
-                            VerticalAlignment="Center"
-                            Fill="{ThemeResource TextFillColorPrimaryBrush}"/>
+                        <Grid Grid.Column="0" Width="16" Height="16" VerticalAlignment="Center"
+                              ToolTipService.ToolTip="{x:Bind Name}">
+                            <Path Data="{x:Bind Icon}"
+                                  Width="16" Height="16" Stretch="Uniform"
+                                  VerticalAlignment="Center"
+                                  Fill="{ThemeResource TextFillColorPrimaryBrush}"/>
+                            <Ellipse Width="6" Height="6" HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                                     Fill="{x:Bind StatusBrush}" Stroke="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                                     StrokeThickness="1" Visibility="{x:Bind IncidentVisibility}"
+                                     ToolTipService.ToolTip="{x:Bind StatusDescription}"/>
+                        </Grid>
 
                         <Grid Grid.Column="1" RowSpacing="0" ColumnSpacing="8">
                             <Grid.RowDefinitions>

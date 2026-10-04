@@ -29,6 +29,7 @@
     <Compile Include="..\Helpers\PaceCalculator.cs" Link="Linked\PaceCalculator.cs" />
     <Compile Include="..\Helpers\WidgetBarSelector.cs" Link="Linked\WidgetBarSelector.cs" />
     <Compile Include="..\Helpers\WindowAccent.cs" Link="Linked\WindowAccent.cs" />
+    <Compile Include="..\Helpers\ProviderStatusPresentation.cs" Link="Linked\ProviderStatusPresentation.cs" />
     <Compile Include="..\Services\UsageChangeTracker.cs" Link="Linked\UsageChangeTracker.cs" />
     <Compile Include="..\Helpers\ProviderListSynchronizer.cs" Link="Linked\ProviderListSynchronizer.cs" />
     <Compile Include="..\Models\AppSettings.cs" Link="Linked\AppSettings.cs" />
