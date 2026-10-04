@@ -139,9 +139,9 @@ public sealed partial class UsageMeter : UserControl
         ToolTipService.SetToolTip(this, tip);
     }
 
-    // Provider colours for extra windows: deliberately muted so they sit quietly next to the main blue bars
-    private static readonly Color ClaudeOrange = Color.FromArgb(255, 0xC4, 0x7A, 0x5E);   // faded Anthropic orange
-    private static readonly Color OpenAiTeal = Color.FromArgb(255, 0x3E, 0x9C, 0x8C);     // subtle teal
+    // Provider colours for extra windows
+    private static readonly Color ClaudeOrange = Color.FromArgb(255, 0xD9, 0x77, 0x57);   // Anthropic orange (#D97757)
+    private static readonly Color OpenAiTeal = Color.FromArgb(255, 0x10, 0xA3, 0x7F);     // OpenAI green (#10A37F)
 
     private static Brush GetBarBrush(double percent, WindowAccent accent)
     {
@@ -164,7 +164,7 @@ public sealed partial class UsageMeter : UserControl
     /// </summary>
     private static Brush GetTimeBrush(WindowAccent accent)
     {
-        const byte alpha = 0x66;
+        const byte alpha = 0x88;
         return accent switch
         {
             WindowAccent.Claude => new SolidColorBrush(WithAlpha(ClaudeOrange, alpha)),
@@ -179,15 +179,15 @@ public sealed partial class UsageMeter : UserControl
     /// <summary>
     /// Orange (Claude) to teal (OpenAI), for a pool shared by Claude and GPT models. Orange and teal are
     /// near-opposites, so blending them directly passes through muddy brown-grey. The gradient is steered
-    /// around that by bridging colours that follow the hue wheel the long way (orange, gold, sage green,
-    /// teal), all muted to the same softness so the whole bar stays clean.
+    /// around that by bridging colours that follow the hue wheel the long way (orange, gold, fresh green,
+    /// OpenAI green) at a matching richness, so the whole bar stays clean.
     /// </summary>
     private static LinearGradientBrush ClaudeToOpenAiGradient(byte alpha = 255)
     {
         var brush = new LinearGradientBrush { StartPoint = new Windows.Foundation.Point(0, 0.5), EndPoint = new Windows.Foundation.Point(1, 0.5) };
         brush.GradientStops.Add(new GradientStop { Color = WithAlpha(ClaudeOrange, alpha), Offset = 0 });
-        brush.GradientStops.Add(new GradientStop { Color = WithAlpha(Color.FromArgb(255, 0xC0, 0xA1, 0x59), alpha), Offset = 0.34 });   // gold
-        brush.GradientStops.Add(new GradientStop { Color = WithAlpha(Color.FromArgb(255, 0x60, 0xA9, 0x6C), alpha), Offset = 0.67 });   // sage green
+        brush.GradientStops.Add(new GradientStop { Color = WithAlpha(Color.FromArgb(255, 0xD2, 0xA2, 0x4C), alpha), Offset = 0.34 });   // gold
+        brush.GradientStops.Add(new GradientStop { Color = WithAlpha(Color.FromArgb(255, 0x4D, 0xAE, 0x75), alpha), Offset = 0.67 });   // fresh green
         brush.GradientStops.Add(new GradientStop { Color = WithAlpha(OpenAiTeal, alpha), Offset = 1 });
         return brush;
     }
