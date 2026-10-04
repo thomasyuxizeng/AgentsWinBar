@@ -7,6 +7,19 @@ using Microsoft.UI.Xaml.Navigation;
 namespace CodexBarWin.Views;
 
 /// <summary>
+/// One extra usage window on the detail page (e.g. "Claude and GPT weekly").
+/// </summary>
+public sealed class ExtraWindowRow
+{
+    public string Title { get; set; } = string.Empty;
+    public double Percent { get; set; }
+    public double TimePercent { get; set; } = -1;
+    public string PaceText { get; set; } = string.Empty;
+    public string PercentText { get; set; } = string.Empty;
+    public string ResetText { get; set; } = string.Empty;
+}
+
+/// <summary>
 /// Detail page for a provider's usage data.
 /// </summary>
 public sealed partial class ProviderDetailPage : Page
@@ -93,6 +106,18 @@ public sealed partial class ProviderDetailPage : Page
         {
             TertiarySection.Visibility = Visibility.Collapsed;
         }
+
+        // Extra windows (detail page only; the always-on displays don't show these)
+        ExtraWindowsList.ItemsSource = _data.ExtraWindows.Select(x => new ExtraWindowRow
+        {
+            Title = x.Title,
+            Percent = x.Window.Percent,
+            TimePercent = x.Window.ElapsedPercent ?? -1,
+            PaceText = x.Window.PaceSummary,
+            PercentText = $"{x.Window.PercentText} used",
+            ResetText = x.Window.ResetText
+        }).ToList();
+        ExtraWindowsList.Visibility = _data.HasExtraWindows ? Visibility.Visible : Visibility.Collapsed;
 
         // Details
         if (!string.IsNullOrEmpty(_data.Plan))

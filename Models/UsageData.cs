@@ -10,6 +10,12 @@ public record UsageData
     public UsageWindow? Session { get; init; }
     public UsageWindow? Weekly { get; init; }
     public UsageWindow? Tertiary { get; init; }
+
+    /// <summary>
+    /// Additional titled windows shown only on the detail page (e.g. Antigravity's Claude and GPT quota).
+    /// </summary>
+    public IReadOnlyList<ExtraUsageWindow> ExtraWindows { get; init; } = [];
+
     public CreditsInfo? Credits { get; init; }
     public DateTime FetchedAt { get; init; } = DateTime.UtcNow;
     public bool IsStale => DateTime.UtcNow - FetchedAt > TimeSpan.FromMinutes(5);
@@ -19,6 +25,7 @@ public record UsageData
 
     public bool HasWeekly => Weekly != null;
     public bool HasTertiary => Tertiary != null;
+    public bool HasExtraWindows => ExtraWindows.Count > 0;
     public bool HasError => !string.IsNullOrEmpty(Error);
 
     /// <summary>
@@ -43,6 +50,15 @@ public record UsageData
         "claude" => "Current week (Sonnet)",
         _ => "Additional"
     };
+}
+
+/// <summary>
+/// A titled usage window beyond the main session and weekly ones.
+/// </summary>
+public record ExtraUsageWindow
+{
+    public string Title { get; init; } = string.Empty;
+    public UsageWindow Window { get; init; } = new();
 }
 
 /// <summary>

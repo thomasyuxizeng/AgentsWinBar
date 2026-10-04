@@ -43,6 +43,10 @@ public record UsageDataDto
         Session = Usage?.Primary?.ToUsageWindow(),
         Weekly = Usage?.Secondary?.ToUsageWindow(),
         Tertiary = Usage?.Tertiary?.ToUsageWindow(),
+        ExtraWindows = (Usage?.ExtraRateWindows ?? [])
+            .Where(x => x.Window != null && !string.IsNullOrWhiteSpace(x.Title))
+            .Select(x => new ExtraUsageWindow { Title = x.Title!.Trim(), Window = x.Window!.ToUsageWindow() })
+            .ToList(),
         Status = Source,
         Error = Error,
         FetchedAt = DateTime.UtcNow
@@ -58,7 +62,18 @@ public record UsageDto
     public UsageWindowDto? Primary { get; init; }
     public UsageWindowDto? Secondary { get; init; }
     public UsageWindowDto? Tertiary { get; init; }
+    public List<ExtraRateWindowDto>? ExtraRateWindows { get; init; }
     public DateTime? UpdatedAt { get; init; }
+}
+
+/// <summary>
+/// DTO for an additional, separately titled usage window (e.g. Antigravity's Claude and GPT quota).
+/// </summary>
+public record ExtraRateWindowDto
+{
+    public string? Id { get; init; }
+    public string? Title { get; init; }
+    public UsageWindowDto? Window { get; init; }
 }
 
 /// <summary>

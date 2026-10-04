@@ -43,6 +43,16 @@ for e in d:
     if p: u["primary"] = p
     if s: u["secondary"] = s
     e.pop("rateWindowLabels", None)
+    # Antigravity also gives access to Claude and GPT models with their own quota. Keep those as extra
+    # windows (shown on the detail page only); Gemini'"'"'s own two windows are already primary/secondary.
+    titles = {"antigravity-quota-summary-3p-5h": "Claude and GPT 5-hour",
+              "antigravity-quota-summary-3p-weekly": "Claude and GPT weekly"}
+    extras = []
+    for x in u.get("extraRateWindows", []):
+        if x.get("id", "").startswith("antigravity-quota-summary-gemini"): continue
+        if x.get("id") in titles: x["title"] = titles[x["id"]]
+        extras.append(x)
+    u["extraRateWindows"] = extras
     for k in ("primary", "secondary"):
         x = u.get(k)
         if x and x.get("resetsAt"):

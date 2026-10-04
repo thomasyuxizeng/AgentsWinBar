@@ -208,6 +208,66 @@
                     </Grid>
                 </Grid>
 
+                <!-- Extra windows (e.g. Antigravity's Claude and GPT quota): detail page only -->
+                <ItemsControl x:Name="ExtraWindowsList" IsTabStop="False" Visibility="Collapsed">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <StackPanel Spacing="12"/>
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="local:ExtraWindowRow">
+                            <Grid
+                                Padding="12"
+                                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                BorderThickness="1"
+                                CornerRadius="6">
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                </Grid.RowDefinitions>
+
+                                <TextBlock
+                                    Grid.Row="0"
+                                    Text="{x:Bind Title}"
+                                    Style="{StaticResource CaptionTextBlockStyle}"
+                                    FontWeight="SemiBold"
+                                    Margin="0,0,0,6"/>
+
+                                <controls:UsageMeter
+                                    Grid.Row="1"
+                                    Height="10"
+                                    Percent="{x:Bind Percent}"
+                                    TimePercent="{x:Bind TimePercent}"
+                                    PaceText="{x:Bind PaceText}"/>
+
+                                <Grid Grid.Row="2" Margin="0,6,0,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+
+                                    <TextBlock
+                                        Grid.Column="0"
+                                        Text="{x:Bind PercentText}"
+                                        TextWrapping="NoWrap"
+                                        Style="{StaticResource CaptionTextBlockStyle}"/>
+                                    <TextBlock
+                                        Grid.Column="1"
+                                        Text="{x:Bind ResetText}"
+                                        TextWrapping="NoWrap"
+                                        TextTrimming="CharacterEllipsis"
+                                        Style="{StaticResource CaptionTextBlockStyle}"
+                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                        VerticalAlignment="Center"/>
+                                </Grid>
+                            </Grid>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+
                 <!-- Details -->
                 <Grid
                     x:Name="DetailsSection"
