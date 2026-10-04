@@ -107,6 +107,21 @@ internal static class DashboardFormat
     public static string Freshness(DashboardProvider provider) => provider.IsLoading ? "Refreshing…"
         : $"Fetched {Local(provider.FetchedAtUtc)} · {Ago(provider.FetchedAtUtc)}";
 
+    /// <summary>A short note for a provider card's header: what needs attention, or nothing.</summary>
+    public static string CardNote(DashboardProvider? provider) => provider == null ? string.Empty
+        : provider.IsLoading ? "Refreshing…"
+        : !string.IsNullOrWhiteSpace(provider.Error) ? "Fetch failed"
+        : provider.IsStale ? "Stale" : string.Empty;
+
+    /// <summary>The overview line's tooltip: the window, its reset and the pace outlook.</summary>
+    public static string MiniTip(DashboardWindow? window) => window == null ? string.Empty
+        : string.Join('\n', new[]
+        {
+            $"{window.Title}: {window.UsedPercent:F0}% used",
+            ResetLine(window.ResetText, window.ResetsAtUtc),
+            window.PaceSummary
+        }.Where(line => !string.IsNullOrWhiteSpace(line)));
+
     public static string SourceLine(string? source) => string.IsNullOrWhiteSpace(source) ? "Source unknown" : $"Source: {source}";
 
     public static Brush OkBrush(bool ok) => ok ? Green : Red;

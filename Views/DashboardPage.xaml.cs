@@ -61,6 +61,7 @@ public sealed partial class DashboardPage : Page
         UpdateTiles(snapshot);
         if (!DashboardContent.DiagnosticsEquals(Diagnostics.Data, snapshot.Diagnostics)) Diagnostics.Data = snapshot.Diagnostics;
         else Diagnostics.RefreshTimes();
+        Overview.Update(snapshot.Providers);
         UpdateProviders(snapshot.Providers);
     }
 
@@ -69,6 +70,7 @@ public sealed partial class DashboardPage : Page
         if (_snapshot == null) return;
         UpdateSubtitle(_snapshot.Summary);
         UpdateTiles(_snapshot);
+        Overview.RefreshTimes();
         foreach (var panel in _panels.Values) panel.RefreshTimes();
         Diagnostics.RefreshTimes();
     }

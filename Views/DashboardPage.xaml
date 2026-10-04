@@ -84,15 +84,19 @@
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
                 </Grid.RowDefinitions>
 
-                <Grid x:Name="ProvidersGrid" Grid.Row="0" ColumnSpacing="14" RowSpacing="14"/>
+                <!-- Every usage bar at once -->
+                <controls:DashboardUsageOverview x:Name="Overview" Grid.Row="0"/>
+
+                <Grid x:Name="ProvidersGrid" Grid.Row="1" ColumnSpacing="14" RowSpacing="14"/>
 
                 <!-- Always below the providers, at any window size -->
-                <controls:DashboardDiagnosticsPanel x:Name="Diagnostics" Grid.Row="1" VerticalAlignment="Top"/>
+                <controls:DashboardDiagnosticsPanel x:Name="Diagnostics" Grid.Row="2" VerticalAlignment="Top"/>
 
                 <!-- Shown when no provider is enabled -->
-                <StackPanel x:Name="EmptyPanel" Grid.Row="0" Visibility="Collapsed"
+                <StackPanel x:Name="EmptyPanel" Grid.Row="1" Visibility="Collapsed"
                             HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="6" Padding="0,60">
                     <FontIcon FontFamily="Segoe Fluent Icons" Glyph="&#xE7BA;" FontSize="30"
                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>

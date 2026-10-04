@@ -48,6 +48,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Settings toggle to enable/disable developer mode
 
 ### Changed
+- Dashboard overview: every usage bar at once, right under the headline tiles. One compact card per provider with a one-line bar for each window (name, bar with its pace layer, percent used, time to reset), so nothing needs scrolling to see; the detailed panels follow below
 - Dashboard performance: refreshes no longer rebuild the whole window. Unchanged providers, tiles and diagnostics are skipped, the 30-second clock only updates relative times, and the charts and bars redraw only when their data changes, so scrolling stays smooth while a refresh runs
 - Dashboard layout: diagnostics always sit below the providers (also in full screen), and Gemini takes a full-width row with its own models and the External pool side by side
 - Shorter labels for the extra usage windows so the flyout bars get more room: "Fable only" is now "Fable", Antigravity's "Claude and GPT 5-hour" and "Claude and GPT weekly" are "External 5h" and "External 7d" (everywhere: cards, compact displays, detail pages, alerts and the dashboard)
