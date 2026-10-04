@@ -17,7 +17,7 @@ public sealed record DashboardTile(string Label, string Value, string Sub, Brush
 /// </summary>
 public sealed partial class DashboardPage : Page
 {
-    private const double MinPanelWidth = 470;
+    private const double MinPanelWidth = 420;
     private const double ColumnGap = 14;
 
     private static readonly Brush Green = new SolidColorBrush(Color.FromArgb(255, 16, 163, 127));
@@ -82,7 +82,7 @@ public sealed partial class DashboardPage : Page
             s.WindowsAtLimit > 0 ? Red : s.WindowsNearLimit > 0 || s.WindowsAheadOfPace > 0 ? Amber : Green));
 
         tiles.Add(s.MostUsedWindow is { } most
-            ? new("MOST USED", $"{most.UsedPercent:F0}% {most.WindowTitle}", $"{most.ProviderName} · resets {DashboardFormat.In(most.ResetsAtUtc)}",
+            ? new("MOST USED", $"{most.UsedPercent:F0}%", $"{most.ProviderName} · {most.WindowTitle} · resets {DashboardFormat.In(most.ResetsAtUtc)}",
                 most.UsedPercent >= 95 ? Red : most.UsedPercent >= 80 ? Amber : Blue)
             : new("MOST USED", "—", "No usage windows yet", Neutral));
 
@@ -124,10 +124,14 @@ public sealed partial class DashboardPage : Page
 
     private void OnScrollSizeChanged(object sender, SizeChangedEventArgs e) => Arrange(force: false);
 
+    private void OnLayoutStateChanged(object sender, VisualStateChangedEventArgs e) => Arrange(force: false);
+
     /// <summary>Lays the provider panels out in as many columns as fit (each at least <see cref="MinPanelWidth"/> wide).</summary>
     private void Arrange(bool force)
     {
-        var diagnosticsWidth = DiagnosticsColumn.Width.Value > 0 ? DiagnosticsColumn.Width.Value + ColumnGap : 0;
+        // Same threshold as the AdaptiveTrigger, read directly so it never lags behind the visual state
+        var wide = (XamlRoot?.Size.Width ?? 0) >= 1500;
+        var diagnosticsWidth = wide ? 380 + ColumnGap : 0;
         var available = Math.Max(0, MainScroll.ActualWidth - 12 - diagnosticsWidth);
         var count = Math.Max(1, _panels.Count);
         var columns = Math.Clamp((int)Math.Floor((available + ColumnGap) / (MinPanelWidth + ColumnGap)), 1, count);

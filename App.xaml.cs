@@ -54,6 +54,9 @@ public partial class App : Application
         TaskScheduler.UnobservedTaskException += (_, e) => LogCrash("UnobservedTaskException", e.Exception);
     }
 
+    /// <summary>Records a handled-but-unexpected failure (e.g. a window that could not be opened) in the crash log.</summary>
+    public static void LogHandled(string source, Exception ex) => LogCrash(source, ex);
+
     private static void LogCrash(string source, Exception? ex)
     {
         try

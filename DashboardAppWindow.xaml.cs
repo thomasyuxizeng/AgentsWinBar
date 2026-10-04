@@ -47,7 +47,7 @@ public sealed partial class DashboardAppWindow : Window
             _appWindow.TitleBar.ButtonBackgroundColor = Colors.Transparent;
             _appWindow.TitleBar.ButtonInactiveBackgroundColor = Colors.Transparent;
         }
-        _appWindow.Resize(new Windows.Graphics.SizeInt32(1480, 940));
+        SizeAndCenter(1360, 880);
         SetupMicaBackdrop();
 
         PageHost.Content = _page;
@@ -93,6 +93,21 @@ public sealed partial class DashboardAppWindow : Window
 
         // CLI version and similar facts come from WSL; fetch them in the background and redraw when known.
         RefreshDiagnosticsAsync().SafeFireAndForget(onError: ex => _logger.LogDebug(ex, "Dashboard diagnostics refresh failed"));
+    }
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern uint GetDpiForWindow(IntPtr hwnd);
+
+    /// <summary>Sizes the window in device-independent units (so it looks the same at any display scale) and centres it on its display.</summary>
+    private void SizeAndCenter(int widthDip, int heightDip)
+    {
+        var dpi = GetDpiForWindow(WindowNative.GetWindowHandle(this));
+        var scale = dpi > 0 ? dpi / 96.0 : 1.0;
+        var area = DisplayArea.GetFromWindowId(_appWindow.Id, DisplayAreaFallback.Nearest).WorkArea;
+        var width = Math.Min((int)(widthDip * scale), area.Width);
+        var height = Math.Min((int)(heightDip * scale), area.Height);
+        _appWindow.MoveAndResize(new Windows.Graphics.RectInt32(
+            area.X + (area.Width - width) / 2, area.Y + (area.Height - height) / 2, width, height));
     }
 
     private async Task RefreshDiagnosticsAsync()

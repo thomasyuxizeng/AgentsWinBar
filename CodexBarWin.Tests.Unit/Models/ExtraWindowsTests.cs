@@ -30,7 +30,7 @@ public class ExtraWindowsTests
         var data = Parse(AntigravityStyleJson);
 
         data.HasExtraWindows.Should().BeTrue();
-        data.ExtraWindows.Select(x => x.Title).Should().Equal("Claude and GPT 5-hour", "Claude and GPT weekly");
+        data.ExtraWindows.Select(x => x.Title).Should().Equal("Claude+GPT 5h", "Claude+GPT 7d");
         data.ExtraWindows[0].Window.Percent.Should().Be(100);
         data.ExtraWindows[0].Window.WindowMinutes.Should().Be(300);
         data.ExtraWindows[1].Window.WindowMinutes.Should().Be(10080);
@@ -82,7 +82,7 @@ public class ExtraWindowsTests
         var loaded = System.Text.Json.JsonSerializer.Deserialize(json, AppJsonSerializerContext.Default.CacheData)!;
 
         loaded.Items["gemini"].ExtraWindows.Should().HaveCount(2);
-        loaded.Items["gemini"].ExtraWindows[0].Title.Should().Be("Claude and GPT 5-hour");
+        loaded.Items["gemini"].ExtraWindows[0].Title.Should().Be("Claude+GPT 5h");
         loaded.Items["gemini"].ExtraWindows[0].Window.WindowMinutes.Should().Be(300);
     }
 }

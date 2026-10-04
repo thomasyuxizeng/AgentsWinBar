@@ -45,9 +45,9 @@
         </ItemsPanelTemplate>
     </UserControl.Resources>
 
-    <StackPanel Spacing="12">
+    <Grid x:Name="CardsGrid" ColumnSpacing="12" RowSpacing="12" SizeChanged="OnSizeChanged">
 
-        <Border Style="{StaticResource CardBorder}">
+        <Border x:Name="Card0" Style="{StaticResource CardBorder}">
             <StackPanel Spacing="10">
                 <TextBlock Text="SYSTEM" Style="{StaticResource CardTitle}"/>
                 <ItemsControl ItemsSource="{x:Bind SystemFacts, Mode=OneWay}" IsTabStop="False"
@@ -55,7 +55,7 @@
             </StackPanel>
         </Border>
 
-        <Border Style="{StaticResource CardBorder}">
+        <Border x:Name="Card1" Style="{StaticResource CardBorder}">
             <StackPanel Spacing="10">
                 <TextBlock Text="SETTINGS IN EFFECT" Style="{StaticResource CardTitle}"/>
                 <ItemsControl ItemsSource="{x:Bind SettingsFacts, Mode=OneWay}" IsTabStop="False"
@@ -63,7 +63,7 @@
             </StackPanel>
         </Border>
 
-        <Border Style="{StaticResource CardBorder}">
+        <Border x:Name="Card2" Style="{StaticResource CardBorder}">
             <StackPanel Spacing="10">
                 <TextBlock Text="USAGE HISTORY STORE" Style="{StaticResource CardTitle}"/>
                 <ItemsControl ItemsSource="{x:Bind HistoryFacts, Mode=OneWay}" IsTabStop="False"
@@ -71,7 +71,7 @@
             </StackPanel>
         </Border>
 
-        <Border Style="{StaticResource CardBorder}"
+        <Border x:Name="Card3" Style="{StaticResource CardBorder}"
                 Visibility="{x:Bind views:DashboardFormat.VisCount(CostCacheFacts.Count), Mode=OneWay}">
             <StackPanel Spacing="10">
                 <TextBlock Text="COST SCANS" Style="{StaticResource CardTitle}"/>
@@ -80,7 +80,7 @@
             </StackPanel>
         </Border>
 
-        <Border Style="{StaticResource CardBorder}">
+        <Border x:Name="Card4" Style="{StaticResource CardBorder}">
             <StackPanel Spacing="10">
                 <TextBlock Style="{StaticResource CardTitle}"
                            Text="{x:Bind views:DashboardFormat.RefreshTitle(Data.RecentRefreshes.Count), Mode=OneWay}"/>
@@ -108,6 +108,7 @@
                                               Foreground="{x:Bind views:DashboardFormat.OkBrush(Success)}"/>
                                     <TextBlock Grid.Column="1" FontSize="12">
                                         <Run Text="{x:Bind views:DashboardFormat.ProviderName(ProviderId)}" FontWeight="SemiBold"/>
+                                        <Run Text="·" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
                                         <Run Text="{x:Bind views:DashboardFormat.LocalTime(TimestampUtc)}"/>
                                     </TextBlock>
                                     <TextBlock Grid.Column="2" Style="{StaticResource Meta}"
@@ -125,7 +126,7 @@
             </StackPanel>
         </Border>
 
-        <Border Style="{StaticResource CardBorder}">
+        <Border x:Name="Card5" Style="{StaticResource CardBorder}">
             <StackPanel Spacing="10">
                 <TextBlock Text="ALERTS THIS SESSION" Style="{StaticResource CardTitle}"/>
                 <TextBlock Text="None raised yet" Style="{StaticResource Meta}"
@@ -147,5 +148,5 @@
                 </ItemsControl>
             </StackPanel>
         </Border>
-    </StackPanel>
+    </Grid>
 </UserControl>

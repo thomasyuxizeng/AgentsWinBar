@@ -36,14 +36,14 @@ public sealed partial class DashboardDiagnosticsPanel : UserControl
 
         SystemFacts =
         [
-            new("App version", DashboardFormat.Unknown(d.AppVersion)),
+            new("App version", VersionText(d.AppVersion)),
             new("CodexBar CLI", d.CliAvailable switch
             {
                 true => $"{DashboardFormat.Unknown(d.CliVersion)} · available",
                 false => "Not found in WSL",
                 _ => d.CliVersion ?? "Checking…"
             }),
-            new("WSL distribution", DashboardFormat.Unknown(d.WslDistro)),
+            new("WSL distribution", string.IsNullOrWhiteSpace(d.WslDistro) ? "Default WSL distribution" : d.WslDistro),
             new("Settings file", d.SettingsPath)
         ];
 
@@ -77,5 +77,43 @@ public sealed partial class DashboardDiagnosticsPanel : UserControl
                 : "not scanned yet")).ToList();
 
         Bindings.Update();
+    }
+
+    private int _columns = -1;
+
+    private void OnSizeChanged(object sender, SizeChangedEventArgs e) => Arrange();
+
+    /// <summary>Flows the cards into as many columns as fit (a 380-wide side column is one; the full-width layout is up to three).</summary>
+    private void Arrange()
+    {
+        var columns = Math.Clamp((int)Math.Floor((CardsGrid.ActualWidth + 12) / (340 + 12)), 1, 3);
+        if (columns == _columns) return;
+        _columns = columns;
+        CardsGrid.ColumnDefinitions.Clear();
+        CardsGrid.RowDefinitions.Clear();
+        for (var c = 0; c < columns; c++) CardsGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        UIElement[] cards = [Card0, Card1, Card2, Card3, Card4, Card5];
+        for (var r = 0; r < (int)Math.Ceiling(cards.Length / (double)columns); r++) CardsGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        for (var i = 0; i < cards.Length; i++)
+        {
+            Grid.SetRow((FrameworkElement)cards[i], i / columns);
+            Grid.SetColumn((FrameworkElement)cards[i], i % columns);
+        }
+    }
+
+    /// <summary>The installed package version plus the short build string, instead of a raw 40-character commit hash.</summary>
+    private static string VersionText(string? build)
+    {
+        string? package = null;
+        try
+        {
+            var v = Windows.ApplicationModel.Package.Current.Id.Version;
+            package = $"{v.Major}.{v.Minor}.{v.Build}.{v.Revision}";
+        }
+        catch { /* not packaged */ }
+        var shortBuild = build;
+        if (!string.IsNullOrEmpty(build) && build.IndexOf('+') is var plus and > 0)
+            shortBuild = build[..plus] + "+" + build[(plus + 1)..Math.Min(build.Length, plus + 8)];
+        return package != null ? $"{package} · build {shortBuild}" : shortBuild ?? "Unknown";
     }
 }

@@ -259,7 +259,11 @@ public sealed partial class MainWindow : Window
             // The flyout is a quick glance; once the full dashboard is open it only gets in the way
             HideWindow();
         }
-        catch (Exception ex) { App.Services.GetRequiredService<ILogger<MainWindow>>().LogError(ex, "Opening the dashboard failed"); }
+        catch (Exception ex)
+        {
+            App.Services.GetRequiredService<ILogger<MainWindow>>().LogError(ex, "Opening the dashboard failed");
+            App.LogHandled("Opening the dashboard failed", ex);
+        }
     }
 
     private void OnProviderDetailRequested(object? sender, UsageData data)

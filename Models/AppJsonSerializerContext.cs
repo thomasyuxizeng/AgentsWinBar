@@ -57,7 +57,7 @@ public record UsageDataDto
         Tertiary = Usage?.Tertiary?.ToUsageWindow(),
         ExtraWindows = (Usage?.ExtraRateWindows ?? [])
             .Where(x => x.Window != null && !string.IsNullOrWhiteSpace(x.Title))
-            .Select(x => new ExtraUsageWindow { Key = x.Id ?? string.Empty, Title = x.Title!.Trim(), Window = x.Window!.ToUsageWindow() })
+            .Select(x => new ExtraUsageWindow { Key = x.Id ?? string.Empty, Title = Helpers.WindowTitles.Short(x.Title), Window = x.Window!.ToUsageWindow() })
             .ToList(),
         Status = Source,
         ServiceStatus = Status?.ToProviderStatus(),

@@ -55,7 +55,7 @@
         <!-- Headline tiles -->
         <ItemsRepeater Grid.Row="1" x:Name="TilesRepeater">
             <ItemsRepeater.Layout>
-                <UniformGridLayout MinItemWidth="200" MinColumnSpacing="10" MinRowSpacing="10" ItemsStretch="Fill"/>
+                <UniformGridLayout MinItemWidth="175" MinItemHeight="100" MinColumnSpacing="10" MinRowSpacing="10" ItemsStretch="Fill"/>
             </ItemsRepeater.Layout>
             <ItemsRepeater.ItemTemplate>
                 <DataTemplate x:DataType="views:DashboardTile">
@@ -108,7 +108,7 @@
         </ScrollViewer>
 
         <VisualStateManager.VisualStateGroups>
-            <VisualStateGroup>
+            <VisualStateGroup CurrentStateChanged="OnLayoutStateChanged">
                 <VisualState x:Name="WideLayout">
                     <VisualState.StateTriggers>
                         <AdaptiveTrigger MinWindowWidth="1500"/>
