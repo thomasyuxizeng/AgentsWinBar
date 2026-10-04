@@ -27,6 +27,7 @@ public sealed partial class DashboardPage : Page
     private static readonly Brush Neutral = new SolidColorBrush(Color.FromArgb(60, 128, 128, 128));
 
     private readonly Dictionary<string, DashboardProviderPanel> _panels = new();
+    private readonly List<StackPanel> _columnStacks = new();
     private int _arrangedColumns = -1;
     private string _arrangedOrder = string.Empty;
 
@@ -142,23 +143,37 @@ public sealed partial class DashboardPage : Page
 
         _arrangedColumns = columns;
         _arrangedOrder = orderKey;
+        // Release the panels from their previous column before re-parenting them
+        foreach (var stack in _columnStacks) stack.Children.Clear();
+        _columnStacks.Clear();
         ProvidersGrid.Children.Clear();
         ProvidersGrid.ColumnDefinitions.Clear();
         ProvidersGrid.RowDefinitions.Clear();
-        for (var c = 0; c < columns; c++)
-            ProvidersGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        var rows = (int)Math.Ceiling(_panels.Count / (double)columns);
-        for (var r = 0; r < rows; r++)
-            ProvidersGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        ProvidersGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
 
-        for (var i = 0; i < order.Count; i++)
+        // Balanced columns: each panel goes into the currently shortest column, so a tall panel next to a short
+        // one doesn't leave a hole (three providers in two columns become tall | short + short)
+        var heights = new double[columns];
+        for (var c = 0; c < columns; c++)
         {
-            var panel = _panels[order[i]];
-            Grid.SetRow(panel, i / columns);
-            Grid.SetColumn(panel, i % columns);
-            ProvidersGrid.Children.Add(panel);
+            ProvidersGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            var stack = new StackPanel { Spacing = ColumnGap, VerticalAlignment = VerticalAlignment.Top };
+            Grid.SetColumn(stack, c);
+            _columnStacks.Add(stack);
+            ProvidersGrid.Children.Add(stack);
+        }
+        foreach (var id in order)
+        {
+            var panel = _panels[id];
+            var shortest = Array.IndexOf(heights, heights.Min());
+            _columnStacks[shortest].Children.Add(panel);
+            heights[shortest] += EstimateHeight(panel.Data);
         }
     }
+
+    /// <summary>A rough height for balancing columns (real heights aren't known before layout).</summary>
+    private static double EstimateHeight(DashboardProvider? provider) =>
+        provider == null ? 0 : 150 + provider.Windows.Count * 215 + (provider.Cost != null ? 640 : 0);
 
     private void OnRefreshClicked(object sender, RoutedEventArgs e) => RefreshRequested?.Invoke(this, EventArgs.Empty);
     private void OnSettingsClicked(object sender, RoutedEventArgs e) => SettingsRequested?.Invoke(this, EventArgs.Empty);
