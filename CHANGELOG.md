@@ -37,7 +37,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.1.0] - TBD
 
 ### Added
-- Gemini's detail page also shows Antigravity's separate Claude and GPT quota (5-hour and weekly) with the usual bars, pace and reset times; it is not shown in the always-on overlay or taskbar strip. Any extra windows the CodexBar CLI reports are shown the same way
 - System tray integration with Windows 11 native UI
 - Multi-provider support (Claude, Codex, Gemini)
 - Dark mode support with Mica backdrop
