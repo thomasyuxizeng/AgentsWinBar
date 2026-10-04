@@ -388,3 +388,6 @@ credentials.json
 *.pem
 *.p12
 *.pfx
+# Agent run artifacts (kept in the worktree, not committed)
+docs/tasks/*.codex-run.log
+docs/tasks/*.codex-last-message.txt

@@ -63,6 +63,13 @@ Workflows: build, test, licenses, pr-title, stale
 
 All PRs must pass CI. Uses Squash & Merge strategy.
 
+## Delegating to Codex
+
+Larger coding tasks can be handed to Codex (`gpt-6.1-sol`) through the task board: write a spec in
+`docs/tasks/<id>.md`, then run `tools/agents/run-codex-task.ps1 -Task <id>`. It works in its own worktree and
+branch (`agent/<id>`) and never pushes. Protocol: [AGENTS.md](AGENTS.md), board: [docs/TASKS.md](docs/TASKS.md).
+Review the branch (diff, tests, the result file's claims) before merging.
+
 ## References
 
 - Setup: [CONTRIBUTING.md](CONTRIBUTING.md#development-setup)
