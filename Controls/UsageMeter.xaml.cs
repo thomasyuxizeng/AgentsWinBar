@@ -13,9 +13,9 @@ namespace CodexBarWin.Controls;
 /// </summary>
 public sealed partial class UsageMeter : UserControl
 {
-    // Soft, translucent lavender: distinct from the blue/amber/red usage colours but blends into the
-    // empty track, so it reads as a quiet background hint rather than a second bar competing for attention
-    private static readonly SolidColorBrush TimeBrush = new(Color.FromArgb(0x58, 0xA9, 0x9D, 0xEE));
+    // Soft, translucent lavender for the time-passed layer of the main bars: distinct from the blue/amber/red
+    // usage colours but blends into the empty track, so it reads as a quiet background hint
+    private static readonly Color MainTimeColor = Color.FromArgb(0x58, 0xA9, 0x9D, 0xEE);
 
     public static readonly DependencyProperty PercentProperty =
         DependencyProperty.Register(
@@ -84,7 +84,6 @@ public sealed partial class UsageMeter : UserControl
     public UsageMeter()
     {
         InitializeComponent();
-        TimeBar.Fill = TimeBrush;
         SizeChanged += OnSizeChanged;
     }
 
@@ -119,6 +118,7 @@ public sealed partial class UsageMeter : UserControl
         var time = Math.Clamp(TimePercent, 0, 100);
         TimeBar.Visibility = Visibility.Visible;
         TimeBar.Width = ActualWidth * (time / 100.0);
+        TimeBar.Fill = GetTimeBrush(Accent);
 
         // The marker only appears when usage is outpacing the schedule (the blue has run past the time
         // position, so the violet layer is hidden). Otherwise the violet layer already shows the headroom.
@@ -159,13 +159,31 @@ public sealed partial class UsageMeter : UserControl
     }
 
     /// <summary>
+    /// The translucent time-passed layer: lavender on the main bars, and a faded version of the provider's
+    /// colour on the extra bars, so e.g. a Fable bar looks orange even before any usage fills it.
+    /// </summary>
+    private static Brush GetTimeBrush(WindowAccent accent)
+    {
+        const byte alpha = 0x66;
+        return accent switch
+        {
+            WindowAccent.Claude => new SolidColorBrush(WithAlpha(ClaudeOrange, alpha)),
+            WindowAccent.OpenAi or WindowAccent.Other => new SolidColorBrush(WithAlpha(OpenAiTeal, alpha)),
+            WindowAccent.ClaudeAndOpenAi => ClaudeToOpenAiGradient(alpha),
+            _ => new SolidColorBrush(MainTimeColor)
+        };
+    }
+
+    private static Color WithAlpha(Color color, byte alpha) => Color.FromArgb(alpha, color.R, color.G, color.B);
+
+    /// <summary>
     /// Orange (Claude) to teal (OpenAI), for a pool shared by Claude and GPT models.
     /// </summary>
-    private static LinearGradientBrush ClaudeToOpenAiGradient()
+    private static LinearGradientBrush ClaudeToOpenAiGradient(byte alpha = 255)
     {
         var brush = new LinearGradientBrush { StartPoint = new Windows.Foundation.Point(0, 0.5), EndPoint = new Windows.Foundation.Point(1, 0.5) };
-        brush.GradientStops.Add(new GradientStop { Color = ClaudeOrange, Offset = 0 });
-        brush.GradientStops.Add(new GradientStop { Color = OpenAiTeal, Offset = 1 });
+        brush.GradientStops.Add(new GradientStop { Color = WithAlpha(ClaudeOrange, alpha), Offset = 0 });
+        brush.GradientStops.Add(new GradientStop { Color = WithAlpha(OpenAiTeal, alpha), Offset = 1 });
         return brush;
     }
 }
