@@ -15,6 +15,7 @@ namespace CodexBarWin.Views;
 public sealed partial class MainPage : Page
 {
     public event EventHandler? SettingsRequested;
+    public event EventHandler? DashboardRequested;
     public event EventHandler<UsageData>? ProviderDetailRequested;
 
     public MainViewModel ViewModel { get; }
@@ -86,6 +87,11 @@ public sealed partial class MainPage : Page
             var logger = App.Services.GetRequiredService<ILogger<MainPage>>();
             logger.LogError(ex, "OnRefreshClicked failed");
         }
+    }
+
+    private void OnDashboardClicked(object sender, RoutedEventArgs e)
+    {
+        DashboardRequested?.Invoke(this, EventArgs.Empty);
     }
 
     private void OnSettingsClicked(object sender, RoutedEventArgs e)

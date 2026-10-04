@@ -16,6 +16,10 @@ public sealed partial class BurndownChart : UserControl
         typeof(BurndownSeries), typeof(BurndownChart), new PropertyMetadata(null, OnDataChanged));
     public static readonly DependencyProperty AccentProperty = DependencyProperty.Register(nameof(Accent),
         typeof(WindowAccent), typeof(BurndownChart), new PropertyMetadata(WindowAccent.None, OnDataChanged));
+    /// <summary>Plot only (no title, axis labels or legend) with a shorter plot, for dense layouts such as the dashboard.</summary>
+    public static readonly DependencyProperty IsCompactProperty = DependencyProperty.Register(nameof(IsCompact),
+        typeof(bool), typeof(BurndownChart), new PropertyMetadata(false, OnCompactChanged));
+    public bool IsCompact { get => (bool)GetValue(IsCompactProperty); set => SetValue(IsCompactProperty, value); }
     public BurndownSeries? Series { get => (BurndownSeries?)GetValue(SeriesProperty); set => SetValue(SeriesProperty, value); }
     public WindowAccent Accent { get => (WindowAccent)GetValue(AccentProperty); set => SetValue(AccentProperty, value); }
 
@@ -23,6 +27,17 @@ public sealed partial class BurndownChart : UserControl
     {
         InitializeComponent();
         ActualThemeChanged += OnActualThemeChanged;
+    }
+
+    private static void OnCompactChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+    {
+        var chart = (BurndownChart)d;
+        var compact = chart.IsCompact;
+        chart.TitleText.Visibility = chart.AxisLabels.Visibility = chart.LegendPanel.Visibility =
+            compact ? Visibility.Collapsed : Visibility.Visible;
+        chart.CompactBackdrop.Visibility = compact ? Visibility.Visible : Visibility.Collapsed;
+        chart.Plot.Height = compact ? 72 : 100;
+        chart.Draw();
     }
 
     private static void OnDataChanged(DependencyObject d, DependencyPropertyChangedEventArgs e) => ((BurndownChart)d).Draw();

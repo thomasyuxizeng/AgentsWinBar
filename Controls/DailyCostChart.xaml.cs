@@ -12,7 +12,25 @@ public sealed partial class DailyCostChart : UserControl
     private IReadOnlyList<DailyCost> _series = [];
     private string _currency = "USD";
 
+    public static readonly DependencyProperty SeriesProperty = DependencyProperty.Register(nameof(Series),
+        typeof(IReadOnlyList<DailyCost>), typeof(DailyCostChart), new PropertyMetadata(null, OnSeriesChanged));
+    public static readonly DependencyProperty CurrencyProperty = DependencyProperty.Register(nameof(Currency),
+        typeof(string), typeof(DailyCostChart), new PropertyMetadata("USD", OnSeriesChanged));
+
+    /// <summary>Bindable alternative to <see cref="SetSeries"/> (used by the dashboard).</summary>
+    public IReadOnlyList<DailyCost>? Series { get => (IReadOnlyList<DailyCost>?)GetValue(SeriesProperty); set => SetValue(SeriesProperty, value); }
+    public string Currency { get => (string)GetValue(CurrencyProperty); set => SetValue(CurrencyProperty, value); }
+
+    /// <summary>Height of the bar area in DIPs (default 90).</summary>
+    public double PlotHeight { get => Plot.Height; set { Plot.Height = value; Draw(); } }
+
     public DailyCostChart() => InitializeComponent();
+
+    private static void OnSeriesChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+    {
+        var chart = (DailyCostChart)d;
+        chart.SetSeries(chart.Series ?? [], chart.Currency);
+    }
 
     public void SetSeries(IReadOnlyList<DailyCost> series, string currency)
     {

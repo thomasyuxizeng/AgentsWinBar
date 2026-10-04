@@ -1,0 +1,216 @@
+using CodexBarWin.Helpers;
+using CodexBarWin.Services;
+using CodexBarWin.ViewModels;
+using CodexBarWin.Views;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Microsoft.UI;
+using Microsoft.UI.Composition.SystemBackdrops;
+using Microsoft.UI.Dispatching;
+using Microsoft.UI.Windowing;
+using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Input;
+using WinRT.Interop;
+
+namespace CodexBarWin;
+
+/// <summary>
+/// The full-window dashboard: resizable, maximizable, full-screen capable, showing everything the app knows
+/// at once. It listens to the main view model for new results and redraws from a fresh snapshot.
+/// </summary>
+public sealed partial class DashboardWindow : Window
+{
+    private readonly MainViewModel _viewModel;
+    private readonly IDashboardService _dashboardService;
+    private readonly ILogger<DashboardWindow> _logger;
+    private readonly DashboardPage _page = new();
+    private readonly DispatcherQueueTimer _redrawTimer;
+    private readonly DispatcherQueueTimer _clockTimer;
+    private MicaController? _micaController;
+    private SystemBackdropConfiguration? _backdropConfiguration;
+    private readonly AppWindow _appWindow;
+    private bool _closed;
+
+    public DashboardWindow()
+    {
+        InitializeComponent();
+
+        _viewModel = App.Services.GetRequiredService<MainViewModel>();
+        _dashboardService = App.Services.GetRequiredService<IDashboardService>();
+        _logger = App.Services.GetRequiredService<ILogger<DashboardWindow>>();
+
+        ExtendsContentIntoTitleBar = true;
+        SetTitleBar(AppTitleBar);
+        _appWindow = AppWindow;
+        if (_appWindow.TitleBar != null)
+        {
+            _appWindow.TitleBar.ButtonBackgroundColor = Colors.Transparent;
+            _appWindow.TitleBar.ButtonInactiveBackgroundColor = Colors.Transparent;
+        }
+        _appWindow.Resize(new Windows.Graphics.SizeInt32(1480, 940));
+        SetupMicaBackdrop();
+
+        PageHost.Content = _page;
+        App.Windows.Add(this);
+        App.ApplyTheme();
+        UpdateWindowIcon();
+
+        _page.RefreshRequested += OnRefreshRequested;
+        _page.SettingsRequested += OnSettingsRequested;
+        _page.TopmostChanged += OnTopmostChanged;
+        _page.FullScreenChanged += OnFullScreenChanged;
+
+        // Redraw shortly after new data arrives (several providers can land in quick succession) and every
+        // 30 seconds so relative times ("Resets in 4h", "2m ago") stay current.
+        var queue = DispatcherQueue.GetForCurrentThread();
+        _redrawTimer = queue.CreateTimer();
+        _redrawTimer.Interval = TimeSpan.FromMilliseconds(250);
+        _redrawTimer.IsRepeating = false;
+        _redrawTimer.Tick += (_, _) => Redraw();
+        _clockTimer = queue.CreateTimer();
+        _clockTimer.Interval = TimeSpan.FromSeconds(30);
+        _clockTimer.IsRepeating = true;
+        _clockTimer.Tick += (_, _) => Redraw();
+        _clockTimer.Start();
+
+        _viewModel.Providers.CollectionChanged += OnProvidersChanged;
+        _viewModel.PropertyChanged += OnViewModelPropertyChanged;
+        Closed += OnClosed;
+        _appWindow.Changed += OnAppWindowChanged;
+
+        if (Content is UIElement root)
+        {
+            var f11 = new KeyboardAccelerator { Key = Windows.System.VirtualKey.F11 };
+            f11.Invoked += (_, e) => { ToggleFullScreen(); e.Handled = true; };
+            root.KeyboardAccelerators.Add(f11);
+            var escape = new KeyboardAccelerator { Key = Windows.System.VirtualKey.Escape };
+            escape.Invoked += (_, e) => { if (_appWindow.Presenter.Kind == AppWindowPresenterKind.FullScreen) { ToggleFullScreen(); e.Handled = true; } };
+            root.KeyboardAccelerators.Add(escape);
+        }
+
+        _page.SetBusy(_viewModel.IsLoading);
+        Redraw();
+
+        // CLI version and similar facts come from WSL; fetch them in the background and redraw when known.
+        RefreshDiagnosticsAsync().SafeFireAndForget(onError: ex => _logger.LogDebug(ex, "Dashboard diagnostics refresh failed"));
+    }
+
+    private async Task RefreshDiagnosticsAsync()
+    {
+        await _dashboardService.RefreshDiagnosticsAsync();
+        if (!_closed) DispatcherQueue.TryEnqueue(Redraw);
+    }
+
+    private void Redraw()
+    {
+        if (_closed) return;
+        try
+        {
+            var lastRefreshUtc = _viewModel.LastUpdated == default ? (DateTime?)null : _viewModel.LastUpdated.ToUniversalTime();
+            _page.Update(_dashboardService.GetSnapshot(_viewModel.Providers.ToList(), lastRefreshUtc));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Dashboard redraw failed");
+        }
+    }
+
+    private void OnProvidersChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e) =>
+        DispatcherQueue.TryEnqueue(() => { if (!_closed) { _redrawTimer.Stop(); _redrawTimer.Start(); } });
+
+    private void OnViewModelPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName is not (nameof(MainViewModel.IsLoading) or nameof(MainViewModel.LastUpdated))) return;
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            if (_closed) return;
+            _page.SetBusy(_viewModel.IsLoading);
+            _redrawTimer.Stop();
+            _redrawTimer.Start();
+        });
+    }
+
+    private void OnRefreshRequested(object? sender, EventArgs e) =>
+        _viewModel.RefreshCommand.ExecuteAsync(null).SafeFireAndForget(
+            onError: ex => _logger.LogError(ex, "Dashboard refresh failed"));
+
+    private void OnSettingsRequested(object? sender, EventArgs e)
+    {
+        try
+        {
+            var settings = App.Windows.OfType<SettingsWindow>().FirstOrDefault() ?? new SettingsWindow();
+            settings.Activate();
+        }
+        catch (Exception ex) { _logger.LogError(ex, "Opening Settings failed"); }
+    }
+
+    private void OnTopmostChanged(object? sender, bool on)
+    {
+        if (_appWindow.Presenter is OverlappedPresenter presenter) presenter.IsAlwaysOnTop = on;
+    }
+
+    private void OnFullScreenChanged(object? sender, bool on) => SetFullScreen(on);
+
+    private void ToggleFullScreen() => SetFullScreen(_appWindow.Presenter.Kind != AppWindowPresenterKind.FullScreen);
+
+    private void SetFullScreen(bool on)
+    {
+        _appWindow.SetPresenter(on ? AppWindowPresenterKind.FullScreen : AppWindowPresenterKind.Default);
+        _page.SetFullScreen(on);
+    }
+
+    private void OnAppWindowChanged(AppWindow sender, AppWindowChangedEventArgs args)
+    {
+        if (args.DidPresenterChange) _page.SetFullScreen(sender.Presenter.Kind == AppWindowPresenterKind.FullScreen);
+    }
+
+    private void SetupMicaBackdrop()
+    {
+        if (!MicaController.IsSupported()) return;
+        _micaController = new MicaController { Kind = MicaKind.Base };
+        _backdropConfiguration = new SystemBackdropConfiguration { IsInputActive = true };
+        UpdateBackdropTheme();
+        _micaController.SetSystemBackdropConfiguration(_backdropConfiguration);
+        _micaController.AddSystemBackdropTarget(
+            WinRT.CastExtensions.As<Microsoft.UI.Composition.ICompositionSupportsSystemBackdrop>(this));
+        if (Content is FrameworkElement root) root.ActualThemeChanged += OnActualThemeChanged;
+    }
+
+    private void OnActualThemeChanged(FrameworkElement sender, object args)
+    {
+        UpdateBackdropTheme();
+        UpdateWindowIcon();
+    }
+
+    private void UpdateBackdropTheme()
+    {
+        if (_backdropConfiguration == null) return;
+        _backdropConfiguration.Theme = Content is FrameworkElement root
+            ? root.ActualTheme switch
+            {
+                ElementTheme.Light => SystemBackdropTheme.Light,
+                ElementTheme.Dark => SystemBackdropTheme.Dark,
+                _ => SystemBackdropTheme.Default
+            }
+            : SystemBackdropTheme.Default;
+    }
+
+    private void UpdateWindowIcon()
+    {
+        var light = Content is FrameworkElement { ActualTheme: ElementTheme.Light };
+        _appWindow.SetIcon($"Assets/{(light ? "app-dark.ico" : "app.ico")}");
+    }
+
+    private void OnClosed(object sender, WindowEventArgs args)
+    {
+        _closed = true;
+        _redrawTimer.Stop();
+        _clockTimer.Stop();
+        _viewModel.Providers.CollectionChanged -= OnProvidersChanged;
+        _viewModel.PropertyChanged -= OnViewModelPropertyChanged;
+        _appWindow.Changed -= OnAppWindowChanged;
+        if (Content is FrameworkElement root) root.ActualThemeChanged -= OnActualThemeChanged;
+        App.Windows.Remove(this);
+        _micaController?.Dispose();
+    }
+}

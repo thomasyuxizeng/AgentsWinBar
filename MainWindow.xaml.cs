@@ -231,6 +231,7 @@ public sealed partial class MainWindow : Window
         if (e.Content is MainPage mainPage)
         {
             mainPage.SettingsRequested += OnSettingsRequested;
+            mainPage.DashboardRequested += OnDashboardRequested;
             mainPage.ProviderDetailRequested += OnProviderDetailRequested;
         }
         else if (e.Content is ProviderDetailPage detailPage)
@@ -247,6 +248,18 @@ public sealed partial class MainWindow : Window
             settingsWindow.Activate();
         }
         catch (Exception ex) { App.Services.GetRequiredService<ILogger<MainWindow>>().LogError(ex, "Opening Settings failed"); }
+    }
+
+    private void OnDashboardRequested(object? sender, EventArgs e)
+    {
+        try
+        {
+            var dashboard = App.Windows.OfType<DashboardWindow>().FirstOrDefault() ?? new DashboardWindow();
+            dashboard.Activate();
+            // The flyout is a quick glance; once the full dashboard is open it only gets in the way
+            HideWindow();
+        }
+        catch (Exception ex) { App.Services.GetRequiredService<ILogger<MainWindow>>().LogError(ex, "Opening the dashboard failed"); }
     }
 
     private void OnProviderDetailRequested(object? sender, UsageData data)

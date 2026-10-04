@@ -73,6 +73,7 @@
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
 
                 <!-- Last updated text -->
@@ -84,9 +85,26 @@
                     Foreground="{ThemeResource TextFillColorTertiaryBrush}"
                     VerticalAlignment="Center"/>
 
-                <!-- Refresh button -->
+                <!-- Dashboard button: opens the full-window dashboard -->
                 <Button
                     Grid.Column="1"
+                    x:Name="DashboardButton"
+                    AutomationProperties.Name="Open dashboard"
+                    ToolTipService.ToolTip="Open the full dashboard window"
+                    Click="OnDashboardClicked"
+                    Padding="10,6"
+                    Margin="0,0,4,0"
+                    Background="Transparent"
+                    BorderBrush="Transparent">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <FontIcon FontFamily="Segoe Fluent Icons" Glyph="&#xE8A7;" FontSize="14"/>
+                        <TextBlock Text="Dashboard" FontSize="12"/>
+                    </StackPanel>
+                </Button>
+
+                <!-- Refresh button -->
+                <Button
+                    Grid.Column="2"
                     x:Name="RefreshButton"
                     AutomationProperties.Name="Refresh usage"
                     ToolTipService.ToolTip="Refresh"
@@ -100,7 +118,7 @@
 
                 <!-- Settings button -->
                 <Button
-                    Grid.Column="2"
+                    Grid.Column="3"
                     x:Name="SettingsButton"
                     AutomationProperties.Name="Settings"
                     ToolTipService.ToolTip="Settings"

@@ -1,0 +1,130 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Page
+    x:Class="CodexBarWin.Views.DashboardPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:views="using:CodexBarWin.Views"
+    xmlns:controls="using:CodexBarWin.Controls"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d"
+    Background="Transparent">
+
+    <Grid Padding="24,4,24,0" RowSpacing="14">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>   <!-- Toolbar -->
+            <RowDefinition Height="Auto"/>   <!-- Headline tiles -->
+            <RowDefinition Height="*"/>      <!-- Providers + diagnostics -->
+        </Grid.RowDefinitions>
+
+        <!-- Toolbar -->
+        <Grid Grid.Row="0" ColumnSpacing="8">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <StackPanel VerticalAlignment="Center">
+                <TextBlock Text="Dashboard" FontSize="26" FontWeight="SemiBold"/>
+                <TextBlock x:Name="SubtitleText" FontSize="12"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+            </StackPanel>
+            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                <Button x:Name="RefreshButton" Click="OnRefreshClicked" AutomationProperties.Name="Refresh now"
+                        ToolTipService.ToolTip="Refresh now" Padding="12,7">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <FontIcon x:Name="RefreshIcon" FontFamily="Segoe Fluent Icons" Glyph="&#xE72C;" FontSize="14"/>
+                        <ProgressRing x:Name="RefreshRing" Width="14" Height="14" IsActive="False" Visibility="Collapsed"/>
+                        <TextBlock Text="Refresh" FontSize="13"/>
+                    </StackPanel>
+                </Button>
+                <ToggleButton x:Name="TopmostToggle" Click="OnTopmostClicked" AutomationProperties.Name="Keep on top"
+                              ToolTipService.ToolTip="Keep this window above others" Padding="10,7">
+                    <FontIcon FontFamily="Segoe Fluent Icons" Glyph="&#xE840;" FontSize="14"/>
+                </ToggleButton>
+                <ToggleButton x:Name="FullScreenToggle" Click="OnFullScreenClicked" AutomationProperties.Name="Full screen"
+                              ToolTipService.ToolTip="Full screen (F11)" Padding="10,7">
+                    <FontIcon FontFamily="Segoe Fluent Icons" Glyph="&#xE740;" FontSize="14"/>
+                </ToggleButton>
+                <Button Click="OnSettingsClicked" AutomationProperties.Name="Settings" ToolTipService.ToolTip="Settings"
+                        Padding="10,7">
+                    <FontIcon FontFamily="Segoe Fluent Icons" Glyph="&#xE713;" FontSize="14"/>
+                </Button>
+            </StackPanel>
+        </Grid>
+
+        <!-- Headline tiles -->
+        <ItemsRepeater Grid.Row="1" x:Name="TilesRepeater">
+            <ItemsRepeater.Layout>
+                <UniformGridLayout MinItemWidth="200" MinColumnSpacing="10" MinRowSpacing="10" ItemsStretch="Fill"/>
+            </ItemsRepeater.Layout>
+            <ItemsRepeater.ItemTemplate>
+                <DataTemplate x:DataType="views:DashboardTile">
+                    <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                            BorderThickness="1" CornerRadius="8">
+                        <Grid>
+                            <Border Height="3" VerticalAlignment="Top" CornerRadius="8,8,0,0" Background="{x:Bind Accent}"/>
+                            <StackPanel Padding="14,12,14,12" Spacing="1">
+                                <TextBlock Text="{x:Bind Label}" FontSize="11" FontWeight="SemiBold" CharacterSpacing="60"
+                                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                                <TextBlock Text="{x:Bind Value}" FontSize="22" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
+                                <TextBlock Text="{x:Bind Sub}" FontSize="11" TextWrapping="Wrap" MaxLines="2" TextTrimming="CharacterEllipsis"
+                                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                            </StackPanel>
+                        </Grid>
+                    </Border>
+                </DataTemplate>
+            </ItemsRepeater.ItemTemplate>
+        </ItemsRepeater>
+
+        <!-- Providers and diagnostics -->
+        <ScrollViewer Grid.Row="2" x:Name="MainScroll" VerticalScrollBarVisibility="Auto" Padding="0,0,12,24"
+                      SizeChanged="OnScrollSizeChanged">
+            <Grid x:Name="ContentGrid" ColumnSpacing="14" RowSpacing="14">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition x:Name="DiagnosticsColumn" Width="380"/>
+                </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+
+                <Grid x:Name="ProvidersGrid" Grid.Column="0" Grid.Row="0" ColumnSpacing="14" RowSpacing="14"/>
+
+                <controls:DashboardDiagnosticsPanel x:Name="Diagnostics" Grid.Column="1" Grid.Row="0"
+                                                    VerticalAlignment="Top"/>
+
+                <!-- Shown when no provider is enabled -->
+                <StackPanel x:Name="EmptyPanel" Grid.Column="0" Grid.Row="0" Visibility="Collapsed"
+                            HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="6" Padding="0,60">
+                    <FontIcon FontFamily="Segoe Fluent Icons" Glyph="&#xE7BA;" FontSize="30"
+                              Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                    <TextBlock Text="No providers to show" FontSize="16" FontWeight="SemiBold" HorizontalAlignment="Center"/>
+                    <TextBlock Text="Turn providers on in Settings." Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                               HorizontalAlignment="Center"/>
+                </StackPanel>
+            </Grid>
+        </ScrollViewer>
+
+        <VisualStateManager.VisualStateGroups>
+            <VisualStateGroup>
+                <VisualState x:Name="WideLayout">
+                    <VisualState.StateTriggers>
+                        <AdaptiveTrigger MinWindowWidth="1500"/>
+                    </VisualState.StateTriggers>
+                </VisualState>
+                <VisualState x:Name="NarrowLayout">
+                    <VisualState.StateTriggers>
+                        <AdaptiveTrigger MinWindowWidth="0"/>
+                    </VisualState.StateTriggers>
+                    <VisualState.Setters>
+                        <Setter Target="Diagnostics.(Grid.Column)" Value="0"/>
+                        <Setter Target="Diagnostics.(Grid.Row)" Value="1"/>
+                        <Setter Target="DiagnosticsColumn.Width" Value="0"/>
+                    </VisualState.Setters>
+                </VisualState>
+            </VisualStateGroup>
+        </VisualStateManager.VisualStateGroups>
+    </Grid>
+</Page>
