@@ -20,6 +20,7 @@
             <RowDefinition Height="Auto"/>  <!-- Header: Icon, Name, Status indicator -->
             <RowDefinition Height="Auto"/>  <!-- Session bar section -->
             <RowDefinition Height="Auto"/>  <!-- Weekly bar section -->
+            <RowDefinition Height="Auto"/>  <!-- Extra windows (e.g. Fable only, Claude and GPT quota) -->
         </Grid.RowDefinitions>
 
         <!-- Header: Icon, Name, Status indicator -->
@@ -175,6 +176,76 @@
                     VerticalAlignment="Center"/>
             </Grid>
         </Grid>
+
+        <!-- Extra windows: one bar each, same style as session/weekly -->
+        <ItemsControl
+            Grid.Row="3"
+            x:Name="ExtraList"
+            IsTabStop="False"
+            Visibility="Collapsed">
+            <ItemsControl.ItemsPanel>
+                <ItemsPanelTemplate>
+                    <StackPanel Spacing="6" Margin="0,6,0,0"/>
+                </ItemsPanelTemplate>
+            </ItemsControl.ItemsPanel>
+            <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="local:CardExtraRow">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+
+                        <Grid Grid.Row="0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <local:UsageMeter
+                                Grid.Column="0"
+                                Height="8"
+                                VerticalAlignment="Center"
+                                IsSpecial="True"
+                                Percent="{x:Bind Percent}"
+                                TimePercent="{x:Bind TimePercent}"
+                                PaceText="{x:Bind PaceText}"/>
+                            <TextBlock
+                                Grid.Column="1"
+                                Text="{x:Bind Title}"
+                                Margin="8,0,0,0"
+                                MaxWidth="150"
+                                TextTrimming="CharacterEllipsis"
+                                TextWrapping="NoWrap"
+                                Style="{StaticResource CaptionTextBlockStyle}"
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                VerticalAlignment="Center"
+                                TextAlignment="Right"
+                                ToolTipService.ToolTip="{x:Bind Title}"/>
+                        </Grid>
+
+                        <Grid Grid.Row="1" Margin="0,3,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock
+                                Grid.Column="0"
+                                Text="{x:Bind PercentText}"
+                                FontSize="11"
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                VerticalAlignment="Center"/>
+                            <TextBlock
+                                Grid.Column="2"
+                                Text="{x:Bind ResetText}"
+                                Style="{StaticResource CaptionTextBlockStyle}"
+                                Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                VerticalAlignment="Center"/>
+                        </Grid>
+                    </Grid>
+                </DataTemplate>
+            </ItemsControl.ItemTemplate>
+        </ItemsControl>
 
         <!-- Error message overlay (shown when error and no data) -->
         <Grid Grid.Row="1" Grid.RowSpan="2" x:Name="ErrorPanel" Visibility="Collapsed" MinHeight="40">

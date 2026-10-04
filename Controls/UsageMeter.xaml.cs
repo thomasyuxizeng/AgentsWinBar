@@ -49,6 +49,24 @@ public sealed partial class UsageMeter : UserControl
         set => SetValue(PaceTextProperty, value);
     }
 
+    /// <summary>
+    /// True for the extra windows (Fable only, Claude and GPT quota, ...) as opposed to the main
+    /// session and weekly ones: their bar uses a different colour so the two kinds can be told apart.
+    /// Warning colours (amber, red) are the same for both because urgency matters more.
+    /// </summary>
+    public static readonly DependencyProperty IsSpecialProperty =
+        DependencyProperty.Register(
+            nameof(IsSpecial),
+            typeof(bool),
+            typeof(UsageMeter),
+            new PropertyMetadata(false, OnPercentChanged));
+
+    public bool IsSpecial
+    {
+        get => (bool)GetValue(IsSpecialProperty);
+        set => SetValue(IsSpecialProperty, value);
+    }
+
     public double Percent
     {
         get => (double)GetValue(PercentProperty);
@@ -86,7 +104,7 @@ public sealed partial class UsageMeter : UserControl
         var percent = Math.Clamp(Percent, 0, 100);
 
         UsageBar.Width = ActualWidth * (percent / 100.0);
-        UsageBar.Fill = GetBarColor(percent);
+        UsageBar.Fill = GetBarColor(percent, IsSpecial);
 
         if (TimePercent < 0)
         {
@@ -119,10 +137,11 @@ public sealed partial class UsageMeter : UserControl
         ToolTipService.SetToolTip(this, tip);
     }
 
-    private static SolidColorBrush GetBarColor(double percent) => percent switch
+    private static SolidColorBrush GetBarColor(double percent, bool special) => percent switch
     {
         >= 95 => new SolidColorBrush(Color.FromArgb(255, 232, 17, 35)),   // Red - Critical
         >= 80 => new SolidColorBrush(Color.FromArgb(255, 255, 185, 0)),   // Yellow - Warning
+        _ when special => new SolidColorBrush(Color.FromArgb(255, 20, 184, 166)),   // Teal - special window, normal
         _ => new SolidColorBrush(Color.FromArgb(255, 0, 120, 212))        // Blue - Normal
     };
 }

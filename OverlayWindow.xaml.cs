@@ -28,6 +28,8 @@ public sealed class OverlayRow
     public double WeeklyTimePercent { get; set; } = -1;
     public string SessionPace { get; set; } = string.Empty;
     public string WeeklyPace { get; set; } = string.Empty;
+    public bool SessionSpecial { get; set; }
+    public bool WeeklySpecial { get; set; }
     public string WeeklyText { get; set; } = string.Empty;
     public Microsoft.UI.Xaml.GridLength SessionNumberColumn { get; set; }
     public Microsoft.UI.Xaml.GridLength WeeklyNumberColumn { get; set; }
@@ -233,23 +235,31 @@ public sealed partial class OverlayWindow : Window
 
     private static OverlayRow ToRow(UsageData data)
     {
-        (double Percent, string Text) Cell(UsageWindow? window) =>
-            window != null ? (window.Percent, window.PercentText) : (0, data.IsLoading ? "…" : "–");
+        // The two most relevant bars: normally session + weekly, but a more relevant window
+        // (at/near its limit, ahead of schedule, or recently changed) can take a slot
+        var bars = WidgetBarSelector.Pick(data, DateTime.UtcNow);
+        var first = bars.ElementAtOrDefault(0);
+        var second = bars.ElementAtOrDefault(1);
 
-        var session = Cell(data.Session);
-        var weekly = Cell(data.Weekly);
+        (double Percent, string Text) Cell(WidgetBar? bar) =>
+            bar != null ? (bar.Window.Percent, bar.Window.PercentText) : (0, data.IsLoading ? "…" : "–");
+
+        var firstCell = Cell(first);
+        var secondCell = Cell(second);
         return new OverlayRow
         {
             Name = ProviderIcons.GetDisplayName(data.Provider),
             Icon = ProviderIcons.GetGeometry(data.Provider),
-            SessionPercent = session.Percent,
-            SessionTimePercent = data.Session?.ElapsedPercent ?? -1,
-            SessionText = session.Text,
-            WeeklyPercent = weekly.Percent,
-            WeeklyTimePercent = data.Weekly?.ElapsedPercent ?? -1,
-            SessionPace = data.Session?.PaceSummary ?? string.Empty,
-            WeeklyPace = data.Weekly?.PaceSummary ?? string.Empty,
-            WeeklyText = weekly.Text
+            SessionPercent = firstCell.Percent,
+            SessionTimePercent = first?.Window.ElapsedPercent ?? -1,
+            SessionText = firstCell.Text,
+            WeeklyPercent = secondCell.Percent,
+            WeeklyTimePercent = second?.Window.ElapsedPercent ?? -1,
+            SessionPace = first?.TooltipText ?? string.Empty,
+            WeeklyPace = second?.TooltipText ?? string.Empty,
+            SessionSpecial = first?.Title != null,
+            WeeklySpecial = second?.Title != null,
+            WeeklyText = secondCell.Text
         };
     }
 

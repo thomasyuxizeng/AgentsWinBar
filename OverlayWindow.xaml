@@ -61,7 +61,8 @@
                             VerticalAlignment="Center"
                             Percent="{x:Bind SessionPercent}"
                             TimePercent="{x:Bind SessionTimePercent}"
-                            PaceText="{x:Bind SessionPace}"/>
+                            PaceText="{x:Bind SessionPace}"
+                            IsSpecial="{x:Bind SessionSpecial}"/>
                         <TextBlock
                             Grid.Column="2"
                             Text="{x:Bind SessionText}"
@@ -76,7 +77,8 @@
                             VerticalAlignment="Center"
                             Percent="{x:Bind WeeklyPercent}"
                             TimePercent="{x:Bind WeeklyTimePercent}"
-                            PaceText="{x:Bind WeeklyPace}"/>
+                            PaceText="{x:Bind WeeklyPace}"
+                            IsSpecial="{x:Bind WeeklySpecial}"/>
                         <TextBlock
                             Grid.Column="4"
                             Text="{x:Bind WeeklyText}"

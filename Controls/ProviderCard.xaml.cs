@@ -7,6 +7,19 @@ using Microsoft.UI.Xaml.Media;
 namespace CodexBarWin.Controls;
 
 /// <summary>
+/// One extra usage window on a provider card (e.g. "Fable only").
+/// </summary>
+public sealed class CardExtraRow
+{
+    public string Title { get; set; } = string.Empty;
+    public double Percent { get; set; }
+    public double TimePercent { get; set; } = -1;
+    public string PaceText { get; set; } = string.Empty;
+    public string PercentText { get; set; } = string.Empty;
+    public string ResetText { get; set; } = string.Empty;
+}
+
+/// <summary>
 /// A card control for displaying provider usage data.
 /// </summary>
 public sealed partial class ProviderCard : UserControl
@@ -86,6 +99,19 @@ public sealed partial class ProviderCard : UserControl
         var hasSessionData = Data.Session != null;
         var hasWeeklyData = Data.Weekly != null;
         var hasAnyData = hasSessionData || hasWeeklyData;
+
+        // Extra windows (Fable only, Claude and GPT quota, ...) get their own bars under session/weekly
+        var extras = hasAnyData ? Data.ExtraWindows : [];
+        ExtraList.ItemsSource = extras.Select(x => new CardExtraRow
+        {
+            Title = x.Title,
+            Percent = x.Window.Percent,
+            TimePercent = x.Window.ElapsedPercent ?? -1,
+            PaceText = x.Window.PaceSummary,
+            PercentText = x.Window.PercentText,
+            ResetText = x.Window.ResetText
+        }).ToList();
+        ExtraList.Visibility = extras.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
 
         if (hasAnyData)
         {

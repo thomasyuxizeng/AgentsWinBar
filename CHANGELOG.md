@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Gemini windows are labelled "5-hour" and "Weekly" instead of "Pro" and "Flash"
 
 ### Added
+- Extra usage windows now appear on the main flyout cards too: Claude's "Fable only" bar, and Antigravity's Claude and GPT quota on Gemini's card. They use a teal bar (amber and red still apply) so they stand out from the main session and weekly bars
+- The floating overlay and the taskbar strip now show each provider's most relevant two bars instead of always session and weekly: a window at or near its limit, running ahead of schedule, or recently changed takes a slot (at most one extra window per row; hover a bar to see which window it is). The app remembers when each bar last moved to do this
 - Gemini's detail page also shows Antigravity's separate Claude and GPT quota (5-hour and weekly) with the usual bars, pace and reset times; it is not shown in the always-on overlay or taskbar strip. Any extra windows the CodexBar CLI reports are shown the same way
 - Projected run-out time in every usage bar's hover tooltip, e.g. "At this pace you'll hit the limit in 1h 20m, 3h 10m before the reset" (or the usage you're on track for by the reset)
 - Usage alerts: a Windows notification when usage is far ahead of pace (25+ points and the limit would be hit well before the reset), nearly out (90%+), or at the limit; once per usage window. Settings toggle (on by default) and a "Send test notification" button

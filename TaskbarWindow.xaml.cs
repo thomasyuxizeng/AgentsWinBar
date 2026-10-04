@@ -28,6 +28,8 @@ public sealed class TaskbarItem
     public double WeeklyTimePercent { get; set; } = -1;
     public string SessionPace { get; set; } = string.Empty;
     public string WeeklyPace { get; set; } = string.Empty;
+    public bool SessionSpecial { get; set; }
+    public bool WeeklySpecial { get; set; }
     public string SessionText { get; set; } = string.Empty;
     public string WeeklyText { get; set; } = string.Empty;
     public Brush SessionBrush { get; set; } = null!;
@@ -213,29 +215,44 @@ public sealed partial class TaskbarWindow : Window
         foreach (var data in _viewModel.Providers)
         {
             var name = ProviderIcons.GetDisplayName(data.Provider);
-            var session = Cell(data.Session, data.IsLoading);
-            var weekly = Cell(data.Weekly, data.IsLoading);
+
+            // The two most relevant bars: normally session + weekly, but a more relevant window
+            // (at/near its limit, ahead of schedule, or recently changed) can take a slot
+            var bars = WidgetBarSelector.Pick(data, DateTime.UtcNow);
+            var first = bars.ElementAtOrDefault(0);
+            var second = bars.ElementAtOrDefault(1);
+            var firstText = Cell(first?.Window, data.IsLoading);
+            var secondText = Cell(second?.Window, data.IsLoading);
 
             Items.Add(new TaskbarItem
             {
                 Name = name,
                 Icon = ProviderIcons.GetGeometry(data.Provider),
-                SessionPercent = data.Session?.Percent ?? 0,
-                WeeklyPercent = data.Weekly?.Percent ?? 0,
-                SessionTimePercent = data.Session?.ElapsedPercent ?? -1,
-                WeeklyTimePercent = data.Weekly?.ElapsedPercent ?? -1,
-                SessionPace = data.Session?.PaceSummary ?? string.Empty,
-                WeeklyPace = data.Weekly?.PaceSummary ?? string.Empty,
-                SessionText = session,
-                WeeklyText = weekly,
-                SessionBrush = WarningBrush(data.Session) ?? primary,
-                WeeklyBrush = WarningBrush(data.Weekly) ?? primary,
-                ToolTip = $"{name}: {data.SessionLabel} {session}, {data.WeeklyLabel} {weekly}"
+                SessionPercent = first?.Window.Percent ?? 0,
+                WeeklyPercent = second?.Window.Percent ?? 0,
+                SessionTimePercent = first?.Window.ElapsedPercent ?? -1,
+                WeeklyTimePercent = second?.Window.ElapsedPercent ?? -1,
+                SessionPace = first?.TooltipText ?? string.Empty,
+                WeeklyPace = second?.TooltipText ?? string.Empty,
+                SessionSpecial = first?.Title != null,
+                WeeklySpecial = second?.Title != null,
+                SessionText = firstText,
+                WeeklyText = secondText,
+                SessionBrush = WarningBrush(first?.Window) ?? primary,
+                WeeklyBrush = WarningBrush(second?.Window) ?? primary,
+                ToolTip = $"{name}: {BarLabel(data, first)} {firstText}, {BarLabel(data, second)} {secondText}"
             });
         }
 
         Reposition();
     }
+
+    /// <summary>
+    /// Name of a bar for the tooltip: its own title for extra windows, otherwise the session/weekly label.
+    /// </summary>
+    private static string BarLabel(UsageData data, WidgetBar? bar) =>
+        bar == null ? string.Empty
+        : bar.Title ?? (ReferenceEquals(bar.Window, data.Session) ? data.SessionLabel : data.WeeklyLabel);
 
     private static string Cell(UsageWindow? window, bool isLoading) =>
         window?.PercentText ?? (isLoading ? "…" : "–");

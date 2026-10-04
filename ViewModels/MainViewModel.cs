@@ -147,7 +147,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
                 if (index >= 0)
                 {
-                    Providers[index] = data;
+                    // Remember which bars moved, so the compact widgets can show the ones that matter
+                    Providers[index] = UsageChangeTracker.Annotate(data, Providers[index], DateTime.UtcNow);
                 }
                 else if (isFirstLoad)
                 {

@@ -79,6 +79,12 @@ public record UsageWindow
     public int WindowMinutes { get; init; }
 
     /// <summary>
+    /// When this window's usage last changed between refreshes (null until a change has been seen).
+    /// Used to show the bars that are actually moving.
+    /// </summary>
+    public DateTime? LastChangedAt { get; init; }
+
+    /// <summary>
     /// How far through the window we are (0-100), or null if the window length or reset time is unknown.
     /// Compare with <see cref="Percent"/> to see whether usage is running ahead of or behind time.
     /// </summary>
