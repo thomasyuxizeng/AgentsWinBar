@@ -74,6 +74,10 @@ public sealed partial class ProviderCard : UserControl
         // Provider name
         ProviderName.Text = FormatProviderName(Data.Provider);
 
+        CostSummary.Visibility = Data.Cost?.HasData == true ? Visibility.Visible : Visibility.Collapsed;
+        CostSummary.Text = Data.Cost != null ? Helpers.CostFormatter.Summary(Data.Cost) : string.Empty;
+        ToolTipService.SetToolTip(CostSummary, CostSummary.Text + "\nList-price estimates, not billing.");
+
         // Check state
         var isLoading = Data.IsLoading;
         var hasError = Data.HasError && Data.Session == null;

@@ -14,6 +14,11 @@ public class CodexBarService : ICodexBarService
     private readonly ISettingsService _settingsService;
     private readonly ISampleDataLoader _sampleDataLoader;
     private readonly ILogger<CodexBarService> _logger;
+    private readonly TimeProvider _timeProvider;
+    private readonly Func<string> _userProfile;
+    private readonly Func<string, bool> _directoryExists;
+    private readonly SemaphoreSlim _costGate = new(1, 1);
+    private readonly Dictionary<string, (DateTimeOffset AttemptedAt, CostData? Data)> _costCache = [];
 
 
     public CodexBarService(
@@ -21,13 +26,63 @@ public class CodexBarService : ICodexBarService
         ICacheService cacheService,
         ISettingsService settingsService,
         ISampleDataLoader sampleDataLoader,
-        ILogger<CodexBarService> logger)
+        ILogger<CodexBarService> logger,
+        TimeProvider? timeProvider = null,
+        Func<string>? userProfile = null,
+        Func<string, bool>? directoryExists = null)
     {
         _wslService = wslService;
         _cacheService = cacheService;
         _settingsService = settingsService;
         _sampleDataLoader = sampleDataLoader;
         _logger = logger;
+        _timeProvider = timeProvider ?? TimeProvider.System;
+        _userProfile = userProfile ?? (() => Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
+        _directoryExists = directoryExists ?? Directory.Exists;
+    }
+
+    public async Task<CostData?> GetCostAsync(string provider, bool forceRefresh = false, CancellationToken ct = default)
+    {
+        var acquired = false;
+        try
+        {
+            var normalized = ProviderConstants.ValidateAndNormalize(provider);
+            if (!_settingsService.Settings.ShowCostTotals || _settingsService.Settings.DeveloperModeEnabled) return null;
+            await _costGate.WaitAsync(ct);
+            acquired = true;
+            var now = _timeProvider.GetUtcNow();
+            if (!forceRefresh && _costCache.TryGetValue(normalized, out var cached) &&
+                now - cached.AttemptedAt < TimeSpan.FromMinutes(15)) return cached.Data;
+
+            _costCache[normalized] = (now, null); // Back off on errors too.
+            var command = Helpers.CostCommandBuilder.Build(normalized, _userProfile(), _directoryExists);
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(TimeSpan.FromSeconds(Math.Max(60, _settingsService.Settings.Timeouts.CliProviderFirstFetchTimeoutSeconds)));
+            var result = await _wslService.ExecuteAsync(command, cts.Token);
+            if (!result.Success || string.IsNullOrWhiteSpace(result.Output))
+            {
+                _logger.LogDebug("Cost scan returned no data for {Provider} (exit {ExitCode})", normalized, result.ExitCode);
+                return null;
+            }
+            var json = result.Output.Trim();
+            var dto = json.StartsWith('[')
+                ? JsonSerializer.Deserialize(json, AppJsonSerializerContext.Default.ListCostDataDto)?.FirstOrDefault()
+                : JsonSerializer.Deserialize(json, AppJsonSerializerContext.Default.CostDataDto);
+            if (dto == null || !string.Equals(dto.Provider, normalized == "gemini" ? "antigravity" : normalized,
+                StringComparison.OrdinalIgnoreCase)) return null;
+            var data = dto.ToCostData(normalized, now.UtcDateTime);
+            _costCache[normalized] = (now, data.HasData ? data : null);
+            return data.HasData ? data : null;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Cost scan unavailable for {Provider}", provider);
+            return null;
+        }
+        finally
+        {
+            if (acquired) _costGate.Release();
+        }
     }
 
     public async Task<UsageData?> GetUsageAsync(string provider, CancellationToken ct = default)

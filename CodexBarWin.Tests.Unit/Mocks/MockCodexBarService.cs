@@ -8,6 +8,8 @@ namespace CodexBarWin.Tests.Unit.Mocks;
 /// </summary>
 public class MockCodexBarService : ICodexBarService
 {
+    public Task<CostData?> GetCostAsync(string provider, bool forceRefresh = false, CancellationToken ct = default) =>
+        Task.FromResult<CostData?>(null);
     private readonly Dictionary<string, UsageData?> _usageData = new();
     private string? _version = "1.0.0";
     private bool _isAvailable = true;

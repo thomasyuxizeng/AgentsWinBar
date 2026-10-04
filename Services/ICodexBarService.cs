@@ -7,6 +7,9 @@ namespace CodexBarWin.Services;
 /// </summary>
 public interface ICodexBarService
 {
+    /// <summary>Scans local logs at most every 15 minutes, unless manually refreshed.</summary>
+    Task<CostData?> GetCostAsync(string provider, bool forceRefresh = false, CancellationToken ct = default);
+
     /// <summary>
     /// Gets usage data for a specific provider.
     /// </summary>

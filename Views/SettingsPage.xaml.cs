@@ -64,6 +64,7 @@ public sealed partial class SettingsPage : Page
         AlwaysOnOverlayToggle.IsOn = ViewModel.AlwaysOnOverlay;
         TaskbarDisplayToggle.IsOn = ViewModel.TaskbarDisplay;
         AlertsToggle.IsOn = ViewModel.AlertsEnabled;
+        CostTotalsToggle.IsOn = ViewModel.ShowCostTotals;
         DeveloperModeToggle.IsOn = ViewModel.DeveloperModeEnabled;
     }
 
@@ -102,6 +103,7 @@ public sealed partial class SettingsPage : Page
             ViewModel.AlwaysOnOverlay = AlwaysOnOverlayToggle.IsOn;
             ViewModel.TaskbarDisplay = TaskbarDisplayToggle.IsOn;
             ViewModel.AlertsEnabled = AlertsToggle.IsOn;
+            ViewModel.ShowCostTotals = CostTotalsToggle.IsOn;
             ViewModel.DeveloperModeEnabled = DeveloperModeToggle.IsOn;
 
             await ViewModel.SaveCommand.ExecuteAsync(null);

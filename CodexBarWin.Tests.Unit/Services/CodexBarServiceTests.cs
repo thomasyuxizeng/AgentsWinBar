@@ -54,6 +54,106 @@ public class CodexBarServiceTests
         _mockWslService.ExecutedCommands[0].Should().Contain("--status");
     }
 
+    private sealed class CostClock : TimeProvider
+    {
+        public DateTimeOffset Now { get; set; } = new(2026, 10, 4, 10, 0, 0, TimeSpan.Zero);
+        public override DateTimeOffset GetUtcNow() => Now;
+    }
+
+    private CodexBarService CostService(CostClock? clock = null, string profile = "C:\\Users\\Test", bool folderExists = true) =>
+        new(_mockWslService, _mockCacheService, _mockSettingsService, _mockSampleDataLoader, _mockLogger.Object,
+            clock, () => profile, _ => folderExists);
+
+    private void SetCostResponse(string provider = "claude", bool success = true, string? json = null)
+    {
+        var command = CodexBarWin.Helpers.CostCommandBuilder.Build(provider, "C:\\Users\\Test", _ => true);
+        var cliProvider = provider == "gemini" ? "antigravity" : provider;
+        _mockWslService.SetCommandResult(command, new WslResult { Success = success, ExitCode = success ? 0 : 3,
+            Output = json ?? $$$"""[{"provider":"{{{cliProvider}}}","sessionCostUSD":1.5,"last30DaysCostUSD":5,"last30DaysTokens":123456,"daily":[]}]""" });
+    }
+
+    [TestMethod]
+    public async Task GetCostAsync_WhenRepeated_UsesCacheUntilFifteenMinutesAndManualRefreshBypassesIt()
+    {
+        var clock = new CostClock();
+        var service = CostService(clock);
+        SetCostResponse();
+        var first = await service.GetCostAsync("claude");
+        first!.TodayCostUSD.Should().Be(1.5m);
+        (await service.GetCostAsync("claude")).Should().BeSameAs(first);
+        clock.Now += TimeSpan.FromMinutes(14);
+        await service.GetCostAsync("claude");
+        _mockWslService.ExecutedCommands.Should().ContainSingle();
+        clock.Now += TimeSpan.FromMinutes(1);
+        await service.GetCostAsync("claude");
+        await service.GetCostAsync("claude", forceRefresh: true);
+        _mockWslService.ExecutedCommands.Should().HaveCount(3);
+    }
+
+    [TestMethod]
+    public async Task GetCostAsync_WhenDifferentProviders_CachesThemIndependently()
+    {
+        SetCostResponse("claude"); SetCostResponse("codex"); SetCostResponse("gemini");
+        var service = CostService();
+        foreach (var provider in new[] { "claude", "codex", "gemini" })
+            (await service.GetCostAsync(provider))!.Provider.Should().Be(provider);
+        _mockWslService.ExecutedCommands.Should().HaveCount(3);
+        _mockWslService.ExecutedCommands[2].Should().Be("codexbar cost --provider antigravity --format json --refresh");
+    }
+
+    [TestMethod]
+    [DataRow(false, "ignored")]
+    [DataRow(true, "bad json")]
+    [DataRow(true, "[]")]
+    [DataRow(true, "[{\"provider\":\"claude\",\"daily\":[]}]")]
+    [DataRow(true, "[{\"provider\":\"codex\",\"last30DaysTokens\":15}]")]
+    public async Task GetCostAsync_WhenFailedMalformedEmptyOrWrongProvider_HidesSectionAndBacksOff(bool success, string json)
+    {
+        var clock = new CostClock(); var service = CostService(clock);
+        SetCostResponse(success: success, json: json);
+        (await service.GetCostAsync("claude")).Should().BeNull();
+        (await service.GetCostAsync("claude")).Should().BeNull();
+        _mockWslService.ExecutedCommands.Should().ContainSingle();
+        clock.Now += TimeSpan.FromMinutes(15); SetCostResponse();
+        (await service.GetCostAsync("claude")).Should().NotBeNull();
+    }
+
+    [TestMethod]
+    [DataRow(false, false)]
+    [DataRow(true, true)]
+    public async Task GetCostAsync_WhenDisabledOrDeveloperMode_DoesNotScan(bool enabled, bool developer)
+    {
+        _mockSettingsService.Settings.ShowCostTotals = enabled;
+        _mockSettingsService.Settings.DeveloperModeEnabled = developer;
+        (await CostService().GetCostAsync("claude")).Should().BeNull();
+        _mockWslService.ExecutedCommands.Should().BeEmpty();
+    }
+
+    [TestMethod]
+    public async Task GetCostAsync_WhenCancelled_DoesNotExecuteOrPoisonGate()
+    {
+        var service = CostService(); var cts = new CancellationTokenSource(); cts.Cancel();
+        (await service.GetCostAsync("claude", ct: cts.Token)).Should().BeNull();
+        _mockWslService.ExecutedCommands.Should().BeEmpty();
+        SetCostResponse();
+        (await service.GetCostAsync("claude")).Should().NotBeNull();
+    }
+
+    [TestMethod]
+    public async Task GetCostAsync_WhenUnsafeProviderOrProfile_DoesNotExecuteShell()
+    {
+        (await CostService().GetCostAsync("claude; touch x")).Should().BeNull();
+        (await CostService(profile: "C:\\Users\\x'bad").GetCostAsync("claude")).Should().BeNull();
+        _mockWslService.ExecutedCommands.Should().BeEmpty();
+    }
+
+    [TestMethod]
+    public async Task GetCostAsync_WhenSingleObject_ParsesTokenOnlyData()
+    {
+        SetCostResponse(json: """{"provider":"claude","last30DaysTokens":10}""");
+        (await CostService().GetCostAsync("claude"))!.Last30DaysTokens.Should().Be(10);
+    }
+
     [TestMethod]
     [DataRow("claude", "")]
     [DataRow("codex", "")]

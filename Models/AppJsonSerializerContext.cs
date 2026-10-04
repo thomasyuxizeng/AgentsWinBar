@@ -15,6 +15,12 @@ namespace CodexBarWin.Models;
 [JsonSerializable(typeof(List<UsageDataDto>))]
 [JsonSerializable(typeof(ProviderStatusDto))]
 [JsonSerializable(typeof(ProviderStatus))]
+[JsonSerializable(typeof(CostDataDto))]
+[JsonSerializable(typeof(List<CostDataDto>))]
+[JsonSerializable(typeof(CostData))]
+[JsonSerializable(typeof(CostCoverage))]
+[JsonSerializable(typeof(DailyCost))]
+[JsonSerializable(typeof(ModelCost))]
 public partial class AppJsonSerializerContext : JsonSerializerContext
 {
 }

@@ -7,6 +7,16 @@ namespace CodexBarWin.Tests.Unit.Models;
 public class AppSettingsTests
 {
     [TestMethod]
+    public void ShowCostTotals_WhenOldSettingsOrDefaults_IsOnAndRoundTripsOff()
+    {
+        AppSettings.GetDefaults().ShowCostTotals.Should().BeTrue();
+        var old = System.Text.Json.JsonSerializer.Deserialize("{}", AppJsonSerializerContext.Default.AppSettings)!;
+        old.ShowCostTotals.Should().BeTrue();
+        old.ShowCostTotals = false;
+        var json = System.Text.Json.JsonSerializer.Serialize(old, AppJsonSerializerContext.Default.AppSettings);
+        System.Text.Json.JsonSerializer.Deserialize(json, AppJsonSerializerContext.Default.AppSettings)!.ShowCostTotals.Should().BeFalse();
+    }
+    [TestMethod]
     public void GetDefaults_ReturnsValidDefaults()
     {
         // Act

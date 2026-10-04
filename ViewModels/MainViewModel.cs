@@ -74,7 +74,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _refreshTimer = new PeriodicTimer(interval);
 
         // Initial refresh
-        await RefreshAsync();
+        await RefreshCoreAsync();
 
         // Start periodic refresh
         RunPeriodicRefreshAsync(_timerCts.Token).SafeFireAndForget(
@@ -92,7 +92,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
     }
 
     [RelayCommand]
-    private async Task RefreshAsync()
+    private Task RefreshAsync() => RefreshCoreAsync(forceCostRefresh: true);
+
+    private async Task RefreshCoreAsync(bool forceCostRefresh = false)
     {
         if (IsLoading)
         {
@@ -148,13 +150,25 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 if (index >= 0)
                 {
                     // Remember which bars moved, so the compact widgets can show the ones that matter
-                    Providers[index] = UsageChangeTracker.Annotate(data, Providers[index], DateTime.UtcNow);
+                    var previous = Providers[index];
+                    Providers[index] = UsageChangeTracker.Annotate(data, previous, DateTime.UtcNow) with
+                    {
+                        Cost = _settingsService.Settings.ShowCostTotals ? previous.Cost : null
+                    };
                 }
                 else if (isFirstLoad)
                 {
                     // Provider not in list yet (shouldn't happen normally)
                     Providers.Add(data);
                 }
+            }
+
+            // Usage appears as soon as it arrives. The heavier log scans run afterwards, at a slow cadence.
+            foreach (var provider in Providers.Select(p => p.Provider).ToList())
+            {
+                var cost = await _codexBarService.GetCostAsync(provider, forceCostRefresh, _refreshCts?.Token ?? default);
+                var index = Providers.ToList().FindIndex(p => p.Provider == provider);
+                if (index >= 0) Providers[index] = Providers[index] with { Cost = cost };
             }
 
             LastUpdated = DateTime.Now;
@@ -232,7 +246,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         {
             while (await _refreshTimer.WaitForNextTickAsync(ct))
             {
-                await RefreshAsync();
+                await RefreshCoreAsync();
             }
         }
         catch (OperationCanceledException)
@@ -260,7 +274,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
         {
             _logger.LogDebug("Settings changed, recreating timer and refreshing data");
             RecreateTimer();
-            await RefreshAsync();
+            if (!_settingsService.Settings.ShowCostTotals)
+                for (var i = 0; i < Providers.Count; i++) Providers[i] = Providers[i] with { Cost = null };
+            await RefreshCoreAsync();
         }
         catch (Exception ex)
         {

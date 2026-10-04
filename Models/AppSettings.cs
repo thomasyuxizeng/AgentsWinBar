@@ -65,6 +65,8 @@ public class AppSettings
     /// </summary>
     public bool AlertsEnabled { get; set; } = true;
 
+    public bool ShowCostTotals { get; set; } = true;
+
     /// <summary>
     /// Saved overlay position in screen pixels (null = default corner).
     /// </summary>
@@ -88,6 +90,7 @@ public class AppSettings
         DeveloperModeEnabled = false,
         AlwaysOnOverlayEnabled = false,
         TaskbarDisplayEnabled = false,
-        AlertsEnabled = true
+        AlertsEnabled = true,
+        ShowCostTotals = true
     };
 }

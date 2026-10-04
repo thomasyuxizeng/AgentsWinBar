@@ -21,6 +21,7 @@ public record UsageData
     public bool IsStale => DateTime.UtcNow - FetchedAt > TimeSpan.FromMinutes(5);
     public string? Status { get; init; }
     public ProviderStatus? ServiceStatus { get; init; }
+    public CostData? Cost { get; init; }
     public string? Error { get; init; }
     public bool IsLoading { get; init; }
 

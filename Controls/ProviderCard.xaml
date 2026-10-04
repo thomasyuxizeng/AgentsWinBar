@@ -21,6 +21,7 @@
             <RowDefinition Height="Auto"/>  <!-- Session bar section -->
             <RowDefinition Height="Auto"/>  <!-- Weekly bar section -->
             <RowDefinition Height="Auto"/>  <!-- Extra windows (e.g. Fable only, Claude and GPT quota) -->
+            <RowDefinition Height="Auto"/>  <!-- Local cost estimate -->
         </Grid.RowDefinitions>
 
         <!-- Header: Icon, Name, Status indicator -->
@@ -239,6 +240,10 @@
                 </DataTemplate>
             </ItemsControl.ItemTemplate>
         </ItemsControl>
+
+        <TextBlock Grid.Row="4" x:Name="CostSummary" Visibility="Collapsed" Margin="0,8,0,0"
+                   FontSize="10" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"
+                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
 
         <!-- Error message overlay (shown when error and no data) -->
         <Grid Grid.Row="1" Grid.RowSpan="2" x:Name="ErrorPanel" Visibility="Collapsed" MinHeight="40">

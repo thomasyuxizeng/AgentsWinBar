@@ -10,6 +10,10 @@
 #   * others  -> passed straight through to the real CLI.
 REAL=/opt/codexbar/CodexBarCLI
 
+# Cost readers must bypass usage caching/backoff. Their results depend on log-path environment
+# variables, which are deliberately absent from usage commands and from the usage cache key.
+if [ "${1:-}" = "cost" ]; then exec "$REAL" "$@"; fi
+
 args=("$@"); gem=0; json=0; out=()
 i=0
 while [ $i -lt ${#args[@]} ]; do

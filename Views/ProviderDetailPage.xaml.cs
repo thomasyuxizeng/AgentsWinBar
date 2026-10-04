@@ -3,6 +3,7 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Navigation;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace CodexBarWin.Views;
 
@@ -26,6 +27,7 @@ public sealed class ExtraWindowRow
 public sealed partial class ProviderDetailPage : Page
 {
     private UsageData? _data;
+    private ViewModels.MainViewModel? _viewModel;
 
     public event EventHandler? BackRequested;
 
@@ -41,8 +43,43 @@ public sealed partial class ProviderDetailPage : Page
         if (e.Parameter is UsageData data)
         {
             _data = data;
+            _viewModel = App.Services.GetRequiredService<ViewModels.MainViewModel>();
+            _viewModel.Providers.CollectionChanged += OnProvidersChanged;
             UpdateUI();
         }
+    }
+
+    protected override void OnNavigatedFrom(NavigationEventArgs e)
+    {
+        if (_viewModel != null) _viewModel.Providers.CollectionChanged -= OnProvidersChanged;
+        base.OnNavigatedFrom(e);
+    }
+
+    private void OnProvidersChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
+    {
+        var latest = _viewModel?.Providers.FirstOrDefault(p => p.Provider == _data?.Provider);
+        if (latest != null) { _data = latest; UpdateUI(); }
+    }
+
+    private void OnCostDaysChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (CostChart != null) UpdateCost();
+    }
+
+    private void UpdateCost()
+    {
+        var cost = _data?.Cost;
+        CostSection.Visibility = cost?.HasData == true ? Visibility.Visible : Visibility.Collapsed;
+        if (cost == null) return;
+        CostTotalText.Text = $"30 days: {Helpers.CostFormatter.Money(cost.Last30DaysCostUSD, cost.CurrencyCode)} · {Helpers.CostFormatter.Tokens(cost.Last30DaysTokens)} tokens";
+        CostTodayText.Text = $"Today: {Helpers.CostFormatter.Money(cost.TodayCostUSD, cost.CurrencyCode)} · {Helpers.CostFormatter.Tokens(cost.TodayTokens)} tokens";
+        var days = CostDaysSelector.SelectedItem is ComboBoxItem item && int.TryParse(item.Tag?.ToString(), out var n) ? n : 30;
+        var today = DateOnly.FromDateTime(DateTime.Now);
+        CostChart.SetSeries(Helpers.CostSeriesBuilder.Daily(cost, today, days), cost.CurrencyCode);
+        CostModelsList.ItemsSource = Helpers.CostSeriesBuilder.TopModels(cost, today).Select(m =>
+            $"{m.ModelName}: {(m.Cost.HasValue ? Helpers.CostFormatter.Money(m.Cost.Value, cost.CurrencyCode) : "Unpriced")} · {Helpers.CostFormatter.Tokens(m.TotalTokens)} tokens").ToList();
+        CostNote.Text = $"Local logs · list-price estimates, not billing · captured {cost.FetchedAt.ToLocalTime():g}." +
+            (cost.Coverage.Unpriced > 0 || cost.Coverage.Unmetered > 0 ? " Some models or sessions are unpriced or unmetered." : "");
     }
 
     private void OnBackClicked(object sender, RoutedEventArgs e)
@@ -57,6 +94,7 @@ public sealed partial class ProviderDetailPage : Page
         // Header
         ProviderIcon.Data = GetProviderIconGeometry(_data.Provider);
         ProviderName.Text = FormatProviderName(_data.Provider);
+        UpdateCost();
 
         var status = _data.ServiceStatus;
         ServiceStatusBanner.Visibility = Helpers.ProviderStatusPresentation.ShowBanner(status)

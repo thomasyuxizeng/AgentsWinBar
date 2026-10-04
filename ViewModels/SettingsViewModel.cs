@@ -37,6 +37,9 @@ public partial class SettingsViewModel : ObservableObject
     private bool _alertsEnabled;
 
     [ObservableProperty]
+    private bool _showCostTotals;
+
+    [ObservableProperty]
     private int _selectedThemeIndex;
 
     [ObservableProperty]
@@ -78,6 +81,7 @@ public partial class SettingsViewModel : ObservableObject
         AlwaysOnOverlay = settings.AlwaysOnOverlayEnabled;
         TaskbarDisplay = settings.TaskbarDisplayEnabled;
         AlertsEnabled = settings.AlertsEnabled;
+        ShowCostTotals = settings.ShowCostTotals;
         SelectedThemeIndex = (int)settings.Theme;
         DeveloperModeEnabled = settings.DeveloperModeEnabled;
     }
@@ -134,6 +138,7 @@ public partial class SettingsViewModel : ObservableObject
         settings.AlwaysOnOverlayEnabled = AlwaysOnOverlay;
         settings.TaskbarDisplayEnabled = TaskbarDisplay;
         settings.AlertsEnabled = AlertsEnabled;
+        settings.ShowCostTotals = ShowCostTotals;
         settings.Theme = (AppTheme)SelectedThemeIndex;
         settings.DeveloperModeEnabled = DeveloperModeEnabled;
 

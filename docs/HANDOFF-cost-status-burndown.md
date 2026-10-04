@@ -2,7 +2,7 @@
 
 Paste the prompt below into the coding agent, with the repository root (`CodexBarWin`, branch
 `overlay-and-cli-fixes`) as its working directory. The original research and spec are preserved below.
-Provider status badges are implemented on `codex/provider-status-badges`; cost totals and history remain pending.
+Provider status badges and cost totals are implemented on `codex/provider-status-badges`; history remains pending.
 
 ### Feature 1 verification (2026-10-04)
 
@@ -27,7 +27,35 @@ Provider status badges are implemented on `codex/provider-status-badges`; cost t
 
 ---
 
+### Feature 2 research and verification (2026-10-04)
+
+- **Verified `CODEX_HOME`**: without an override a refreshed Codex scan returned zero. With the Windows
+  `.codex` directory it returned real log totals. A full scan took about 14 seconds, longer than the
+  original 0.3–5 second estimate; a later incremental scan took 2.5 seconds.
+- **Verified session means today's calendar day**: Codex's session cost/tokens exactly matched its
+  `2026-10-04` daily entry. Claude's session totals likewise matched its `2026-10-04` entry. Antigravity
+  had only a `2026-09-29` entry and returned zero session totals, confirming that session is not "latest
+  daily entry" or "most recent coding session". WSL timezone was +09:00, matching Windows for this check.
+- **Shim fix required**: Claude usage caching matched cost commands too, ignoring log-path environment
+  changes and swallowing `--refresh`. Cost now passes directly to the real CLI before usage routing and
+  caching. Reinstalled using `tools/wsl/install-wsl-shim.ps1`; refreshed scans through the shim returned
+  the real Windows totals (Claude 0.54 seconds, Codex 2.5 seconds).
+- 342 unit tests passed, covering JSON and empty/token-only totals, Windows paths and shell rejection,
+  formatting, calendar series, model aggregation, scan cadence, manual refresh, failure backoff,
+  cancellation, provider mapping and the persisted Settings toggle. Release MSIX build passed with the
+  same two environment warnings as feature 1. Signed, signature-verified, and installed local validation
+  package `0.9.5.2`; interactive visual checks are pending the computer-use gate described below.
+- The computer-use API was tried against both launch and a flyout opened by the user. Both returned
+  `Computer Use was not approved to use CodexBarWin`. Visual checks remain outstanding until that
+  tool-level gate permits access; full filesystem access did not resolve it.
+
+---
+
 ## Prompt
+
+> Cost research was verified on 2026-10-04: `CODEX_HOME` works and session cost/token totals mean today's
+> calendar day in the CLI's local timezone. Cost scans must bypass the shim's usage cache. See the
+> feature 2 verification notes below for measurements and the cache bug.
 
 You are working in CodexBarWin, a WinUI 3 / .NET 10 Windows 11 tray app (MVVM with CommunityToolkit) that
 shows AI usage limits for Claude, Codex and Gemini. It runs the CodexBar CLI inside WSL
@@ -90,17 +118,17 @@ Important findings:
 - **The CLI reads logs from inside WSL, and the user's real Claude Code and Codex logs are on Windows.** Plain
   `codexbar cost` in WSL returns zeros. It returned real data when pointed at the Windows folders:
   `CLAUDE_CONFIG_DIR=/mnt/c/Users/<user>/.claude codexbar cost --provider claude --format json --refresh`
-  (about 5 s). `/mnt/c/Users/<user>/.codex` also exists; `CODEX_HOME` is the expected variable for Codex but was
-  **not verified**, so test it. Build the command in the app: take `Environment.SpecialFolder.UserProfile`,
+  (about 5 s). `/mnt/c/Users/<user>/.codex` also exists; **`CODEX_HOME` was verified** for Codex on 2026-10-04.
+  Build the command in the app: take `Environment.SpecialFolder.UserProfile`,
   convert `C:\Users\x` to `/mnt/c/Users/x`, and only set a variable when that directory exists on Windows.
   Reject any path containing a quote or newline and single-quote the value (it goes into a shell command).
   Fall back to the WSL home when the Windows folder is missing. Apply these variables to the `cost` command
   only, never to `usage` (it would change authentication).
-- `sessionCostUSD` / `sessionTokens` are probably "today" but this is **unverified**: compare with the latest
-  `daily` entry and label accordingly.
+- `sessionCostUSD` / `sessionTokens` were **verified as today's calendar-day totals** in the CLI's local
+  timezone (Claude and Codex matched today's daily entry; Antigravity with only older data returned zero).
 - `antigravity` cost works from WSL logs (small numbers). Map the app's `gemini` provider to `antigravity` for
   cost the same way the shim maps it for usage. Claude and Codex are the main use.
-- A scan takes 0.3 to 5 s, much heavier than usage. Do **not** run it on every refresh: fetch on a slow
+- A scan takes about 0.3 to 15 s here, much heavier than usage. Do **not** run it on every refresh: fetch on a slow
   cadence (for example every 15 minutes, on first load, and on manual refresh), cache the last result, and keep
   failures silent (hide the section, log at debug).
 - `provenance: "listPriceEstimate"` means list-price estimates, not billing. Say "estimated" in the UI.

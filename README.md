@@ -36,6 +36,7 @@ This is the Wave-OCE fork of [nek0der/CodexBarWin](https://github.com/nek0der/Co
 | **Usage alerts** | Windows notifications when you're burning through a limit too fast, nearly out, or out. |
 | **Pace awareness** | Every bar also shows how much of the window's time has passed, so you can tell "50% used" at the start of a window from "50% used" near the end. |
 | **Provider status** | Service health on each card, incident details with a status-page link, and a small incident dot on compact displays. Grey means no status is available (including Gemini through Antigravity). |
+| **Cost and tokens** | Today's and last-30-days totals from local logs. Detail pages show daily costs and top models. Amounts are list-price estimates, not bills. |
 
 Supported providers: **Claude**, **Codex** (OpenAI) and **Gemini** (read through Google's Antigravity).
 
@@ -135,6 +136,7 @@ Add-AppxPackage (Get-ChildItem AppPackages -Filter *.msix -Recurse).FullName
 | Always-on overlay | The floating readout. Drag to move, right-click for options. |
 | Taskbar display | The strip on the taskbar, bottom-left corner. |
 | Usage alerts | Windows notifications. "Send test notification" checks they reach you. |
+| Show cost and token totals | Local log estimates on cards and detail pages. Scans run every 15 minutes and when you click Refresh. |
 | Run at startup | Start with Windows. |
 
 Both compact displays hide themselves while a fullscreen game, video or presentation is running.
@@ -177,6 +179,7 @@ Compared with upstream, this fork adds:
 - **Pace layer, marker and run-out projections** on every bar.
 - **Usage alerts** as Windows notifications, with a test button.
 - **Provider service status badges** with incident details and status-page links. The overlay and taskbar logos show a dot only for reported incidents or maintenance.
+- **Estimated cost and token totals**, with Windows log discovery for Claude and Codex, daily cost bars and top models. Optional in Settings; never shown on the compact displays.
 - **Codex support**, and **provider logos** in place of text labels on the compact displays.
 - **Extra windows**: Claude's Fable-only limit, and Antigravity's Claude and GPT quota under Gemini, on the flyout cards and detail page, in provider colours.
 - **Relevance-based bar selection** on the compact displays.
@@ -185,7 +188,7 @@ Compared with upstream, this fork adds:
 - **No more hidden 30-second cap** on WSL commands, which was the cause of "Command timed out after 30 seconds".
 - **Providers apply immediately** when enabled, disabled or reordered in Settings.
 - **`tools/wsl`**: one-step setup for the CLI and shim.
-- 290 unit tests.
+- 342 unit tests.
 
 The full list is in the [changelog](CHANGELOG.md).
 

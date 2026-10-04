@@ -280,6 +280,33 @@
                     </ItemsControl.ItemTemplate>
                 </ItemsControl>
 
+                <Border x:Name="CostSection" Visibility="Collapsed" Padding="12" CornerRadius="6"
+                        Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1">
+                    <StackPanel Spacing="8">
+                        <TextBlock Text="Estimated cost and tokens" FontWeight="SemiBold"/>
+                        <TextBlock x:Name="CostTotalText" TextWrapping="Wrap"/>
+                        <TextBlock x:Name="CostTodayText" TextWrapping="Wrap" FontSize="11"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                        <ComboBox x:Name="CostDaysSelector" SelectedIndex="2" SelectionChanged="OnCostDaysChanged">
+                            <ComboBoxItem Content="Last 7 days" Tag="7"/>
+                            <ComboBoxItem Content="Last 14 days" Tag="14"/>
+                            <ComboBoxItem Content="Last 30 days" Tag="30"/>
+                        </ComboBox>
+                        <controls:DailyCostChart x:Name="CostChart"/>
+                        <TextBlock Text="Top models · last 30 days" FontWeight="SemiBold" FontSize="11"/>
+                        <ItemsControl x:Name="CostModelsList">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <TextBlock Text="{Binding}" FontSize="11" TextWrapping="Wrap" Margin="0,2"/>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                        <TextBlock x:Name="CostNote" FontSize="10" TextWrapping="Wrap"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                    </StackPanel>
+                </Border>
+
                 <!-- Details -->
                 <Grid
                     x:Name="DetailsSection"
