@@ -54,12 +54,15 @@ public class CodexBarService : ICodexBarService
             acquired = true;
             if (!_settingsService.Settings.ShowCostTotals || _settingsService.Settings.DeveloperModeEnabled) return null;
             var now = _timeProvider.GetUtcNow();
-            if (!forceRefresh && _costCache.TryGetValue(normalized, out var cached) &&
-                now - cached.AttemptedAt < TimeSpan.FromMinutes(15)) return cached.Data;
+            lock (_costCache)
+            {
+                if (!forceRefresh && _costCache.TryGetValue(normalized, out var cached) &&
+                    now - cached.AttemptedAt < TimeSpan.FromMinutes(15)) return cached.Data;
 
-            previousAttempt = _costCache.TryGetValue(normalized, out var prior) ? prior : null;
-            attemptedProvider = normalized;
-            _costCache[normalized] = (now, null); // Back off on errors too.
+                previousAttempt = _costCache.TryGetValue(normalized, out var prior) ? prior : null;
+                attemptedProvider = normalized;
+                _costCache[normalized] = (now, null); // Back off on errors too.
+            }
             var command = Helpers.CostCommandBuilder.Build(normalized, _userProfile(), _directoryExists);
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             cts.CancelAfter(TimeSpan.FromSeconds(Math.Max(60, _settingsService.Settings.Timeouts.CliProviderFirstFetchTimeoutSeconds)));
@@ -78,7 +81,7 @@ public class CodexBarService : ICodexBarService
             if (dto == null || !string.Equals(dto.Provider, normalized == "gemini" ? "antigravity" : normalized,
                 StringComparison.OrdinalIgnoreCase)) return null;
             var data = dto.ToCostData(normalized, now.UtcDateTime);
-            _costCache[normalized] = (now, data.HasData ? data : null);
+            lock (_costCache) _costCache[normalized] = (now, data.HasData ? data : null);
             return data.HasData ? data : null;
         }
         catch (Exception ex)
@@ -94,12 +97,25 @@ public class CodexBarService : ICodexBarService
                 if (attemptedProvider != null && (ct.IsCancellationRequested ||
                     !_settingsService.Settings.ShowCostTotals || _settingsService.Settings.DeveloperModeEnabled))
                 {
-                    if (previousAttempt is { } previous) _costCache[attemptedProvider] = previous;
-                    else _costCache.Remove(attemptedProvider);
+                    lock (_costCache)
+                    {
+                        if (previousAttempt is { } previous) _costCache[attemptedProvider] = previous;
+                        else _costCache.Remove(attemptedProvider);
+                    }
                 }
                 _costGate.Release();
             }
         }
+    }
+
+    public IReadOnlyList<DashboardCostCacheEntry> GetCostCacheInfo()
+    {
+        lock (_costCache)
+            return _costCache.OrderBy(pair => pair.Key, StringComparer.Ordinal).Select(pair => new DashboardCostCacheEntry
+            {
+                ProviderId = pair.Key, LastAttemptUtc = pair.Value.AttemptedAt.UtcDateTime,
+                HasData = pair.Value.Data?.HasData == true
+            }).ToArray();
     }
 
     public async Task<UsageData?> GetUsageAsync(string provider, CancellationToken ct = default)

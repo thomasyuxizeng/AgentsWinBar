@@ -26,6 +26,12 @@
   <!-- Link source files from main project (no Windows App SDK dependency) -->
   <ItemGroup>
     <Compile Include="..\Helpers\AsyncHelper.cs" Link="Linked\AsyncHelper.cs" />
+    <Compile Include="..\Models\DashboardSnapshot.cs" Link="Linked\DashboardSnapshot.cs" />
+    <Compile Include="..\Helpers\DashboardSnapshotBuilder.cs" Link="Linked\DashboardSnapshotBuilder.cs" />
+    <Compile Include="..\Services\IActivityLog.cs" Link="Linked\IActivityLog.cs" />
+    <Compile Include="..\Services\ActivityLog.cs" Link="Linked\ActivityLog.cs" />
+    <Compile Include="..\Services\IDashboardService.cs" Link="Linked\IDashboardService.cs" />
+    <Compile Include="..\Services\DashboardService.cs" Link="Linked\DashboardService.cs" />
     <Compile Include="..\Helpers\ResetTimeFormatter.cs" Link="Linked\ResetTimeFormatter.cs" />
     <Compile Include="..\Helpers\TimestampFormatter.cs" Link="Linked\TimestampFormatter.cs" />
     <Compile Include="..\Helpers\PaceCalculator.cs" Link="Linked\PaceCalculator.cs" />

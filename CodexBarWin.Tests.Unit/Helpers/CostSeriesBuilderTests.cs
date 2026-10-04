@@ -10,6 +10,20 @@ public class CostSeriesBuilderTests
     private static readonly DateOnly Today = new(2026, 10, 4);
 
     [TestMethod]
+    public void Daily_DuplicateDays_PreservesTokenBreakdownsAndModels()
+    {
+        var data = new CostData { Daily = [
+            new() { Date = Today, InputTokens = 1, OutputTokens = 2, CacheReadTokens = 3, CacheCreationTokens = 4,
+                ReasoningTokens = 5, ModelBreakdowns = [new() { ModelName = "a" }] },
+            new() { Date = Today, InputTokens = 10, OutputTokens = 20, CacheReadTokens = 30, CacheCreationTokens = 40,
+                ReasoningTokens = 50, ModelBreakdowns = [new() { ModelName = "b" }] }] };
+        var day = CostSeriesBuilder.Daily(data, Today)[^1];
+        day.InputTokens.Should().Be(11); day.OutputTokens.Should().Be(22); day.CacheReadTokens.Should().Be(33);
+        day.CacheCreationTokens.Should().Be(44); day.ReasoningTokens.Should().Be(55);
+        day.ModelBreakdowns.Select(m => m.ModelName).Should().Equal("a", "b");
+    }
+
+    [TestMethod]
     public void Daily_WhenGapsDuplicatesAndFutureDays_BuildsEvenCalendarSeries()
     {
         var data = new CostData { Daily = [

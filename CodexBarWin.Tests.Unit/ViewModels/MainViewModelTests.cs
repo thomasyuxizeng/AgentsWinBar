@@ -14,6 +14,8 @@ public class MainViewModelTests
     private readonly Mock<ICodexBarService> _usage = new();
     private readonly Mock<ISettingsService> _settings = new();
     private readonly UsageHistoryStore _history = new();
+    private readonly ActivityLog _activity = new();
+    private readonly Mock<IToastNotifier> _toast = new();
     private AppSettings _values = null!;
     private UsageHistoryPersistence _persistence = null!;
     private MainViewModel _viewModel = null!;
@@ -30,8 +32,8 @@ public class MainViewModelTests
         _settings.SetupGet(s => s.Settings).Returns(_values);
         _settings.SetupGet(s => s.SettingsFilePath).Returns(Path.Combine(_directory, "settings.json"));
         _persistence = new(_history, _settings.Object, NullLogger<UsageHistoryPersistence>.Instance);
-        _viewModel = new(_usage.Object, _settings.Object, new UsageAlertEvaluator(), Mock.Of<IToastNotifier>(),
-            NullLogger<MainViewModel>.Instance, _history, _persistence);
+        _viewModel = new(_usage.Object, _settings.Object, new UsageAlertEvaluator(), _toast.Object,
+            NullLogger<MainViewModel>.Instance, _history, _persistence, _activity);
     }
 
     [TestCleanup]
@@ -57,6 +59,78 @@ public class MainViewModelTests
     {
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
         while (_viewModel.IsLoading) await Task.Delay(10, timeout.Token);
+    }
+
+    [TestMethod]
+    public async Task StartAsync_ProviderResultsArrive_RecordsSuccessErrorAndElapsedDuration()
+    {
+        _values.Providers = [new() { Id = "claude" }, new() { Id = "codex" }];
+        var gate = Signal();
+        async IAsyncEnumerable<UsageData> Results()
+        {
+            yield return Data(20);
+            await gate.Task;
+            yield return new() { Provider = "codex", Error = "fetch failed" };
+        }
+        _usage.Setup(s => s.GetAllUsageStreamAsync(It.IsAny<CancellationToken>())).Returns(() => Results());
+        var before = DateTime.UtcNow;
+        var refresh = _viewModel.StartAsync();
+        var first = _activity.RecentRefreshes.Should().ContainSingle().Which;
+        first.ProviderId.Should().Be("claude"); first.Success.Should().BeTrue(); first.Message.Should().BeNull();
+        first.TimestampUtc.Should().BeOnOrAfter(before); first.DurationMs.Should().BeGreaterThanOrEqualTo(0);
+        await Task.Delay(30);
+        gate.SetResult(); await refresh.WaitAsync(TimeSpan.FromSeconds(5));
+        var second = _activity.RecentRefreshes[0];
+        second.ProviderId.Should().Be("codex"); second.Success.Should().BeFalse(); second.Message.Should().Be("fetch failed");
+        second.DurationMs.Should().BeGreaterThan(first.DurationMs);
+        _activity.RecentRefreshes.Should().HaveCount(2);
+    }
+
+    [TestMethod]
+    public async Task StartAsync_AlertShown_RecordsProviderTitleMessageAndTimestamp()
+    {
+        _values.AlertsEnabled = true;
+        _usage.Setup(s => s.GetAllUsageStreamAsync(It.IsAny<CancellationToken>()))
+            .Returns((CancellationToken ct) => Stream(Task.CompletedTask, Data(100), ct));
+        var before = DateTime.UtcNow;
+        await _viewModel.StartAsync();
+        var alert = _activity.RecentAlerts.Should().ContainSingle().Which;
+        alert.ProviderId.Should().Be("claude"); alert.Title.Should().Be("Claude session limit reached");
+        alert.Message.Should().NotBeNullOrWhiteSpace(); alert.TimestampUtc.Should().BeOnOrAfter(before);
+        _toast.Verify(t => t.Show(alert.Title, alert.Message), Times.Once);
+        await _viewModel.RefreshCommand.ExecuteAsync(null);
+        _activity.RecentAlerts.Should().ContainSingle();
+    }
+
+    [TestMethod]
+    public async Task StartAsync_ActivityLogThrows_StillCompletesRefreshAndShowsAllAlerts()
+    {
+        var log = new Mock<IActivityLog>();
+        log.Setup(l => l.RecordRefresh(It.IsAny<DashboardRefreshEntry>())).Throws(new InvalidOperationException("log failed"));
+        log.Setup(l => l.RecordAlert(It.IsAny<DashboardAlertEntry>())).Throws(new InvalidOperationException("log failed"));
+        _viewModel.Dispose();
+        _viewModel = new(_usage.Object, _settings.Object, new UsageAlertEvaluator(), _toast.Object,
+            NullLogger<MainViewModel>.Instance, _history, _persistence, log.Object);
+        _values.AlertsEnabled = true;
+        _usage.Setup(s => s.GetAllUsageStreamAsync(It.IsAny<CancellationToken>()))
+            .Returns((CancellationToken ct) => Stream(Task.CompletedTask, Data(100) with { Weekly = new() { ReportedPercent = 100 } }, ct));
+        await _viewModel.StartAsync();
+        _viewModel.ErrorMessage.Should().BeNull(); _viewModel.Providers.Single().Session!.Percent.Should().Be(100);
+        _toast.Verify(t => t.Show(It.IsAny<string>(), It.IsAny<string>()), Times.Exactly(2));
+        log.Verify(l => l.RecordRefresh(It.IsAny<DashboardRefreshEntry>()), Times.Once);
+        log.Verify(l => l.RecordAlert(It.IsAny<DashboardAlertEntry>()), Times.Exactly(2));
+    }
+
+    [TestMethod]
+    public async Task Stop_WhileResultPending_DiscardsCanceledActivity()
+    {
+        var gate = Signal();
+        _usage.Setup(s => s.GetAllUsageStreamAsync(It.IsAny<CancellationToken>()))
+            .Returns((CancellationToken ct) => Stream(gate.Task, Data(100), ct));
+        _values.AlertsEnabled = true;
+        var refresh = _viewModel.StartAsync(); _viewModel.Stop(); gate.SetResult();
+        await refresh.WaitAsync(TimeSpan.FromSeconds(5));
+        _activity.RecentRefreshes.Should().BeEmpty(); _activity.RecentAlerts.Should().BeEmpty();
     }
 
     [TestMethod]
