@@ -1,28 +1,11 @@
 # Changelog
 
-
-
 All notable changes to this project will be documented in this file.
 
-
-
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
-
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-
-
 ## [Unreleased]
-
-
-
-
-
-### Added
-
-- Dashboard: a full window (resizable, maximizable, full screen with F11, optional keep-on-top) opened from the new button in the flyout footer. It shows everything the app knows at once: headline tiles (provider health, incidents, limits, most-used window, next reset, cost today and 30 days), a panel per provider with every usage window (pace, reset times, burndown), service status, cost and token mix, top models and history, plus a diagnostics column (CLI and app versions, effective settings, history store, cost scans, refresh log and alerts this session)
-
-- In-memory activity log of refresh results and alerts, for the dashboard
 
 ### Fixed
 - Settings saves are serialized and replace the complete file atomically; failed saves restore uncommitted values, keep Settings open and scroll to a visible error. Descriptions clear their switches at 150% scaling. Malformed provider lists, timer intervals, timeouts and animation settings recover safely
@@ -38,6 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Gemini windows are labelled "5-hour" and "Weekly" instead of "Pro" and "Flash"
 
 ### Added
+- Dashboard: a full window (resizable, maximizable, full screen with F11, optional keep-on-top) opened from the new button in the flyout footer. It shows everything the app knows at once: headline tiles (provider health, incidents, limits, most-used window, next reset, cost today and 30 days), a panel per provider with every usage window (pace, reset times, burndown), service status, cost and token mix, top models and history, plus a diagnostics column (CLI and app versions, effective settings, history store, cost scans, refresh log and alerts this session)
+- In-memory activity log of refresh results and alerts, for the dashboard
 - Dashboard data snapshots with usage and cost summaries, history, cached CLI diagnostics and session refresh/alert activity.
 - Per-window usage history charts with an even-use guide, observed-rate projection, capture time and sample count. Snapshots persist atomically beside Settings for 14 days, deduplicated at half-point changes, ten-minute intervals and window resets. New installations show a collecting-data state until enough samples are available
 - Estimated cost and token totals from local Windows Claude/Codex logs and WSL Antigravity logs, with a 15-minute scan cadence, manual refresh, daily cost bars and top models on the detail page, and a Settings toggle. Cost commands bypass the shim's usage cache so log-path changes cannot reuse a zero-cost result
