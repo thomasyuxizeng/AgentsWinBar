@@ -193,8 +193,9 @@ Compared with upstream, this fork adds:
 - **Reliable Claude.** The OAuth usage endpoint is rate limited by Anthropic ("Command failed (exit code 3)"), and the CLI route became slow. The shim now uses OAuth first with a cooldown, falls back to the CLI, caches for 5 minutes and shows the last good result on failure.
 - **No more hidden 30-second cap** on WSL commands, which was the cause of "Command timed out after 30 seconds".
 - **Providers apply immediately** when enabled, disabled or reordered in Settings.
+- **Safer settings and refreshes.** Settings saves replace a complete file atomically, failed saves show a visible error and restore uncommitted values, and malformed values recover to defaults. Canceled refreshes cannot put old results back on screen. Quit flushes history before exiting.
 - **`tools/wsl`**: one-step setup for the CLI and shim.
-- 378 unit tests.
+- 400 unit tests, including settings persistence, refresh cancellation races and cost-cache recovery after cancellation.
 
 The full list is in the [changelog](CHANGELOG.md).
 

@@ -38,6 +38,7 @@ public class AnimationSettings
 /// </summary>
 public class AppSettings
 {
+    private const string DefaultGuideUrl = "https://github.com/Wave-OCE/CodexBarWin#quick-start";
     public int Version { get; set; } = 1;
     public List<ProviderConfig> Providers { get; set; } = [];
     public int RefreshIntervalSeconds { get; set; } = 120;
@@ -47,7 +48,7 @@ public class AppSettings
     public int CacheExpiryMinutes { get; set; } = 5;
     public TimeoutSettings Timeouts { get; set; } = new();
     public AnimationSettings Animation { get; set; } = new();
-    public string CodexBarGuideUrl { get; set; } = "https://github.com/steipete/CodexBar#installation";
+    public string CodexBarGuideUrl { get; set; } = DefaultGuideUrl;
     public bool DeveloperModeEnabled { get; set; } = false;
 
     /// <summary>
@@ -74,6 +75,41 @@ public class AppSettings
     public int? OverlayY { get; set; }
 
     /// <summary>
+    /// Repairs malformed persisted values before they reach timers, animations or shell commands.
+    /// An explicitly empty provider list remains empty.
+    /// </summary>
+    public void Normalize()
+    {
+        Providers ??= ProviderConfig.GetDefaults().ToList();
+        Providers = Providers
+            .Where(p => p != null && ProviderConstants.IsValidProvider(p.Id))
+            .Select(p => p with { Id = ProviderConstants.ValidateAndNormalize(p.Id) })
+            .DistinctBy(p => p.Id)
+            .ToList();
+        if (!Enum.IsDefined(Theme)) Theme = AppTheme.System;
+        RefreshIntervalSeconds = ValidRange(RefreshIntervalSeconds, 86400, 120);
+        CacheExpiryMinutes = ValidRange(CacheExpiryMinutes, 1440, 5);
+        Timeouts ??= new();
+        Timeouts.WslCommandTimeoutSeconds = ValidRange(Timeouts.WslCommandTimeoutSeconds, 3600, 30);
+        Timeouts.WslStatusCheckTimeoutSeconds = ValidRange(Timeouts.WslStatusCheckTimeoutSeconds, 3600, 10);
+        Timeouts.CliProviderFirstFetchTimeoutSeconds = ValidRange(Timeouts.CliProviderFirstFetchTimeoutSeconds, 3600, 60);
+        Timeouts.CliProviderTimeoutSeconds = ValidRange(Timeouts.CliProviderTimeoutSeconds, 3600, 45);
+        Timeouts.StandardProviderFirstFetchTimeoutSeconds = ValidRange(Timeouts.StandardProviderFirstFetchTimeoutSeconds, 3600, 20);
+        Timeouts.StandardProviderTimeoutSeconds = ValidRange(Timeouts.StandardProviderTimeoutSeconds, 3600, 10);
+        Animation ??= new();
+        Animation.ShowDurationMs = ValidRange(Animation.ShowDurationMs, 10000, 150);
+        Animation.HideDurationMs = ValidRange(Animation.HideDurationMs, 10000, 100);
+        Animation.Steps = ValidRange(Animation.Steps, 120, 15);
+        if (CodexBarGuideUrl == "https://github.com/steipete/CodexBar#installation" ||
+            !Uri.TryCreate(CodexBarGuideUrl, UriKind.Absolute, out var guide) ||
+            (guide.Scheme != Uri.UriSchemeHttps && guide.Scheme != Uri.UriSchemeHttp))
+            CodexBarGuideUrl = DefaultGuideUrl;
+    }
+
+    private static int ValidRange(int value, int maximum, int fallback) =>
+        value > 0 && value <= maximum ? value : fallback;
+
+    /// <summary>
     /// Gets the default settings.
     /// </summary>
     public static AppSettings GetDefaults() => new()
@@ -86,7 +122,7 @@ public class AppSettings
         CacheExpiryMinutes = 5,
         Timeouts = new TimeoutSettings(),
         Animation = new AnimationSettings(),
-        CodexBarGuideUrl = "https://github.com/steipete/CodexBar#installation",
+        CodexBarGuideUrl = DefaultGuideUrl,
         DeveloperModeEnabled = false,
         AlwaysOnOverlayEnabled = false,
         TaskbarDisplayEnabled = false,

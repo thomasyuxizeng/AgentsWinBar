@@ -44,21 +44,28 @@ public class CodexBarService : ICodexBarService
     public async Task<CostData?> GetCostAsync(string provider, bool forceRefresh = false, CancellationToken ct = default)
     {
         var acquired = false;
+        string? attemptedProvider = null;
+        (DateTimeOffset AttemptedAt, CostData? Data)? previousAttempt = null;
         try
         {
             var normalized = ProviderConstants.ValidateAndNormalize(provider);
             if (!_settingsService.Settings.ShowCostTotals || _settingsService.Settings.DeveloperModeEnabled) return null;
             await _costGate.WaitAsync(ct);
             acquired = true;
+            if (!_settingsService.Settings.ShowCostTotals || _settingsService.Settings.DeveloperModeEnabled) return null;
             var now = _timeProvider.GetUtcNow();
             if (!forceRefresh && _costCache.TryGetValue(normalized, out var cached) &&
                 now - cached.AttemptedAt < TimeSpan.FromMinutes(15)) return cached.Data;
 
+            previousAttempt = _costCache.TryGetValue(normalized, out var prior) ? prior : null;
+            attemptedProvider = normalized;
             _costCache[normalized] = (now, null); // Back off on errors too.
             var command = Helpers.CostCommandBuilder.Build(normalized, _userProfile(), _directoryExists);
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             cts.CancelAfter(TimeSpan.FromSeconds(Math.Max(60, _settingsService.Settings.Timeouts.CliProviderFirstFetchTimeoutSeconds)));
             var result = await _wslService.ExecuteAsync(command, cts.Token);
+            ct.ThrowIfCancellationRequested();
+            if (!_settingsService.Settings.ShowCostTotals || _settingsService.Settings.DeveloperModeEnabled) return null;
             if (!result.Success || string.IsNullOrWhiteSpace(result.Output))
             {
                 _logger.LogDebug("Cost scan returned no data for {Provider} (exit {ExitCode})", normalized, result.ExitCode);
@@ -81,7 +88,17 @@ public class CodexBarService : ICodexBarService
         }
         finally
         {
-            if (acquired) _costGate.Release();
+            if (acquired)
+            {
+                // Obsolete scans are not failures: retain the last good cache or allow an immediate retry.
+                if (attemptedProvider != null && (ct.IsCancellationRequested ||
+                    !_settingsService.Settings.ShowCostTotals || _settingsService.Settings.DeveloperModeEnabled))
+                {
+                    if (previousAttempt is { } previous) _costCache[attemptedProvider] = previous;
+                    else _costCache.Remove(attemptedProvider);
+                }
+                _costGate.Release();
+            }
         }
     }
 
@@ -165,6 +182,7 @@ public class CodexBarService : ICodexBarService
             tasks.Remove(completedTask);
 
             var result = await completedTask;
+            ct.ThrowIfCancellationRequested();
             yield return result;
         }
 
@@ -194,7 +212,6 @@ public class CodexBarService : ICodexBarService
                     if (dataList.Count > 0)
                     {
                         var data = dataList[0];
-                        _cacheService.Set(data.Provider, data);
                         _logger.LogDebug("Loaded sample data for {Provider}", normalizedProvider);
                         return data;
                     }
@@ -230,6 +247,7 @@ public class CodexBarService : ICodexBarService
             var verboseFlag = normalizedProvider == "gemini" ? " --verbose" : "";
             var result = await _wslService.ExecuteAsync(
                 $"codexbar usage --provider {normalizedProvider} --format json --source {source} --status{verboseFlag}", cts.Token);
+            ct.ThrowIfCancellationRequested();
 
             if (result.Success && !string.IsNullOrWhiteSpace(result.Output))
             {
@@ -262,6 +280,10 @@ public class CodexBarService : ICodexBarService
                     : result.Error.Trim(),
                 FetchedAt = DateTime.UtcNow
             };
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
         }
         catch (OperationCanceledException)
         {

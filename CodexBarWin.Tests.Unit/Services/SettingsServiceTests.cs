@@ -204,6 +204,55 @@ public class SettingsServiceTests
     #region SaveAsync Tests
 
     [TestMethod]
+    public async Task SaveAsync_OverlappingQuietAndNormalSaves_LeavesCompleteSettingsAndNoTempFile()
+    {
+        var service = new TestableSettingsService(_mockLogger.Object, _testDirectory);
+        service.Settings.RefreshIntervalSeconds = 42;
+        var events = 0;
+        service.SettingsChanged += (_, _) => Interlocked.Increment(ref events);
+        await Task.WhenAll(Enumerable.Range(0, 40).Select(i => i % 2 == 0 ? service.SaveAsync() : service.SaveQuietAsync()));
+        var loaded = JsonSerializer.Deserialize(await File.ReadAllTextAsync(_testSettingsPath), AppJsonSerializerContext.Default.AppSettings)!;
+        loaded.RefreshIntervalSeconds.Should().Be(42);
+        loaded.Providers.Should().HaveCount(3);
+        events.Should().Be(20);
+        File.Exists(_testSettingsPath + ".tmp").Should().BeFalse();
+    }
+
+    [TestMethod]
+    public async Task SaveAsync_ReplacementCannotBeWritten_PreservesPreviousFileAndReportsFailure()
+    {
+        var service = new TestableSettingsService(_mockLogger.Object, _testDirectory);
+        await service.SaveAsync();
+        var previous = await File.ReadAllTextAsync(_testSettingsPath);
+        Directory.CreateDirectory(_testSettingsPath + ".tmp");
+        service.Settings.RefreshIntervalSeconds = 42;
+        var events = 0;
+        service.SettingsChanged += (_, _) => Interlocked.Increment(ref events);
+        Func<Task> save = () => service.SaveAsync();
+        await save.Should().ThrowAsync<UnauthorizedAccessException>();
+        (await File.ReadAllTextAsync(_testSettingsPath)).Should().Be(previous);
+        events.Should().Be(0);
+        // Quiet position saves tolerate IO failures and must not trigger a refresh.
+        await service.SaveQuietAsync();
+        events.Should().Be(0);
+    }
+
+    [TestMethod]
+    public async Task LoadAsync_NullAndMalformedSections_RepairsWithoutLosingOtherSettings()
+    {
+        await File.WriteAllTextAsync(_testSettingsPath,
+            """{"providers":null,"timeouts":null,"animation":{"steps":0},"refreshIntervalSeconds":-10,"showCostTotals":false,"taskbarDisplayEnabled":true}""");
+        var service = new TestableSettingsService(_mockLogger.Object, _testDirectory);
+        await service.LoadAsync();
+        service.Settings.Providers.Should().HaveCount(3);
+        service.Settings.Timeouts.Should().NotBeNull();
+        service.Settings.Animation.Steps.Should().Be(15);
+        service.Settings.RefreshIntervalSeconds.Should().Be(120);
+        service.Settings.ShowCostTotals.Should().BeFalse();
+        service.Settings.TaskbarDisplayEnabled.Should().BeTrue();
+    }
+
+    [TestMethod]
     public async Task SaveAsync_WritesSettingsToFile()
     {
         // Arrange
@@ -469,93 +518,9 @@ public class SettingsServiceTests
 
     #endregion
 
-    #region Testable SettingsService
-
-    /// <summary>
-    /// Testable version of SettingsService that allows custom settings directory.
-    /// </summary>
-    private class TestableSettingsService : ISettingsService
+    private class TestableSettingsService : SettingsService
     {
-        private readonly ILogger<SettingsService> _logger;
-        private AppSettings _settings = AppSettings.GetDefaults();
-
-        public AppSettings Settings => _settings;
-        public string SettingsFilePath { get; }
-
-        public event EventHandler? SettingsChanged;
-
         public TestableSettingsService(ILogger<SettingsService> logger, string testDirectory)
-        {
-            _logger = logger;
-            Directory.CreateDirectory(testDirectory);
-            SettingsFilePath = Path.Combine(testDirectory, "settings.json");
-        }
-
-        public async Task LoadAsync()
-        {
-            try
-            {
-                if (!File.Exists(SettingsFilePath))
-                {
-                    _logger.LogInformation("Settings file not found, using defaults");
-                    return;
-                }
-
-                var json = await File.ReadAllTextAsync(SettingsFilePath);
-                var settings = JsonSerializer.Deserialize(json, AppJsonSerializerContext.Default.AppSettings);
-
-                if (settings != null)
-                {
-                    // Filter out any invalid providers for security
-                    var originalCount = settings.Providers.Count;
-                    settings.Providers = settings.Providers
-                        .Where(p => ProviderConstants.IsValidProvider(p.Id))
-                        .ToList();
-
-                    if (settings.Providers.Count < originalCount)
-                    {
-                        _logger.LogWarning("Filtered {Count} invalid provider(s) from settings",
-                            originalCount - settings.Providers.Count);
-                    }
-
-                    _settings = settings;
-                    _logger.LogInformation("Settings loaded from {Path}", SettingsFilePath);
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Failed to load settings");
-            }
-        }
-
-        public async Task SaveQuietAsync()
-        {
-            var json = JsonSerializer.Serialize(_settings, AppJsonSerializerContext.Default.AppSettings);
-            await File.WriteAllTextAsync(SettingsFilePath, json);
-        }
-
-        public async Task SaveAsync()
-        {
-            try
-            {
-                var json = JsonSerializer.Serialize(_settings, AppJsonSerializerContext.Default.AppSettings);
-                await File.WriteAllTextAsync(SettingsFilePath, json);
-                _logger.LogInformation("Settings saved to {Path}", SettingsFilePath);
-                SettingsChanged?.Invoke(this, EventArgs.Empty);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Failed to save settings");
-            }
-        }
-
-        public void Reset()
-        {
-            _settings = AppSettings.GetDefaults();
-            SettingsChanged?.Invoke(this, EventArgs.Empty);
-            _logger.LogInformation("Settings reset to defaults");
-        }
+            : base(logger, testDirectory) { }
     }
-
-    #endregion
 }

@@ -60,9 +60,89 @@ public class CodexBarServiceTests
         public override DateTimeOffset GetUtcNow() => Now;
     }
 
+    [TestMethod]
+    public async Task GetCostAsync_DisabledWhileAnotherScanHoldsGate_DoesNotPublishOrRunQueuedScan()
+    {
+        var wsl = new Mock<IWslService>();
+        var scan = new TaskCompletionSource<WslResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        wsl.Setup(s => s.ExecuteAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).Returns(() =>
+        {
+            started.TrySetResult();
+            return scan.Task;
+        });
+        var service = new CodexBarService(wsl.Object, _mockCacheService, _mockSettingsService, _mockSampleDataLoader,
+            _mockLogger.Object, userProfile: () => "C:\\Users\\Test", directoryExists: _ => true);
+        var first = service.GetCostAsync("claude");
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var queued = service.GetCostAsync("codex");
+        _mockSettingsService.Settings.ShowCostTotals = false;
+        scan.SetResult(new WslResult { Success = true, Output = """{"provider":"claude","last30DaysTokens":10}""" });
+        (await first).Should().BeNull();
+        (await queued).Should().BeNull();
+        wsl.Verify(s => s.ExecuteAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [TestMethod]
+    public async Task GetAllUsageStreamAsync_CancelledButBackendReturns_DoesNotYieldOrCacheLateResult()
+    {
+        _mockSettingsService.SetProviders([new() { Id = "claude" }]);
+        var scan = new TaskCompletionSource<WslResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var wsl = new Mock<IWslService>();
+        wsl.Setup(s => s.ExecuteAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).Returns(scan.Task);
+        var service = new CodexBarService(wsl.Object, _mockCacheService, _mockSettingsService, _mockSampleDataLoader, _mockLogger.Object);
+        using var cts = new CancellationTokenSource();
+        await using var stream = service.GetAllUsageStreamAsync(cts.Token).GetAsyncEnumerator();
+        var next = stream.MoveNextAsync().AsTask();
+        cts.Cancel();
+        scan.SetResult(new WslResult { Success = true, Output = """[{"provider":"claude","usage":{"primary":{"usedPercent":90}}}]""" });
+        Func<Task> moveNext = async () => await next;
+        await moveNext.Should().ThrowAsync<OperationCanceledException>();
+        _mockCacheService.SetCallCount.Should().Be(0);
+    }
+
     private CodexBarService CostService(CostClock? clock = null, string profile = "C:\\Users\\Test", bool folderExists = true) =>
         new(_mockWslService, _mockCacheService, _mockSettingsService, _mockSampleDataLoader, _mockLogger.Object,
             clock, () => profile, _ => folderExists);
+
+    [TestMethod]
+    public async Task GetCostAsync_DisabledDuringFirstScan_ReenabledWithoutFailureBackoff()
+    {
+        var scan = new TaskCompletionSource<WslResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var result = new WslResult { Success = true, Output = """{"provider":"claude","last30DaysTokens":10}""" };
+        var wsl = new Mock<IWslService>();
+        wsl.SetupSequence(s => s.ExecuteAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .Returns(scan.Task).ReturnsAsync(result);
+        var service = new CodexBarService(wsl.Object, _mockCacheService, _mockSettingsService, _mockSampleDataLoader,
+            _mockLogger.Object, new CostClock(), () => "C:\\Users\\Test", _ => true);
+        var pending = service.GetCostAsync("claude");
+        _mockSettingsService.Settings.ShowCostTotals = false;
+        scan.SetResult(result);
+        (await pending.WaitAsync(TimeSpan.FromSeconds(5))).Should().BeNull();
+        _mockSettingsService.Settings.ShowCostTotals = true;
+        (await service.GetCostAsync("claude")).Should().NotBeNull();
+        wsl.Verify(s => s.ExecuteAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Exactly(2));
+    }
+
+    [TestMethod]
+    public async Task GetCostAsync_CanceledManualScan_PreservesPreviouslyCachedTotals()
+    {
+        var scan = new TaskCompletionSource<WslResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var result = new WslResult { Success = true, Output = """{"provider":"claude","last30DaysTokens":10}""" };
+        var wsl = new Mock<IWslService>();
+        wsl.SetupSequence(s => s.ExecuteAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(result).Returns(scan.Task);
+        var service = new CodexBarService(wsl.Object, _mockCacheService, _mockSettingsService, _mockSampleDataLoader,
+            _mockLogger.Object, new CostClock(), () => "C:\\Users\\Test", _ => true);
+        var cached = await service.GetCostAsync("claude");
+        using var cts = new CancellationTokenSource();
+        var pending = service.GetCostAsync("claude", forceRefresh: true, ct: cts.Token);
+        cts.Cancel();
+        scan.SetResult(result);
+        (await pending.WaitAsync(TimeSpan.FromSeconds(5))).Should().BeNull();
+        (await service.GetCostAsync("claude")).Should().BeSameAs(cached);
+        wsl.Verify(s => s.ExecuteAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Exactly(2));
+    }
 
     private void SetCostResponse(string provider = "claude", bool success = true, string? json = null)
     {
@@ -407,7 +487,7 @@ public class CodexBarServiceTests
         // Assert
         results.Should().HaveCount(2);
         _mockWslService.ExecutedCommands.Should().BeEmpty(); // Should NOT execute WSL commands
-        _mockCacheService.SetCallCount.Should().Be(2); // Should cache sample data
+        _mockCacheService.SetCallCount.Should().Be(0, "developer samples must never overwrite the real usage cache");
     }
 
     [TestMethod]

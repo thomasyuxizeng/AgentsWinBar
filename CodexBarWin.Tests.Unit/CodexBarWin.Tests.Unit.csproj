@@ -20,6 +20,7 @@
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.*" />
+    <PackageReference Include="CommunityToolkit.Mvvm" Version="8.*" />
   </ItemGroup>
 
   <!-- Link source files from main project (no Windows App SDK dependency) -->
@@ -59,6 +60,8 @@
     <Compile Include="..\Services\SetupChecker.cs" Link="Linked\SetupChecker.cs" />
     <Compile Include="..\Services\SampleDataLoader.cs" Link="Linked\SampleDataLoader.cs" />
     <Compile Include="..\Services\UsageAlertEvaluator.cs" Link="Linked\UsageAlertEvaluator.cs" />
+    <Compile Include="..\Services\IToastNotifier.cs" Link="Linked\IToastNotifier.cs" />
+    <Compile Include="..\ViewModels\MainViewModel.cs" Link="Linked\MainViewModel.cs" />
   </ItemGroup>
 
 </Project>

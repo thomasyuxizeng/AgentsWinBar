@@ -10,18 +10,19 @@ public class SettingsService : ISettingsService
 {
     private readonly ILogger<SettingsService> _logger;
     private AppSettings _settings = AppSettings.GetDefaults();
+    private readonly SemaphoreSlim _saveGate = new(1, 1);
 
     public AppSettings Settings => _settings;
     public string SettingsFilePath { get; }
 
     public event EventHandler? SettingsChanged;
 
-    public SettingsService(ILogger<SettingsService> logger)
+    public SettingsService(ILogger<SettingsService> logger, string? settingsDirectory = null)
     {
         _logger = logger;
 
         var appDataPath = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-        var appFolder = Path.Combine(appDataPath, "CodexBarWin");
+        var appFolder = settingsDirectory ?? Path.Combine(appDataPath, "CodexBarWin");
         Directory.CreateDirectory(appFolder);
         SettingsFilePath = Path.Combine(appFolder, "settings.json");
     }
@@ -42,12 +43,10 @@ public class SettingsService : ISettingsService
             if (settings != null)
             {
                 // Filter out any invalid providers for security
-                var originalCount = settings.Providers.Count;
-                settings.Providers = settings.Providers
-                    .Where(p => ProviderConstants.IsValidProvider(p.Id))
-                    .ToList();
+                var originalCount = settings.Providers?.Count ?? 0;
+                settings.Normalize();
 
-                if (settings.Providers.Count < originalCount)
+                if (settings.Providers!.Count < originalCount)
                 {
                     _logger.LogWarning("Filtered {Count} invalid provider(s) from settings",
                         originalCount - settings.Providers.Count);
@@ -65,31 +64,35 @@ public class SettingsService : ISettingsService
 
     public async Task SaveAsync()
     {
-        if (await PersistAsync())
-        {
-            SettingsChanged?.Invoke(this, EventArgs.Empty);
-        }
+        await PersistAsync();
+        SettingsChanged?.Invoke(this, EventArgs.Empty);
     }
 
     public async Task SaveQuietAsync()
     {
-        await PersistAsync();
+        try { await PersistAsync(); }
+        catch (Exception ex) { _logger.LogWarning(ex, "Failed to quietly save settings"); }
     }
 
-    private async Task<bool> PersistAsync()
+    private async Task PersistAsync()
     {
+        await _saveGate.WaitAsync();
         try
         {
+            _settings.Normalize();
             var json = System.Text.Json.JsonSerializer.Serialize(_settings, AppJsonSerializerContext.Default.AppSettings);
-            await File.WriteAllTextAsync(SettingsFilePath, json);
+            // Serialize saves and replace only after the complete file has reached disk.
+            var temporaryPath = SettingsFilePath + ".tmp";
+            await File.WriteAllTextAsync(temporaryPath, json);
+            File.Move(temporaryPath, SettingsFilePath, overwrite: true);
             _logger.LogInformation("Settings saved to {Path}", SettingsFilePath);
-            return true;
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to save settings");
-            return false;
+            throw;
         }
+        finally { _saveGate.Release(); }
     }
 
     public void Reset()

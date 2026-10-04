@@ -7,6 +7,78 @@ namespace CodexBarWin.Tests.Unit.Models;
 public class AppSettingsTests
 {
     [TestMethod]
+    public void Normalize_NullSectionsAndInvalidNumbers_RecoversDefaults()
+    {
+        var settings = System.Text.Json.JsonSerializer.Deserialize(
+            """{"providers":null,"timeouts":null,"animation":null,"refreshIntervalSeconds":-1,"cacheExpiryMinutes":0,"theme":99}""",
+            AppJsonSerializerContext.Default.AppSettings)!;
+        settings.Normalize();
+        settings.Providers.Should().HaveCount(3);
+        settings.Timeouts.Should().NotBeNull();
+        settings.Animation.Steps.Should().Be(15);
+        settings.RefreshIntervalSeconds.Should().Be(120);
+        settings.CacheExpiryMinutes.Should().Be(5);
+        settings.Theme.Should().Be(AppTheme.System);
+    }
+
+    [TestMethod]
+    public void Normalize_DuplicateNullAndInvalidProviders_KeepsUniqueNormalizedProviders()
+    {
+        var settings = new AppSettings { Providers =
+            [null!, new() { Id = "CLAUDE", IsEnabled = false }, new() { Id = "claude" }, new() { Id = "codex; exit" }, new() { Id = "gemini" }] };
+        settings.Normalize();
+        settings.Providers.Select(p => p.Id).Should().Equal("claude", "gemini");
+        settings.Providers[0].IsEnabled.Should().BeFalse();
+    }
+
+    [TestMethod]
+    public void Normalize_EmptyProvidersAndValidCustomValues_PreservesThem()
+    {
+        var settings = new AppSettings { Providers = [], RefreshIntervalSeconds = 15, CacheExpiryMinutes = 30,
+            Theme = AppTheme.Light, CodexBarGuideUrl = "https://example.com/guide" };
+        settings.Animation.Steps = 20;
+        settings.Timeouts.WslCommandTimeoutSeconds = 120;
+        settings.Normalize();
+        settings.Providers.Should().BeEmpty();
+        settings.RefreshIntervalSeconds.Should().Be(15);
+        settings.CacheExpiryMinutes.Should().Be(30);
+        settings.Theme.Should().Be(AppTheme.Light);
+        settings.Animation.Steps.Should().Be(20);
+        settings.Timeouts.WslCommandTimeoutSeconds.Should().Be(120);
+        settings.CodexBarGuideUrl.Should().Be("https://example.com/guide");
+    }
+
+    [TestMethod]
+    public void Normalize_ZeroOrExcessiveAnimationAndTimeouts_UsesSafeDefaults()
+    {
+        var settings = AppSettings.GetDefaults();
+        settings.RefreshIntervalSeconds = int.MaxValue;
+        settings.CacheExpiryMinutes = int.MaxValue;
+        settings.Animation = new() { Steps = 0, ShowDurationMs = -1, HideDurationMs = int.MaxValue };
+        settings.Timeouts = new() { WslCommandTimeoutSeconds = 0, WslStatusCheckTimeoutSeconds = -1,
+            CliProviderFirstFetchTimeoutSeconds = int.MaxValue, CliProviderTimeoutSeconds = -1,
+            StandardProviderFirstFetchTimeoutSeconds = 0, StandardProviderTimeoutSeconds = int.MaxValue };
+        settings.Normalize();
+        settings.RefreshIntervalSeconds.Should().Be(120);
+        settings.CacheExpiryMinutes.Should().Be(5);
+        settings.Animation.Should().BeEquivalentTo(new AnimationSettings());
+        settings.Timeouts.Should().BeEquivalentTo(new TimeoutSettings());
+    }
+
+    [TestMethod]
+    [DataRow("file:///C:/Windows/System32/cmd.exe")]
+    [DataRow("javascript:alert(1)")]
+    [DataRow("")]
+    [DataRow(null)]
+    [DataRow("https://github.com/steipete/CodexBar#installation")]
+    public void Normalize_NonWebGuideUrl_UsesDefault(string? url)
+    {
+        var settings = new AppSettings { CodexBarGuideUrl = url! };
+        settings.Normalize();
+        settings.CodexBarGuideUrl.Should().Be(AppSettings.GetDefaults().CodexBarGuideUrl);
+    }
+
+    [TestMethod]
     public void ShowCostTotals_WhenOldSettingsOrDefaults_IsOnAndRoundTripsOff()
     {
         AppSettings.GetDefaults().ShowCostTotals.Should().BeTrue();

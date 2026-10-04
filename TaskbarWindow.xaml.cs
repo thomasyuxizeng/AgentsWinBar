@@ -169,7 +169,7 @@ public sealed partial class TaskbarWindow : Window
         }
 
         AppWindow.IsShownInSwitchers = false;
-        AppWindow.Title = string.Empty;
+        AppWindow.Title = "CodexBarWin taskbar display";
 
         // Flush with the taskbar: square corners (no rounding) and, via the XAML, no border
         WindowZOrder.DisableRoundedCorners(_hwnd);

@@ -180,9 +180,11 @@ public partial class App : Application
     /// </summary>
     public void OnSetupComplete()
     {
+        if (_setupWindow == null || _mainWindow != null) return;
+        // Keep a live window while transitioning; closing the last window first can shut down WinUI.
+        StartMainWindow();
         _setupWindow?.Close();
         _setupWindow = null;
-        StartMainWindow();
     }
 
     /// <summary>

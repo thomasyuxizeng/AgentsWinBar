@@ -120,6 +120,10 @@ public partial class SettingsViewModel : ObservableObject
         _logger.LogInformation("Saving settings...");
 
         var settings = _settingsService.Settings;
+        var previousProviders = settings.Providers.Select(p => p with { }).ToList();
+        var previous = (settings.RefreshIntervalSeconds, settings.StartWithWindows, settings.StartMinimized,
+            settings.AlwaysOnOverlayEnabled, settings.TaskbarDisplayEnabled, settings.AlertsEnabled,
+            settings.ShowCostTotals, settings.Theme, settings.DeveloperModeEnabled);
 
         // Update providers (including order)
         foreach (var provider in Providers)
@@ -142,7 +146,16 @@ public partial class SettingsViewModel : ObservableObject
         settings.Theme = (AppTheme)SelectedThemeIndex;
         settings.DeveloperModeEnabled = DeveloperModeEnabled;
 
-        await _settingsService.SaveAsync();
+        try { await _settingsService.SaveAsync(); }
+        catch
+        {
+            // A failed save must not leave uncommitted edits active after the user cancels.
+            settings.Providers = previousProviders;
+            (settings.RefreshIntervalSeconds, settings.StartWithWindows, settings.StartMinimized,
+                settings.AlwaysOnOverlayEnabled, settings.TaskbarDisplayEnabled, settings.AlertsEnabled,
+                settings.ShowCostTotals, settings.Theme, settings.DeveloperModeEnabled) = previous;
+            throw;
+        }
 
         // Update startup with Windows
         await UpdateStartupAsync();

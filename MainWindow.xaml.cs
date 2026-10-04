@@ -132,6 +132,7 @@ public sealed partial class MainWindow : Window
 
         // Get services from DI
         _viewModel = App.Services.GetRequiredService<MainViewModel>();
+        _viewModel.ExitRequested += OnExitRequested;
         _settingsService = App.Services.GetRequiredService<ISettingsService>();
 
         // Initialize UISettings for theme detection
@@ -240,8 +241,12 @@ public sealed partial class MainWindow : Window
 
     private void OnSettingsRequested(object? sender, EventArgs e)
     {
-        var settingsWindow = new SettingsWindow();
-        settingsWindow.Activate();
+        try
+        {
+            var settingsWindow = App.Windows.OfType<SettingsWindow>().FirstOrDefault() ?? new SettingsWindow();
+            settingsWindow.Activate();
+        }
+        catch (Exception ex) { App.Services.GetRequiredService<ILogger<MainWindow>>().LogError(ex, "Opening Settings failed"); }
     }
 
     private void OnProviderDetailRequested(object? sender, UsageData data)
@@ -268,37 +273,28 @@ public sealed partial class MainWindow : Window
             ToolTipText = "CodexBarWin - AI Usage Monitor",
             NoLeftClickDelay = true,
             LeftClickCommand = new RelayCommand(ToggleWindow),
-            ContextMenuMode = ContextMenuMode.SecondWindow
+            // The library's secondary WinUI window can show its flyout before XamlRoot exists.
+            ContextMenuMode = ContextMenuMode.PopupMenu
         };
 
-        // Create context menu (SecondWindow mode for dark mode support)
-        var presenterStyle = new Style(typeof(MenuFlyoutPresenter));
-        presenterStyle.Setters.Add(new Setter(FrameworkElement.MinWidthProperty, 150.0));
-        presenterStyle.Setters.Add(new Setter(FrameworkElement.MinHeightProperty, 100.0));
-        presenterStyle.Setters.Add(new Setter(FrameworkElement.HeightProperty, double.NaN));
-        presenterStyle.Setters.Add(new Setter(ScrollViewer.VerticalScrollBarVisibilityProperty, ScrollBarVisibility.Hidden));
-        presenterStyle.Setters.Add(new Setter(ScrollViewer.VerticalScrollModeProperty, ScrollMode.Disabled));
-
-        var contextMenu = new MenuFlyout
-        {
-            MenuFlyoutPresenterStyle = presenterStyle
-        };
+        // Native popup mode invokes commands rather than WinUI Click events.
+        var contextMenu = new MenuFlyout();
 
         _overlayMenuItem = new ToggleMenuFlyoutItem
         {
             Text = "Always-on overlay",
             Icon = new FontIcon { Glyph = "" },
-            IsChecked = _settingsService.Settings.AlwaysOnOverlayEnabled
+            IsChecked = _settingsService.Settings.AlwaysOnOverlayEnabled,
+            Command = new RelayCommand(ToggleOverlay)
         };
-        _overlayMenuItem.Click += OnOverlayMenuItemClick;
         contextMenu.Items.Add(_overlayMenuItem);
 
         var settingsItem = new MenuFlyoutItem
         {
             Text = "Settings",
-            Icon = new FontIcon { Glyph = "\uE713" }
+            Icon = new FontIcon { Glyph = "\uE713" },
+            Command = new RelayCommand(() => OnSettingsRequested(null, EventArgs.Empty))
         };
-        settingsItem.Click += (_, _) => OnSettingsRequested(null, EventArgs.Empty);
         contextMenu.Items.Add(settingsItem);
 
         contextMenu.Items.Add(new MenuFlyoutSeparator());
@@ -306,10 +302,10 @@ public sealed partial class MainWindow : Window
         var quitItem = new MenuFlyoutItem
         {
             Text = "Quit",
-            Icon = new FontIcon { Glyph = "\uE7E8" }
+            Icon = new FontIcon { Glyph = "\uE7E8" },
+            Command = new RelayCommand(() => _viewModel.ExitCommand.ExecuteAsync(null).SafeFireAndForget(
+                onError: ex => App.Services.GetRequiredService<ILogger<MainWindow>>().LogError(ex, "Exit failed")))
         };
-        quitItem.Click += (_, _) => _viewModel.ExitCommand.ExecuteAsync(null).SafeFireAndForget(
-            onError: ex => App.Services.GetRequiredService<ILogger<MainWindow>>().LogError(ex, "Exit failed"));
         contextMenu.Items.Add(quitItem);
 
         _trayIcon.ContextFlyout = contextMenu;
@@ -320,8 +316,8 @@ public sealed partial class MainWindow : Window
         // Initialize tray icon for this window
         _trayIcon.ForceCreate();
 
-        // Start hidden - user clicks tray to show
-        HideWindow();
+        if (_settingsService.Settings.StartMinimized) HideWindow();
+        else ShowWindow();
 
         // Always-on overlay (restores the saved on/off state, and follows later settings changes)
         _settingsService.SettingsChanged += OnSettingsChanged;
@@ -331,12 +327,18 @@ public sealed partial class MainWindow : Window
 
     #region Always-on Overlay
 
-    private void OnOverlayMenuItemClick(object sender, RoutedEventArgs e)
+    private void ToggleOverlay()
     {
-        _settingsService.Settings.AlwaysOnOverlayEnabled = _overlayMenuItem?.IsChecked ?? false;
-        // Quiet save: toggling the overlay must not trigger a usage refetch
-        _settingsService.SaveQuietAsync().SafeFireAndForget(onError: _ => { });
-        ApplyOverlaySetting();
+        try
+        {
+            _settingsService.Settings.AlwaysOnOverlayEnabled = !_settingsService.Settings.AlwaysOnOverlayEnabled;
+            if (_overlayMenuItem != null) _overlayMenuItem.IsChecked = _settingsService.Settings.AlwaysOnOverlayEnabled;
+            // Quiet save: toggling the overlay must not trigger a usage refetch.
+            _settingsService.SaveQuietAsync().SafeFireAndForget(
+                onError: ex => App.Services.GetRequiredService<ILogger<MainWindow>>().LogWarning(ex, "Overlay setting save failed"));
+            ApplyOverlaySetting();
+        }
+        catch (Exception ex) { App.Services.GetRequiredService<ILogger<MainWindow>>().LogError(ex, "Overlay toggle failed"); }
     }
 
     private void OnSettingsChanged(object? sender, EventArgs e)
@@ -530,6 +532,14 @@ public sealed partial class MainWindow : Window
         _taskbarWindow = null;
         _acrylicController?.Dispose();
         _trayIcon?.Dispose();
+        _viewModel.ExitRequested -= OnExitRequested;
+        _viewModel.Dispose();
+    }
+
+    private void OnExitRequested(object? sender, EventArgs e)
+    {
+        try { Application.Current.Exit(); }
+        catch (Exception ex) { App.Services.GetRequiredService<ILogger<MainWindow>>().LogError(ex, "Application exit failed"); }
     }
 
     private void StopFlyoutForegroundWatcher()
@@ -705,7 +715,7 @@ public sealed partial class MainWindow : Window
         NativeMethods.ApplyRoundedCorners(hwnd);
 
         appWindow.Resize(new SizeInt32(WindowWidth, WindowHeight));
-        appWindow.Title = string.Empty;
+        appWindow.Title = "CodexBarWin";
 
         // Position window off-screen initially (right edge for horizontal slide animation)
         var displayArea = DisplayArea.GetFromWindowId(appWindow.Id, DisplayAreaFallback.Primary);

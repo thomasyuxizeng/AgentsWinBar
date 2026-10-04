@@ -41,7 +41,6 @@ public sealed partial class SetupWindow : Window
 
         // Get ViewModel from DI
         _viewModel = App.Services.GetRequiredService<SetupViewModel>();
-        _viewModel.SetupComplete += OnSetupComplete;
 
         // Create and configure the setup page
         _setupPage = new SetupPage { ViewModel = _viewModel };

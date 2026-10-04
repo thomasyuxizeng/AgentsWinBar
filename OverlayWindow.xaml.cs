@@ -163,7 +163,7 @@ public sealed partial class OverlayWindow : Window
         }
 
         AppWindow.IsShownInSwitchers = false;
-        AppWindow.Title = string.Empty;
+        AppWindow.Title = "CodexBarWin overlay";
 
         NativeMethods.ApplyRoundedCorners(_hwnd);
         WindowZOrder.RemoveSystemBorder(_hwnd);

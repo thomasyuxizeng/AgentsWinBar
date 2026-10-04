@@ -83,6 +83,9 @@ public sealed partial class SettingsPage : Page
 
     private async void OnSaveClicked(object sender, RoutedEventArgs e)
     {
+        if (!IsEnabled) return;
+        IsEnabled = false;
+        SaveErrorBar.IsOpen = false;
         try
         {
             if (ViewModel == null)
@@ -117,7 +120,11 @@ public sealed partial class SettingsPage : Page
         {
             var logger = App.Services.GetRequiredService<ILogger<SettingsPage>>();
             logger.LogError(ex, "OnSaveClicked failed");
+            SaveErrorBar.IsOpen = true;
+            SettingsScrollViewer.UpdateLayout();
+            SettingsScrollViewer.ChangeView(null, 0, null, disableAnimation: true);
         }
+        finally { IsEnabled = true; }
     }
 
     private void OnCancelClicked(object sender, RoutedEventArgs e)

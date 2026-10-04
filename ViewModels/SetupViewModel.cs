@@ -212,16 +212,11 @@ public partial class SetupViewModel : ObservableObject
                 break;
 
             case SetupStep.InstallCodexBar:
-                InstructionText = "Install codexbar CLI in WSL.\n\n" +
-                                  "Method 1: Homebrew (recommended)";
-                Commands.Add(new CommandItem("brew install steipete/tap/codexbar", CopyCommand));
-
-                InstructionText += "\n\nMethod 2: Direct download";
-                Commands.Add(new CommandItem(
-                    "curl -LO https://github.com/steipete/CodexBar/releases/download/v0.17.0/CodexBarCLI-v0.17.0-linux-x86_64.tar.gz && " +
-                    "tar -xzf CodexBarCLI-*.tar.gz && " +
-                    "sudo mv codexbar /usr/local/bin/",
-                    CopyCommand));
+                InstructionText = "Install the CodexBar CLI and Windows bridge in WSL.\n\n" +
+                                  "From your CodexBarWin source folder, run this in PowerShell " +
+                                  "(replace Ubuntu-24.04 with your distribution name). " +
+                                  "The README explains the required sign-ins.";
+                Commands.Add(new CommandItem(".\\tools\\wsl\\install-wsl-shim.ps1 -Distro Ubuntu-24.04", CopyCommand));
                 break;
         }
     }

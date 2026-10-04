@@ -25,6 +25,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private CancellationTokenSource? _timerCts;
     private bool _disposed;
     private bool _refreshPending;
+    private bool _stopped;
+    private bool _exiting;
+    private TaskCompletionSource? _refreshCompletion;
+
+    public event EventHandler? ExitRequested;
 
     [ObservableProperty]
     private ObservableCollection<UsageData> _providers = [];
@@ -66,26 +71,15 @@ public partial class MainViewModel : ObservableObject, IDisposable
     /// </summary>
     public async Task StartAsync()
     {
-        // Dispose existing CTSs if any (prevents leaks on restart)
-        _refreshCts?.Cancel();
-        _refreshCts?.Dispose();
-        _timerCts?.Cancel();
-        _timerCts?.Dispose();
-        _refreshTimer?.Dispose();
-
-        _refreshCts = new CancellationTokenSource();
-        _timerCts = new CancellationTokenSource();
-
-        // Create timer with current interval from settings
-        var interval = TimeSpan.FromSeconds(_settingsService.Settings.RefreshIntervalSeconds);
-        _refreshTimer = new PeriodicTimer(interval);
-
-        // Initial refresh
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (_exiting) return;
+        var activeRefresh = _refreshCompletion?.Task;
+        Stop();
+        if (activeRefresh != null) await activeRefresh;
+        if (_disposed || _exiting) return;
+        _stopped = false;
+        RecreateTimer();
         await RefreshCoreAsync();
-
-        // Start periodic refresh
-        RunPeriodicRefreshAsync(_timerCts.Token).SafeFireAndForget(
-            onError: ex => _logger.LogError(ex, "Periodic refresh task failed"));
     }
 
     /// <summary>
@@ -93,9 +87,14 @@ public partial class MainViewModel : ObservableObject, IDisposable
     /// </summary>
     public void Stop()
     {
+        _stopped = true;
+        _refreshPending = false;
         _refreshCts?.Cancel();
-        _refreshCts?.Dispose();
-        _refreshCts = null;
+        _timerCts?.Cancel();
+        _timerCts?.Dispose();
+        _timerCts = null;
+        _refreshTimer?.Dispose();
+        _refreshTimer = null;
     }
 
     [RelayCommand]
@@ -103,7 +102,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     private async Task RefreshCoreAsync(bool forceCostRefresh = false)
     {
-        if (IsLoading)
+        if (IsLoading || _stopped || _disposed || _exiting)
         {
             return;
         }
@@ -113,6 +112,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
         IsLoading = true;
         ErrorMessage = null;
+        using var refreshCts = new CancellationTokenSource();
+        _refreshCts = refreshCts;
+        var ct = refreshCts.Token;
+        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _refreshCompletion = completion;
+        var developerMode = _settingsService.Settings.DeveloperModeEnabled;
 
         try
         {
@@ -141,9 +146,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
             }
 
             // Stream results and update as they complete
-            await foreach (var data in _codexBarService.GetAllUsageStreamAsync())
+            await foreach (var data in _codexBarService.GetAllUsageStreamAsync(ct))
             {
-                if (!_settingsService.Settings.DeveloperModeEnabled) _history.Record(data, DateTime.UtcNow);
+                // Services may finish despite cancellation; obsolete results must never reach UI or history.
+                ct.ThrowIfCancellationRequested();
+                if (!developerMode) _history.Record(data, DateTime.UtcNow);
                 // Find the index of this provider
                 var index = -1;
                 for (int i = 0; i < Providers.Count; i++)
@@ -172,10 +179,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
             }
 
             // Usage appears as soon as it arrives. The heavier log scans run afterwards, at a slow cadence.
-            await _historyPersistence.SaveAsync();
+            ct.ThrowIfCancellationRequested();
+            await _historyPersistence.SaveAsync(ct: ct);
             foreach (var provider in Providers.Select(p => p.Provider).ToList())
             {
-                var cost = await _codexBarService.GetCostAsync(provider, forceCostRefresh, _refreshCts?.Token ?? default);
+                ct.ThrowIfCancellationRequested();
+                var cost = await _codexBarService.GetCostAsync(provider, forceCostRefresh, ct);
+                ct.ThrowIfCancellationRequested();
                 var index = Providers.ToList().FindIndex(p => p.Provider == provider);
                 if (index >= 0) Providers[index] = Providers[index] with
                 {
@@ -188,6 +198,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
             NotifyAlerts();
 
             _logger.LogInformation("Usage data refreshed, {Count} providers", Providers.Count);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            _logger.LogDebug("Obsolete usage refresh canceled");
         }
         catch (Exception ex)
         {
@@ -212,8 +226,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
         finally
         {
+            _refreshCts = null;
+            for (var i = 0; i < Providers.Count; i++)
+                if (Providers[i].IsLoading) Providers[i] = Providers[i] with { IsLoading = false };
             IsLoading = false;
-            if (_refreshPending && !_disposed)
+            completion.TrySetResult();
+            if (_refreshPending && !_disposed && !_stopped && !_exiting)
             {
                 _refreshPending = false;
                 RefreshCoreAsync().SafeFireAndForget(onError: ex => _logger.LogError(ex, "Pending settings refresh failed"));
@@ -248,21 +266,21 @@ public partial class MainViewModel : ObservableObject, IDisposable
     [RelayCommand]
     private async Task ExitAsync()
     {
+        if (_exiting) return;
+        _exiting = true;
         _logger.LogInformation("Exit requested");
+        var activeRefresh = _refreshCompletion?.Task;
+        Stop();
+        if (activeRefresh != null) await activeRefresh;
         await _historyPersistence.SaveAsync(force: true);
-        Microsoft.UI.Xaml.Application.Current.Exit();
+        ExitRequested?.Invoke(this, EventArgs.Empty);
     }
 
-    private async Task RunPeriodicRefreshAsync(CancellationToken ct)
+    private async Task RunPeriodicRefreshAsync(PeriodicTimer timer, CancellationToken ct)
     {
-        if (_refreshTimer == null)
-        {
-            return;
-        }
-
         try
         {
-            while (await _refreshTimer.WaitForNextTickAsync(ct))
+            while (await timer.WaitForNextTickAsync(ct))
             {
                 await RefreshCoreAsync();
             }
@@ -290,11 +308,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         try
         {
+            if (_disposed || _stopped || _exiting) return;
             _logger.LogDebug("Settings changed, recreating timer and refreshing data");
             RecreateTimer();
             if (!_settingsService.Settings.ShowCostTotals)
                 for (var i = 0; i < Providers.Count; i++) Providers[i] = Providers[i] with { Cost = null };
-            if (IsLoading) { _refreshPending = true; return; }
+            if (IsLoading) { _refreshPending = true; _refreshCts?.Cancel(); return; }
             await RefreshCoreAsync();
         }
         catch (Exception ex)
@@ -320,7 +339,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _timerCts = new CancellationTokenSource();
 
         // Restart periodic refresh
-        RunPeriodicRefreshAsync(_timerCts.Token).SafeFireAndForget(
+        RunPeriodicRefreshAsync(_refreshTimer, _timerCts.Token).SafeFireAndForget(
             onError: ex => _logger.LogError(ex, "Periodic refresh task failed"));
     }
 
@@ -340,9 +359,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
         if (disposing)
         {
             Stop();
-            _timerCts?.Cancel();
-            _timerCts?.Dispose();
-            _refreshTimer?.Dispose();
             _settingsService.SettingsChanged -= OnSettingsChanged;
         }
 

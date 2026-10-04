@@ -103,10 +103,11 @@
             Margin="0,16,0,0">
             <HyperlinkButton
                 x:Name="OpenGuideButton"
+                AutomationProperties.Name="Open setup guide"
                 Click="OnOpenGuideClicked">
                 <StackPanel Orientation="Horizontal" Spacing="6">
                     <FontIcon FontFamily="Segoe Fluent Icons" Glyph="&#xE8A7;" FontSize="14"/>
-                    <TextBlock Text="Documentation"/>
+                    <TextBlock Text="Guide"/>
                 </StackPanel>
             </HyperlinkButton>
             <Button

@@ -16,8 +16,12 @@
         </Grid.RowDefinitions>
 
         <!-- Main Content -->
-        <ScrollViewer Grid.Row="0" Padding="20,8,20,20">
+        <ScrollViewer x:Name="SettingsScrollViewer" Grid.Row="0" Padding="20,8,20,20">
             <StackPanel Spacing="4" MaxWidth="600">
+
+                <InfoBar x:Name="SaveErrorBar" IsOpen="False" Severity="Error"
+                         Title="Couldn't save settings"
+                         Message="Check that the settings folder is writable, then try again."/>
 
                 <!-- Appearance Section -->
                 <TextBlock
@@ -37,7 +41,7 @@
                         <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
 
-                    <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                    <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,16,0">
                         <TextBlock Text="App theme" Style="{StaticResource BodyTextBlockStyle}"/>
                         <TextBlock
                             Text="Select which app theme to display"
@@ -47,7 +51,7 @@
 
                     <ComboBox
                         Grid.Column="1"
-                        x:Name="ThemeComboBox"
+                        x:Name="ThemeComboBox" AutomationProperties.Name="App theme"
                         Width="150"
                         VerticalAlignment="Center">
                         <ComboBoxItem Content="Use system setting" Tag="0"/>
@@ -118,7 +122,7 @@
                                             Background="Transparent"
                                             BorderBrush="Transparent"
                                             Tag="{Binding}"
-                                            Click="OnMoveUpClicked">
+                                            AutomationProperties.Name="Move provider up" Click="OnMoveUpClicked">
                                             <FontIcon FontFamily="Segoe Fluent Icons" Glyph="&#xE74A;" FontSize="12"/>
                                         </Button>
 
@@ -130,7 +134,7 @@
                                             Background="Transparent"
                                             BorderBrush="Transparent"
                                             Tag="{Binding}"
-                                            Click="OnMoveDownClicked">
+                                            AutomationProperties.Name="Move provider down" Click="OnMoveDownClicked">
                                             <FontIcon FontFamily="Segoe Fluent Icons" Glyph="&#xE74B;" FontSize="12"/>
                                         </Button>
                                     </Grid>
@@ -154,7 +158,7 @@
                                    TextWrapping="Wrap" Style="{StaticResource CaptionTextBlockStyle}"
                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
                     </StackPanel>
-                    <ToggleSwitch Grid.Column="1" x:Name="CostTotalsToggle" OnContent="" OffContent=""
+                    <ToggleSwitch Grid.Column="1" x:Name="CostTotalsToggle" AutomationProperties.Name="Show cost and token totals" OnContent="" OffContent=""
                                   MinWidth="0" VerticalAlignment="Center"/>
                 </Grid>
 
@@ -175,7 +179,7 @@
                         <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
 
-                    <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                    <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,16,0">
                         <TextBlock Text="Refresh interval" Style="{StaticResource BodyTextBlockStyle}"/>
                         <TextBlock
                             Text="How often to fetch new usage data"
@@ -185,7 +189,7 @@
 
                     <ComboBox
                         Grid.Column="1"
-                        x:Name="RefreshIntervalComboBox"
+                        x:Name="RefreshIntervalComboBox" AutomationProperties.Name="Refresh interval"
                         Width="150"
                         VerticalAlignment="Center">
                         <ComboBoxItem Content="1 minute" Tag="60"/>
@@ -207,7 +211,7 @@
                         <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
 
-                    <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                    <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,16,0">
                         <TextBlock Text="Run at startup" Style="{StaticResource BodyTextBlockStyle}"/>
                         <TextBlock
                             Text="Start CodexBarWin when you sign in to Windows"
@@ -217,7 +221,7 @@
 
                     <ToggleSwitch
                         Grid.Column="1"
-                        x:Name="StartWithWindowsToggle"
+                        x:Name="StartWithWindowsToggle" AutomationProperties.Name="Run at startup"
                         OnContent=""
                         OffContent=""
                         MinWidth="0"
@@ -237,7 +241,7 @@
                         <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
 
-                    <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                    <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,16,0">
                         <TextBlock Text="Start minimized" Style="{StaticResource BodyTextBlockStyle}"/>
                         <TextBlock
                             Text="Minimize to system tray on startup"
@@ -247,7 +251,7 @@
 
                     <ToggleSwitch
                         Grid.Column="1"
-                        x:Name="StartMinimizedToggle"
+                        x:Name="StartMinimizedToggle" AutomationProperties.Name="Start minimized"
                         OnContent=""
                         OffContent=""
                         MinWidth="0"
@@ -267,7 +271,7 @@
                         <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
 
-                    <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                    <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,16,0">
                         <TextBlock Text="Always-on overlay" Style="{StaticResource BodyTextBlockStyle}"/>
                         <TextBlock
                             Text="Keep a small usage readout on screen (drag to move, right-click for options)"
@@ -278,7 +282,7 @@
 
                     <ToggleSwitch
                         Grid.Column="1"
-                        x:Name="AlwaysOnOverlayToggle"
+                        x:Name="AlwaysOnOverlayToggle" AutomationProperties.Name="Always-on overlay"
                         OnContent=""
                         OffContent=""
                         MinWidth="0"
@@ -298,7 +302,7 @@
                         <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
 
-                    <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                    <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,16,0">
                         <TextBlock Text="Taskbar display" Style="{StaticResource BodyTextBlockStyle}"/>
                         <TextBlock
                             Text="Show a compact usage strip on the taskbar, bottom-left corner"
@@ -309,7 +313,7 @@
 
                     <ToggleSwitch
                         Grid.Column="1"
-                        x:Name="TaskbarDisplayToggle"
+                        x:Name="TaskbarDisplayToggle" AutomationProperties.Name="Taskbar display"
                         OnContent=""
                         OffContent=""
                         MinWidth="0"
@@ -329,7 +333,7 @@
                         <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
 
-                    <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                    <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,16,0">
                         <TextBlock Text="Usage alerts" Style="{StaticResource BodyTextBlockStyle}"/>
                         <TextBlock
                             Text="Notify me when usage is far ahead of pace, nearly out, or at the limit (once per window)"
@@ -345,7 +349,7 @@
 
                     <ToggleSwitch
                         Grid.Column="1"
-                        x:Name="AlertsToggle"
+                        x:Name="AlertsToggle" AutomationProperties.Name="Usage alerts"
                         OnContent=""
                         OffContent=""
                         MinWidth="0"
@@ -365,7 +369,7 @@
                         <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
 
-                    <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                    <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,16,0">
                         <TextBlock Text="Developer mode" Style="{StaticResource BodyTextBlockStyle}"/>
                         <TextBlock
                             Text="Use sample data instead of CodexBar CLI (for testing)"
@@ -375,7 +379,7 @@
 
                     <ToggleSwitch
                         Grid.Column="1"
-                        x:Name="DeveloperModeToggle"
+                        x:Name="DeveloperModeToggle" AutomationProperties.Name="Developer mode"
                         OnContent=""
                         OffContent=""
                         MinWidth="0"

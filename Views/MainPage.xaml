@@ -88,6 +88,7 @@
                 <Button
                     Grid.Column="1"
                     x:Name="RefreshButton"
+                    AutomationProperties.Name="Refresh usage"
                     ToolTipService.ToolTip="Refresh"
                     Click="OnRefreshClicked"
                     Padding="8"
@@ -101,6 +102,7 @@
                 <Button
                     Grid.Column="2"
                     x:Name="SettingsButton"
+                    AutomationProperties.Name="Settings"
                     ToolTipService.ToolTip="Settings"
                     Click="OnSettingsClicked"
                     Padding="8"

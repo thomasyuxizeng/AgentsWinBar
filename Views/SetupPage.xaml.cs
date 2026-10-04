@@ -100,7 +100,16 @@ public sealed partial class SetupPage : Page
 
     private void OnStartClicked(object sender, RoutedEventArgs e)
     {
-        ViewModel?.StartCommand.Execute(null);
-        SetupComplete?.Invoke(this, EventArgs.Empty);
+        try
+        {
+            if (ViewModel?.IsReady != true || !StartButton.IsEnabled) return;
+            StartButton.IsEnabled = false;
+            SetupComplete?.Invoke(this, EventArgs.Empty);
+        }
+        catch (Exception ex)
+        {
+            StartButton.IsEnabled = true;
+            App.Services.GetRequiredService<ILogger<SetupPage>>().LogError(ex, "OnStartClicked failed");
+        }
     }
 }

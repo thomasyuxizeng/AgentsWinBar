@@ -104,6 +104,10 @@ the minor presentation issues recorded below.
 
 ## Prompt
 
+The subsequent hardening pass and native visual checks are recorded in
+[VERIFICATION-hardening.md](VERIFICATION-hardening.md). It includes the verified in-flight cost-toggle
+race, 400 passing tests, signed validation build 0.9.5.8, fixture differences and outstanding manual checks.
+
 > Cost research was verified on 2026-10-04: `CODEX_HOME` works and session cost/token totals mean today's
 > calendar day in the CLI's local timezone. Cost scans must bypass the shim's usage cache. See the
 > feature 2 verification notes above for measurements and the cache bug.
