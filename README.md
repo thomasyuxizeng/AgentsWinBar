@@ -37,6 +37,7 @@ This is the Wave-OCE fork of [nek0der/CodexBarWin](https://github.com/nek0der/Co
 | **Pace awareness** | Every bar also shows how much of the window's time has passed, so you can tell "50% used" at the start of a window from "50% used" near the end. |
 | **Provider status** | Service health on each card, incident details with a status-page link, and a small incident dot on compact displays. Grey means no status is available (including Gemini through Antigravity). |
 | **Cost and tokens** | Today's and last-30-days totals from local logs. Detail pages show daily costs and top models. Amounts are list-price estimates, not bills. |
+| **Usage history** | Detail pages plot each limit window's usage against an even-use guide, with a projection from the observed rate. History builds as the app runs and is kept for 14 days. |
 
 Supported providers: **Claude**, **Codex** (OpenAI) and **Gemini** (read through Google's Antigravity).
 
@@ -110,14 +111,18 @@ Export-Certificate -Cert $cert -FilePath CodexBarWin.cer
 Import-Certificate -FilePath CodexBarWin.cer -CertStoreLocation Cert:\LocalMachine\TrustedPeople   # admin
 
 # Build the package, sign it, install it
-msbuild CodexBarWin.csproj /p:Configuration=Release /p:Platform=x64 /p:UapAppxPackageBuildMode=SideloadOnly `
-  /p:AppxBundle=Never /p:AppxPackageDir="AppPackages\" /p:AppxPackageSigningEnabled=false `
-  /p:GenerateAppxPackageOnBuild=true /p:PublishReadyToRun=false /p:AppxVersion=0.9.6.0
+# First set Identity Version in Package.appxmanifest to your chosen version, e.g. 0.9.6.0
+dotnet build CodexBarWin.csproj -c Release -p:Platform=x64 -p:UapAppxPackageBuildMode=SideloadOnly `
+  -p:AppxBundle=Never -p:AppxPackageDir="AppPackages\" -p:AppxPackageSigningEnabled=false `
+  -p:GenerateAppxPackageOnBuild=true -p:PublishReadyToRun=false
 signtool sign /fd SHA256 /sha1 $cert.Thumbprint (Get-ChildItem AppPackages -Filter *.msix -Recurse).FullName
 Add-AppxPackage (Get-ChildItem AppPackages -Filter *.msix -Recurse).FullName
 ```
 
-`signtool` ships with the Windows SDK. Bump `AppxVersion` for each build so Windows treats it as an update. The packaged app keeps its settings across updates.
+`signtool` ships with the Windows SDK. Increase the manifest's Identity Version for each build so Windows
+treats it as an update; `AppxVersion` alone did not override the manifest in the tested .NET SDK build.
+Choose the MSIX for that version when signing and installing if `AppPackages` contains older builds.
+The packaged app keeps its settings across updates.
 
 > **Running an unsigned build** (`dotnet run`, or the exe from `bin\`) is blocked on machines with Smart App Control or App Control for Business enabled. Install the signed package instead.
 
@@ -180,6 +185,7 @@ Compared with upstream, this fork adds:
 - **Usage alerts** as Windows notifications, with a test button.
 - **Provider service status badges** with incident details and status-page links. The overlay and taskbar logos show a dot only for reported incidents or maintenance.
 - **Estimated cost and token totals**, with Windows log discovery for Claude and Codex, daily cost bars and top models. Optional in Settings; never shown on the compact displays.
+- **Usage history charts** for session, weekly and extra windows, with an even-use guide, observed-rate projection, capture time and sample count. Snapshots are kept locally for 14 days; charts show "Collecting data" until two current-window samples have been captured.
 - **Codex support**, and **provider logos** in place of text labels on the compact displays.
 - **Extra windows**: Claude's Fable-only limit, and Antigravity's Claude and GPT quota under Gemini, on the flyout cards and detail page, in provider colours.
 - **Relevance-based bar selection** on the compact displays.
@@ -188,7 +194,7 @@ Compared with upstream, this fork adds:
 - **No more hidden 30-second cap** on WSL commands, which was the cause of "Command timed out after 30 seconds".
 - **Providers apply immediately** when enabled, disabled or reordered in Settings.
 - **`tools/wsl`**: one-step setup for the CLI and shim.
-- 342 unit tests.
+- 370 unit tests.
 
 The full list is in the [changelog](CHANGELOG.md).
 
@@ -253,6 +259,15 @@ Settings live in `settings.json`. For the packaged app it is under `%LOCALAPPDAT
 ```
 
 `wslCommandTimeoutSeconds` is a minimum: it is never allowed to be shorter than the provider timeouts.
+
+Cost and token totals are enabled by default (`showCostTotals`). They read Windows Claude/Codex logs when
+available, or WSL home logs otherwise; Gemini cost reads Antigravity's WSL logs. The shim must be updated
+for cost support: its older Claude cache also intercepted cost commands. Amounts are list-price estimates
+and can omit unpriced or unmetered activity.
+
+Usage snapshots live in `usage-history.json` beside `settings.json`. The app records a sample when usage
+changes by at least half a percentage point, ten minutes pass, or a limit window resets. Each chart shows
+only the current window; old-window samples remain on disk until the 14-day retention period expires.
 
 ## Development
 

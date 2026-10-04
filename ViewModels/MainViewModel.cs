@@ -18,10 +18,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private readonly UsageAlertEvaluator _alertEvaluator;
     private readonly IToastNotifier _toastNotifier;
     private readonly ILogger<MainViewModel> _logger;
+    private readonly UsageHistoryStore _history;
+    private readonly UsageHistoryPersistence _historyPersistence;
     private PeriodicTimer? _refreshTimer;
     private CancellationTokenSource? _refreshCts;
     private CancellationTokenSource? _timerCts;
     private bool _disposed;
+    private bool _refreshPending;
 
     [ObservableProperty]
     private ObservableCollection<UsageData> _providers = [];
@@ -43,13 +46,17 @@ public partial class MainViewModel : ObservableObject, IDisposable
         ISettingsService settingsService,
         UsageAlertEvaluator alertEvaluator,
         IToastNotifier toastNotifier,
-        ILogger<MainViewModel> logger)
+        ILogger<MainViewModel> logger,
+        UsageHistoryStore history,
+        UsageHistoryPersistence historyPersistence)
     {
         _codexBarService = codexBarService;
         _settingsService = settingsService;
         _alertEvaluator = alertEvaluator;
         _toastNotifier = toastNotifier;
         _logger = logger;
+        _history = history;
+        _historyPersistence = historyPersistence;
 
         _settingsService.SettingsChanged += OnSettingsChanged;
     }
@@ -136,6 +143,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             // Stream results and update as they complete
             await foreach (var data in _codexBarService.GetAllUsageStreamAsync())
             {
+                if (!_settingsService.Settings.DeveloperModeEnabled) _history.Record(data, DateTime.UtcNow);
                 // Find the index of this provider
                 var index = -1;
                 for (int i = 0; i < Providers.Count; i++)
@@ -164,11 +172,15 @@ public partial class MainViewModel : ObservableObject, IDisposable
             }
 
             // Usage appears as soon as it arrives. The heavier log scans run afterwards, at a slow cadence.
+            await _historyPersistence.SaveAsync();
             foreach (var provider in Providers.Select(p => p.Provider).ToList())
             {
                 var cost = await _codexBarService.GetCostAsync(provider, forceCostRefresh, _refreshCts?.Token ?? default);
                 var index = Providers.ToList().FindIndex(p => p.Provider == provider);
-                if (index >= 0) Providers[index] = Providers[index] with { Cost = cost };
+                if (index >= 0) Providers[index] = Providers[index] with
+                {
+                    Cost = _settingsService.Settings.ShowCostTotals ? cost : null
+                };
             }
 
             LastUpdated = DateTime.Now;
@@ -201,6 +213,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
         finally
         {
             IsLoading = false;
+            if (_refreshPending && !_disposed)
+            {
+                _refreshPending = false;
+                RefreshCoreAsync().SafeFireAndForget(onError: ex => _logger.LogError(ex, "Pending settings refresh failed"));
+            }
         }
     }
 
@@ -229,9 +246,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
     }
 
     [RelayCommand]
-    private void Exit()
+    private async Task ExitAsync()
     {
         _logger.LogInformation("Exit requested");
+        await _historyPersistence.SaveAsync(force: true);
         Microsoft.UI.Xaml.Application.Current.Exit();
     }
 
@@ -276,6 +294,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             RecreateTimer();
             if (!_settingsService.Settings.ShowCostTotals)
                 for (var i = 0; i < Providers.Count; i++) Providers[i] = Providers[i] with { Cost = null };
+            if (IsLoading) { _refreshPending = true; return; }
             await RefreshCoreAsync();
         }
         catch (Exception ex)

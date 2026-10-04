@@ -34,6 +34,10 @@
     <Compile Include="..\Helpers\CostFormatter.cs" Link="Linked\CostFormatter.cs" />
     <Compile Include="..\Helpers\CostSeriesBuilder.cs" Link="Linked\CostSeriesBuilder.cs" />
     <Compile Include="..\Models\CostData.cs" Link="Linked\CostData.cs" />
+    <Compile Include="..\Models\UsageHistorySample.cs" Link="Linked\UsageHistorySample.cs" />
+    <Compile Include="..\Helpers\BurndownBuilder.cs" Link="Linked\BurndownBuilder.cs" />
+    <Compile Include="..\Services\UsageHistoryStore.cs" Link="Linked\UsageHistoryStore.cs" />
+    <Compile Include="..\Services\UsageHistoryPersistence.cs" Link="Linked\UsageHistoryPersistence.cs" />
     <Compile Include="..\Services\UsageChangeTracker.cs" Link="Linked\UsageChangeTracker.cs" />
     <Compile Include="..\Helpers\ProviderListSynchronizer.cs" Link="Linked\ProviderListSynchronizer.cs" />
     <Compile Include="..\Models\AppSettings.cs" Link="Linked\AppSettings.cs" />

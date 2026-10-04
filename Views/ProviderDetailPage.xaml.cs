@@ -19,6 +19,7 @@ public sealed class ExtraWindowRow
     public string PaceText { get; set; } = string.Empty;
     public string PercentText { get; set; } = string.Empty;
     public string ResetText { get; set; } = string.Empty;
+    public Helpers.BurndownSeries History { get; set; } = new();
 }
 
 /// <summary>
@@ -28,6 +29,7 @@ public sealed partial class ProviderDetailPage : Page
 {
     private UsageData? _data;
     private ViewModels.MainViewModel? _viewModel;
+    private Services.UsageHistoryStore? _history;
 
     public event EventHandler? BackRequested;
 
@@ -44,6 +46,7 @@ public sealed partial class ProviderDetailPage : Page
         {
             _data = data;
             _viewModel = App.Services.GetRequiredService<ViewModels.MainViewModel>();
+            _history = App.Services.GetRequiredService<Services.UsageHistoryStore>();
             _viewModel.Providers.CollectionChanged += OnProvidersChanged;
             UpdateUI();
         }
@@ -95,6 +98,10 @@ public sealed partial class ProviderDetailPage : Page
         ProviderIcon.Data = GetProviderIconGeometry(_data.Provider);
         ProviderName.Text = FormatProviderName(_data.Provider);
         UpdateCost();
+        UpdateHistory(SessionHistory, "session", _data.Session);
+        UpdateHistory(WeeklyHistory, "weekly", _data.Weekly);
+        TertiaryHistory.Accent = Helpers.WindowAccents.FromTitle(_data.TertiaryLabel);
+        UpdateHistory(TertiaryHistory, "tertiary", _data.Tertiary);
 
         var status = _data.ServiceStatus;
         ServiceStatusBanner.Visibility = Helpers.ProviderStatusPresentation.ShowBanner(status)
@@ -164,7 +171,9 @@ public sealed partial class ProviderDetailPage : Page
             TimePercent = x.Window.ElapsedPercent ?? -1,
             PaceText = x.Window.PaceSummary,
             PercentText = $"{x.Window.PercentText} used",
-            ResetText = x.Window.ResetText
+            ResetText = x.Window.ResetText,
+            History = Helpers.BurndownBuilder.Build(_history?.Get(_data.Provider, Services.UsageHistoryStore.ExtraWindowKey(x)) ?? [],
+                x.Window, DateTime.UtcNow)
         }).ToList();
         ExtraWindowsList.Visibility = _data.HasExtraWindows ? Visibility.Visible : Visibility.Collapsed;
 
@@ -201,6 +210,13 @@ public sealed partial class ProviderDetailPage : Page
         {
             ErrorSection.Visibility = Visibility.Collapsed;
         }
+    }
+
+    private void UpdateHistory(Controls.BurndownChart chart, string key, UsageWindow? window)
+    {
+        chart.Visibility = window != null ? Visibility.Visible : Visibility.Collapsed;
+        if (window != null && _data != null)
+            chart.Series = Helpers.BurndownBuilder.Build(_history?.Get(_data.Provider, key) ?? [], window, DateTime.UtcNow);
     }
 
     private void OnCopyError(object sender, RoutedEventArgs e)

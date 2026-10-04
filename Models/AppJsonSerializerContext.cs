@@ -21,6 +21,9 @@ namespace CodexBarWin.Models;
 [JsonSerializable(typeof(CostCoverage))]
 [JsonSerializable(typeof(DailyCost))]
 [JsonSerializable(typeof(ModelCost))]
+[JsonSerializable(typeof(UsageHistorySample))]
+[JsonSerializable(typeof(List<UsageHistorySample>))]
+[JsonSerializable(typeof(IReadOnlyList<UsageHistorySample>))]
 public partial class AppJsonSerializerContext : JsonSerializerContext
 {
 }
@@ -54,7 +57,7 @@ public record UsageDataDto
         Tertiary = Usage?.Tertiary?.ToUsageWindow(),
         ExtraWindows = (Usage?.ExtraRateWindows ?? [])
             .Where(x => x.Window != null && !string.IsNullOrWhiteSpace(x.Title))
-            .Select(x => new ExtraUsageWindow { Title = x.Title!.Trim(), Window = x.Window!.ToUsageWindow() })
+            .Select(x => new ExtraUsageWindow { Key = x.Id ?? string.Empty, Title = x.Title!.Trim(), Window = x.Window!.ToUsageWindow() })
             .ToList(),
         Status = Source,
         ServiceStatus = Status?.ToProviderStatus(),
@@ -116,6 +119,7 @@ public record UsageWindowDto
     public UsageWindow ToUsageWindow() => new()
     {
         Used = (int)UsedPercent,
+        ReportedPercent = UsedPercent,
         Limit = 100,
         WindowMinutes = WindowMinutes,
         ResetAt = ResetsAt,

@@ -78,6 +78,7 @@ public enum ProviderStatusIndicator
 /// </summary>
 public record ExtraUsageWindow
 {
+    public string Key { get; init; } = string.Empty;
     public string Title { get; init; } = string.Empty;
     public UsageWindow Window { get; init; } = new();
 }
@@ -89,7 +90,8 @@ public record UsageWindow
 {
     public int Used { get; init; }
     public int Limit { get; init; }
-    public double Percent => Limit > 0 ? (double)Used / Limit * 100 : 0;
+    public double? ReportedPercent { get; init; }
+    public double Percent => ReportedPercent ?? (Limit > 0 ? (double)Used / Limit * 100 : 0);
     public string PercentText => $"{Percent:F0}%";
     public DateTime? ResetAt { get; init; }
     public string? ResetIn { get; init; }

@@ -9,6 +9,7 @@ using CodexBarWin.Views;
 using CommunityToolkit.Mvvm.Input;
 using H.NotifyIcon;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.UI.Composition.SystemBackdrops;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
@@ -307,7 +308,8 @@ public sealed partial class MainWindow : Window
             Text = "Quit",
             Icon = new FontIcon { Glyph = "\uE7E8" }
         };
-        quitItem.Click += (_, _) => Application.Current.Exit();
+        quitItem.Click += (_, _) => _viewModel.ExitCommand.ExecuteAsync(null).SafeFireAndForget(
+            onError: ex => App.Services.GetRequiredService<ILogger<MainWindow>>().LogError(ex, "Exit failed"));
         contextMenu.Items.Add(quitItem);
 
         _trayIcon.ContextFlyout = contextMenu;

@@ -93,6 +93,8 @@ public partial class App : Application
         var cacheService = Services.GetRequiredService<ICacheService>();
         await cacheService.LoadAsync();
 
+        await Services.GetRequiredService<UsageHistoryPersistence>().LoadAsync();
+
         // Check setup status
         var setupChecker = Services.GetRequiredService<ISetupChecker>();
         var status = await setupChecker.CheckAsync();
@@ -226,6 +228,8 @@ public partial class App : Application
         services.AddSingleton<ISetupChecker, SetupChecker>();
         services.AddSingleton<ISampleDataLoader, SampleDataLoader>();
         services.AddSingleton<UsageAlertEvaluator>();
+        services.AddSingleton<UsageHistoryStore>();
+        services.AddSingleton<UsageHistoryPersistence>();
         services.AddSingleton<IToastNotifier, ToastNotifier>();
 
         // ViewModels

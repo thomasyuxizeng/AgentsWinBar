@@ -120,6 +120,8 @@
                 </Grid>
 
                 <!-- Weekly Usage -->
+                <controls:BurndownChart x:Name="SessionHistory" Margin="12,0"/>
+
                 <Grid
                     x:Name="WeeklySection"
                     Padding="12"
@@ -170,6 +172,8 @@
                 </Grid>
 
                 <!-- Tertiary Usage (e.g., Sonnet Weekly for Claude) -->
+                <controls:BurndownChart x:Name="WeeklyHistory" Margin="12,0"/>
+
                 <Grid
                     x:Name="TertiarySection"
                     Padding="12"
@@ -220,6 +224,8 @@
                 </Grid>
 
                 <!-- Extra windows (e.g. Antigravity's Claude and GPT quota): detail page only -->
+                <controls:BurndownChart x:Name="TertiaryHistory" Margin="12,0" Visibility="Collapsed"/>
+
                 <ItemsControl x:Name="ExtraWindowsList" IsTabStop="False" Visibility="Collapsed">
                     <ItemsControl.ItemsPanel>
                         <ItemsPanelTemplate>
@@ -238,6 +244,7 @@
                                     <RowDefinition Height="Auto"/>
                                     <RowDefinition Height="Auto"/>
                                     <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
                                 </Grid.RowDefinitions>
 
                                 <TextBlock
@@ -246,6 +253,9 @@
                                     Style="{StaticResource CaptionTextBlockStyle}"
                                     FontWeight="SemiBold"
                                     Margin="0,0,0,6"/>
+
+                                <controls:BurndownChart Grid.Row="3" Margin="0,12,0,0"
+                                                        Series="{x:Bind History}" Accent="{x:Bind Accent}"/>
 
                                 <controls:UsageMeter
                                     Grid.Row="1"

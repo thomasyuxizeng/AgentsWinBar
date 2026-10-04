@@ -143,7 +143,7 @@ public sealed partial class UsageMeter : UserControl
     private static readonly Color ClaudeOrange = Color.FromArgb(255, 0xD9, 0x77, 0x57);   // Anthropic orange (#D97757)
     private static readonly Color OpenAiTeal = Color.FromArgb(255, 0x10, 0xA3, 0x7F);     // OpenAI green (#10A37F)
 
-    private static Brush GetBarBrush(double percent, WindowAccent accent)
+    internal static Brush GetBarBrush(double percent, WindowAccent accent)
     {
         // Urgency colours are the same for every kind of bar
         if (percent >= 95) return new SolidColorBrush(Color.FromArgb(255, 232, 17, 35));   // Red - Critical
@@ -162,7 +162,7 @@ public sealed partial class UsageMeter : UserControl
     /// The translucent time-passed layer: lavender on the main bars, and a faded version of the provider's
     /// colour on the extra bars, so e.g. a Fable bar looks orange even before any usage fills it.
     /// </summary>
-    private static Brush GetTimeBrush(WindowAccent accent)
+    internal static Brush GetTimeBrush(WindowAccent accent)
     {
         const byte alpha = 0x88;
         return accent switch

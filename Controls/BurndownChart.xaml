@@ -1,0 +1,24 @@
+<UserControl x:Class="CodexBarWin.Controls.BurndownChart"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <StackPanel Spacing="4">
+        <TextBlock Text="Usage history" FontSize="11" FontWeight="SemiBold"/>
+        <Grid>
+            <Canvas x:Name="Plot" Height="100" SizeChanged="OnPlotSizeChanged"/>
+            <TextBlock x:Name="Placeholder" FontSize="11" HorizontalAlignment="Center" VerticalAlignment="Center"
+                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+        </Grid>
+        <Grid>
+            <TextBlock Text="Window start" FontSize="10" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+            <TextBlock Text="Reset" FontSize="10" HorizontalAlignment="Right"
+                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+        </Grid>
+        <StackPanel Orientation="Horizontal" Spacing="12">
+            <TextBlock x:Name="UsageLegend" Text="Usage" FontSize="10"/>
+            <TextBlock x:Name="GuideLegend" Text="Even use" FontSize="10"/>
+            <TextBlock Text="Dashed: projection" FontSize="10" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+        </StackPanel>
+        <TextBlock x:Name="CaptureText" FontSize="10" TextWrapping="Wrap"
+                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+    </StackPanel>
+</UserControl>

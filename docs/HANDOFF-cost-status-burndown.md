@@ -2,7 +2,8 @@
 
 Paste the prompt below into the coding agent, with the repository root (`CodexBarWin`, branch
 `overlay-and-cli-fixes`) as its working directory. The original research and spec are preserved below.
-Provider status badges and cost totals are implemented on `codex/provider-status-badges`; history remains pending.
+All three features are implemented on `codex/provider-status-badges`. Visual verification remains subject
+to the Windows computer-use tool's approval gate, as recorded below.
 
 ### Feature 1 verification (2026-10-04)
 
@@ -51,11 +52,32 @@ Provider status badges and cost totals are implemented on `codex/provider-status
 
 ---
 
+### Feature 3 verification (2026-10-04)
+
+- 370 unit tests passed. New coverage includes history JSON round trip, fractional CLI percentages,
+  stable extra-window IDs, half-point/ten-minute/reset dedupe, 14-day pruning, bad/future/out-of-order
+  samples, atomic persistence, throttling and forced exit flush, corrupt/missing files, write failures,
+  and current-window chart points, guide, projection, reset filtering, unknown timing and clock skew.
+- History loads before the first refresh, captures successful provider results before cost scans, and
+  persists beside the settings file as `usage-history.json`. The tray Quit action flushes pending samples.
+  Developer-mode data is excluded from real history. No charting or other dependencies were added.
+- Detail pages update as provider results arrive. Session/weekly/tertiary and extra windows use the
+  existing usage/urgency/provider colors, an even-use guide and a dashed observed-rate projection.
+  A projection above 100% is clipped without flattening its slope; fewer than two current-window
+  samples show "Collecting data". Capture time and sample count are visible below each chart.
+- A Settings change during a refresh queues another refresh, and a cost scan completing after the cost
+  toggle is disabled cannot re-show cost totals.
+- Release MSIX build passed with the same two environment warnings as feature 1. Signed, verified the
+  signature, and installed local validation package `0.9.5.3`. Native visual checks and runtime launch
+  of this final package remain unverified because the computer-use tool denies access to CodexBarWin.
+
+---
+
 ## Prompt
 
 > Cost research was verified on 2026-10-04: `CODEX_HOME` works and session cost/token totals mean today's
 > calendar day in the CLI's local timezone. Cost scans must bypass the shim's usage cache. See the
-> feature 2 verification notes below for measurements and the cache bug.
+> feature 2 verification notes above for measurements and the cache bug.
 
 You are working in CodexBarWin, a WinUI 3 / .NET 10 Windows 11 tray app (MVVM with CommunityToolkit) that
 shows AI usage limits for Claude, Codex and Gemini. It runs the CodexBar CLI inside WSL
