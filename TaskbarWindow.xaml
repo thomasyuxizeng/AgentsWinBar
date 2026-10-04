@@ -80,7 +80,7 @@
                                 Percent="{x:Bind SessionPercent}"
                                 TimePercent="{x:Bind SessionTimePercent}"
                                 PaceText="{x:Bind SessionPace}"
-                                IsSpecial="{x:Bind SessionSpecial}"/>
+                                Accent="{x:Bind SessionAccent}"/>
                             <TextBlock
                                 Grid.Row="0"
                                 Grid.Column="1"
@@ -98,7 +98,7 @@
                                 Percent="{x:Bind WeeklyPercent}"
                                 TimePercent="{x:Bind WeeklyTimePercent}"
                                 PaceText="{x:Bind WeeklyPace}"
-                                IsSpecial="{x:Bind WeeklySpecial}"/>
+                                Accent="{x:Bind WeeklyAccent}"/>
                             <TextBlock
                                 Grid.Row="1"
                                 Grid.Column="1"

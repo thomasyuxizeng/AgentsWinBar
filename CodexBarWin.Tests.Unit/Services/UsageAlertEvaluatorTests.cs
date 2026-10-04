@@ -135,6 +135,84 @@ public class UsageAlertEvaluatorTests
         new UsageAlertEvaluator().Evaluate([failed, loading], Now).Should().BeEmpty();
     }
 
+    private static UsageData WithExtras(string provider, params ExtraUsageWindow[] extras) => new()
+    {
+        Provider = provider,
+        Session = new UsageWindow { Used = 5, Limit = 100, WindowMinutes = 300, ResetAt = Now.AddMinutes(150) },
+        ExtraWindows = extras
+    };
+
+    private static ExtraUsageWindow Extra(string title, double used, int minutesLeft, int windowMinutes = 300) => new()
+    {
+        Title = title,
+        Window = new UsageWindow { Used = (int)used, Limit = 100, WindowMinutes = windowMinutes, ResetAt = Now.AddMinutes(minutesLeft) }
+    };
+
+    [TestMethod]
+    public void Evaluate_WhenAClaudeAndGptQuotaHitsItsLimit_Alerts()
+    {
+        var data = WithExtras("gemini", Extra("Claude and GPT 5-hour", 100, 62));
+
+        var alerts = new UsageAlertEvaluator().Evaluate([data], Now);
+
+        alerts.Should().ContainSingle();
+        alerts[0].Title.Should().Be("Gemini · Claude and GPT 5-hour limit reached");
+        alerts[0].Message.Should().Contain("resets in 1h 2m");
+    }
+
+    [TestMethod]
+    public void Evaluate_WhenAnExtraWindowIsNearItsLimit_Alerts()
+    {
+        var data = WithExtras("claude", Extra("Fable only", 93, 600, 10080));
+
+        var alerts = new UsageAlertEvaluator().Evaluate([data], Now);
+
+        alerts.Should().ContainSingle();
+        alerts[0].Title.Should().Be("Claude · Fable only usage");
+        alerts[0].Message.Should().StartWith("93% used");
+    }
+
+    [TestMethod]
+    public void Evaluate_WhenAnExtraWindowIsFarAheadOfPace_Warns()
+    {
+        // 60% used with 30% of the 5-hour window gone
+        var data = WithExtras("gemini", Extra("Claude and GPT 5-hour", 60, 210));
+
+        var alerts = new UsageAlertEvaluator().Evaluate([data], Now);
+
+        alerts.Should().ContainSingle();
+        alerts[0].Title.Should().Be("Gemini · Claude and GPT 5-hour: using it fast");
+    }
+
+    [TestMethod]
+    public void Evaluate_ReportsAnExtraWindowOnlyOncePerWindowAndKeepsItSeparateFromTheMainOnes()
+    {
+        var evaluator = new UsageAlertEvaluator();
+        var data = new UsageData
+        {
+            Provider = "gemini",
+            // The main session window is also at its limit, in the same reset bucket: separate alerts
+            Session = new UsageWindow { Used = 100, Limit = 100, WindowMinutes = 300, ResetAt = Now.AddMinutes(62) },
+            ExtraWindows = [Extra("Claude and GPT 5-hour", 100, 62)]
+        };
+
+        var first = evaluator.Evaluate([data], Now);
+        var second = evaluator.Evaluate([data], Now.AddMinutes(1));
+
+        first.Should().HaveCount(2);
+        first.Select(a => a.Title).Should().BeEquivalentTo(
+            "Gemini 5-hour limit reached", "Gemini · Claude and GPT 5-hour limit reached");
+        second.Should().BeEmpty();
+    }
+
+    [TestMethod]
+    public void Evaluate_QuietExtraWindowsDoNotAlert()
+    {
+        var data = WithExtras("claude", Extra("Fable only", 3, 6000, 10080));
+
+        new UsageAlertEvaluator().Evaluate([data], Now).Should().BeEmpty();
+    }
+
     [TestMethod]
     public void Evaluate_CoversTheWeeklyWindowToo()
     {

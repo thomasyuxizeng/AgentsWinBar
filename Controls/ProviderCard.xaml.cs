@@ -12,6 +12,7 @@ namespace CodexBarWin.Controls;
 public sealed class CardExtraRow
 {
     public string Title { get; set; } = string.Empty;
+    public Helpers.WindowAccent Accent { get; set; }
     public double Percent { get; set; }
     public double TimePercent { get; set; } = -1;
     public string PaceText { get; set; } = string.Empty;
@@ -105,6 +106,7 @@ public sealed partial class ProviderCard : UserControl
         ExtraList.ItemsSource = extras.Select(x => new CardExtraRow
         {
             Title = x.Title,
+            Accent = Helpers.WindowAccents.FromTitle(x.Title),
             Percent = x.Window.Percent,
             TimePercent = x.Window.ElapsedPercent ?? -1,
             PaceText = x.Window.PaceSummary,

@@ -12,6 +12,11 @@ namespace CodexBarWin.Helpers;
 public sealed record WidgetBar(string? Title, UsageWindow Window)
 {
     /// <summary>
+    /// Colour family of the bar: standard blue for the main windows, a provider colour for extra windows.
+    /// </summary>
+    public WindowAccent Accent => WindowAccents.FromTitle(Title);
+
+    /// <summary>
     /// Tooltip text for the bar: the pace sentence, prefixed with the window's name when it isn't one of the
     /// main windows (so you can tell which bar you are looking at).
     /// </summary>
@@ -28,8 +33,9 @@ public sealed record WidgetBar(string? Title, UsageWindow Window)
 /// <summary>
 /// Chooses which of a provider's usage windows to show on the compact widgets (the floating overlay and
 /// the taskbar strip), which only have room for two bars per provider. Normally that is the session and
-/// weekly windows; a different window takes a slot when it is more relevant: at or near its limit, running
-/// ahead of schedule, or the one that has been changing recently.
+/// weekly windows; a different window takes a slot when it is more relevant: the one that has been changing
+/// recently, or one running ahead of schedule. Windows at or near their limit are deliberately ranked last,
+/// so the widgets show the resources you still have. See <see cref="Score"/> for the full priority.
 /// </summary>
 public static class WidgetBarSelector
 {
@@ -84,45 +90,45 @@ public static class WidgetBarSelector
     }
 
     /// <summary>
-    /// Higher is more relevant. The base score keeps session, then weekly, ahead when nothing is going on.
+    /// Higher is more relevant. The priority, most important first:
+    /// 1. the window that changed most recently (within <see cref="RecentWindow"/>),
+    /// 2. a window running ahead of its schedule,
+    /// 3. (nothing special: the quiet windows, which still have plenty left),
+    /// 4. a window near its limit (90%+),
+    /// 5. a window at its limit.
+    /// At or near a limit there is little left to do with it, so those sink below windows with resources remaining.
+    /// Within each tier the natural order (session, weekly, ...) breaks ties.
     /// </summary>
     internal static double Score(UsageWindow window, int naturalOrder, bool isExtra, DateTime nowUtc)
     {
-        var score = 100.0 - naturalOrder * 10;
+        var natural = 100.0 - naturalOrder * 10;
         var used = window.Percent;
 
-        if (used >= 100)
-        {
-            score += 1000;     // at the limit
-        }
-        else if (used >= UsageAlertEvaluator.NearLimitPercent)
-        {
-            score += 600;      // nearly out
-        }
-        else
-        {
-            var elapsed = ResetTimeFormatter.ElapsedPercent(window.ResetAt, window.WindowMinutes, nowUtc);
-            var pace = PaceCalculator.Project(used, window.WindowMinutes, window.ResetAt, nowUtc);
-            if (pace.Kind == PaceKind.WillRunOut && elapsed is { } e && used - e >= AheadOfPacePoints)
-            {
-                score += 300 + Math.Min(100, used - e);   // running ahead of schedule
-            }
-        }
-
+        // 1. Recently changed
         if (window.LastChangedAt is { } changedAt)
         {
             var age = nowUtc - changedAt;
             if (age >= TimeSpan.Zero && age < RecentWindow)
             {
                 var freshness = 1 - age.TotalMinutes / RecentWindow.TotalMinutes;   // 1 = just now, 0 = 30 min ago
-                score += 150 * freshness;
-                if (isExtra)
-                {
-                    score += 40;   // a specific window that moved is more informative than the general ones
-                }
+                // A specific window that moved is more informative than the general ones
+                return 4000 + 150 * freshness + (isExtra ? 40 : 0) + natural;
             }
         }
 
-        return score;
+        // 5. At the limit, then 4. near it: least interesting, whatever the pace (little left to do with them)
+        if (used >= 100) return 0 + natural;
+        if (used >= UsageAlertEvaluator.NearLimitPercent) return 1000 + natural;
+
+        // 2. Running ahead of schedule while there is still a good amount left
+        var elapsed = ResetTimeFormatter.ElapsedPercent(window.ResetAt, window.WindowMinutes, nowUtc);
+        var pace = PaceCalculator.Project(used, window.WindowMinutes, window.ResetAt, nowUtc);
+        if (pace.Kind == PaceKind.WillRunOut && elapsed is { } e && used - e >= AheadOfPacePoints)
+        {
+            return 3000 + Math.Min(100, used - e) + natural;
+        }
+
+        // 3. Quiet windows with resources remaining
+        return 2000 + natural;
     }
 }

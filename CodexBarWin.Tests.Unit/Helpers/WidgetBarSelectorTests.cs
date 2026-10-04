@@ -53,24 +53,33 @@ public class WidgetBarSelectorTests
     }
 
     [TestMethod]
-    public void Pick_WhenAnExtraWindowIsAtItsLimit_ItTakesASlotFromTheLeastRelevantMainWindow()
+    public void Pick_WhenAnExtraWindowIsAtItsLimit_ItIsLeftOutBecauseThereIsLittleLeftToSee()
     {
         var data = Claude(Win(10, 300), Win(20), Extra("Claude and GPT 5-hour", Win(100, 300)));
 
         var bars = WidgetBarSelector.Pick(data, Now);
 
-        // Natural order is kept: session first, then the extra; the weekly window made way for it
-        Titles(bars).Should().Equal(null, "Claude and GPT 5-hour");
+        Titles(bars).Should().OnlyContain(t => t == null);
     }
 
     [TestMethod]
-    public void Pick_WhenAMainWindowIsNearItsLimit_BeatsQuietExtras()
+    public void Pick_WhenAMainWindowIsNearItsLimit_ItSinksBelowQuietWindowsWithResourcesLeft()
     {
         var data = Claude(Win(10, 300), Win(95), Extra("Fable only", Win(0)));
 
         var bars = WidgetBarSelector.Pick(data, Now);
 
-        bars.Select(b => b.Window).Should().Equal(data.Session!, data.Weekly!);
+        // The nearly-used-up weekly window makes way for the quiet Fable window
+        Titles(bars).Should().Equal(null, "Fable only");
+        bars[0].Window.Should().BeSameAs(data.Session);
+    }
+
+    [TestMethod]
+    public void Pick_WhenEveryWindowIsAtOrNearItsLimit_StillShowsTheBestTwo()
+    {
+        var data = Claude(Win(100, 300), Win(95));
+
+        WidgetBarSelector.Pick(data, Now).Should().HaveCount(2);
     }
 
     [TestMethod]
@@ -120,9 +129,10 @@ public class WidgetBarSelectorTests
     }
 
     [TestMethod]
-    public void Pick_WhenSeveralExtrasAreHot_OnlyTheBestOneTakesASlot()
+    public void Pick_WhenSeveralExtrasQualify_OnlyTheBestOneTakesASlot()
     {
-        // Gemini-style: both Claude/GPT windows are hot, but the row must still show Gemini's own usage
+        // Gemini-style: the Claude/GPT 5-hour window is at its limit (little left to see), the weekly one is
+        // ahead of schedule. The row must still show Gemini's own usage, plus the more useful extra.
         var data = Claude(Win(0.1, 300), Win(2),
             Extra("Claude and GPT 5-hour", Win(100, 300)),
             Extra("Claude and GPT weekly", Win(50, timeElapsedPercent: 3)));
@@ -131,8 +141,19 @@ public class WidgetBarSelectorTests
 
         bars.Should().HaveCount(2);
         bars.Count(b => b.Title != null).Should().Be(1);
-        bars.Should().Contain(b => b.Title == "Claude and GPT 5-hour");
+        bars.Should().Contain(b => b.Title == "Claude and GPT weekly");
         bars.Should().Contain(b => b.Window == data.Session);
+    }
+
+    [TestMethod]
+    public void Pick_ExposesTheProviderAccentOfEachBar()
+    {
+        var data = Claude(Win(10, 300), Win(20), Extra("Fable only", Win(60, timeElapsedPercent: 20)));
+
+        var bars = WidgetBarSelector.Pick(data, Now);
+
+        bars[0].Accent.Should().Be(WindowAccent.None);
+        bars[1].Accent.Should().Be(WindowAccent.Claude);
     }
 
     [TestMethod]
@@ -146,15 +167,34 @@ public class WidgetBarSelectorTests
     [TestMethod]
     public void Score_RankingsFollowTheDocumentedPriority()
     {
-        var atLimit = WidgetBarSelector.Score(Win(100), 3, true, Now);
-        var nearLimit = WidgetBarSelector.Score(Win(95), 3, true, Now);
-        var ahead = WidgetBarSelector.Score(Win(60, timeElapsedPercent: 20), 3, true, Now);
         var changed = WidgetBarSelector.Score(Win(5, changedAt: Now), 3, true, Now);
+        var ahead = WidgetBarSelector.Score(Win(60, timeElapsedPercent: 20), 3, true, Now);
         var quiet = WidgetBarSelector.Score(Win(5), 3, true, Now);
+        var nearLimit = WidgetBarSelector.Score(Win(95), 3, true, Now);
+        var atLimit = WidgetBarSelector.Score(Win(100), 3, true, Now);
 
-        atLimit.Should().BeGreaterThan(nearLimit);
-        nearLimit.Should().BeGreaterThan(ahead);
-        ahead.Should().BeGreaterThan(changed);
-        changed.Should().BeGreaterThan(quiet);
+        // 1. recent change, 2. ahead of schedule, (quiet), 3. near limit, 4. at limit
+        changed.Should().BeGreaterThan(ahead);
+        ahead.Should().BeGreaterThan(quiet);
+        quiet.Should().BeGreaterThan(nearLimit);
+        nearLimit.Should().BeGreaterThan(atLimit);
+    }
+
+    [TestMethod]
+    public void Score_AWindowThatChangedRecentlyOutranksEvenOneAheadOfSchedule()
+    {
+        var changedButQuiet = WidgetBarSelector.Score(Win(5, changedAt: Now.AddMinutes(-5)), 1, false, Now);
+        var aheadButStill = WidgetBarSelector.Score(Win(60, timeElapsedPercent: 20), 0, false, Now);
+
+        changedButQuiet.Should().BeGreaterThan(aheadButStill);
+    }
+
+    [TestMethod]
+    public void Score_AnAtLimitWindowThatIsStillChangingIsStillRecent()
+    {
+        var atLimitChanging = WidgetBarSelector.Score(Win(100, changedAt: Now.AddMinutes(-1)), 1, false, Now);
+        var quiet = WidgetBarSelector.Score(Win(5), 0, false, Now);
+
+        atLimitChanging.Should().BeGreaterThan(quiet);
     }
 }

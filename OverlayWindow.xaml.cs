@@ -28,8 +28,8 @@ public sealed class OverlayRow
     public double WeeklyTimePercent { get; set; } = -1;
     public string SessionPace { get; set; } = string.Empty;
     public string WeeklyPace { get; set; } = string.Empty;
-    public bool SessionSpecial { get; set; }
-    public bool WeeklySpecial { get; set; }
+    public WindowAccent SessionAccent { get; set; }
+    public WindowAccent WeeklyAccent { get; set; }
     public string WeeklyText { get; set; } = string.Empty;
     public Microsoft.UI.Xaml.GridLength SessionNumberColumn { get; set; }
     public Microsoft.UI.Xaml.GridLength WeeklyNumberColumn { get; set; }
@@ -257,8 +257,8 @@ public sealed partial class OverlayWindow : Window
             WeeklyTimePercent = second?.Window.ElapsedPercent ?? -1,
             SessionPace = first?.TooltipText ?? string.Empty,
             WeeklyPace = second?.TooltipText ?? string.Empty,
-            SessionSpecial = first?.Title != null,
-            WeeklySpecial = second?.Title != null,
+            SessionAccent = first?.Accent ?? WindowAccent.None,
+            WeeklyAccent = second?.Accent ?? WindowAccent.None,
             WeeklyText = secondCell.Text
         };
     }

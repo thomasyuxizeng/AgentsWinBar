@@ -39,14 +39,22 @@ public class UsageAlertEvaluator
                 continue;
             }
 
-            Check(alerts, data, data.SessionLabel, "session", data.Session, nowUtc);
-            Check(alerts, data, data.WeeklyLabel, "weekly", data.Weekly, nowUtc);
+            var name = Capitalize(data.Provider);
+            Check(alerts, data, $"{name} {data.SessionLabel.ToLowerInvariant()}", "session", data.Session, nowUtc);
+            Check(alerts, data, $"{name} {data.WeeklyLabel.ToLowerInvariant()}", "weekly", data.Weekly, nowUtc);
+
+            // Extra windows (Claude and GPT quota, Fable only, ...) get the same alerts
+            foreach (var extra in data.ExtraWindows)
+            {
+                Check(alerts, data, $"{name} · {extra.Title}", $"extra:{extra.Title}", extra.Window, nowUtc);
+            }
         }
 
         return alerts;
     }
 
-    private void Check(List<UsageAlert> alerts, UsageData data, string label, string slot, UsageWindow? window, DateTime nowUtc)
+    /// <param name="subject">What the alert is about, e.g. "Claude session" or "Gemini · Claude and GPT 5-hour".</param>
+    private void Check(List<UsageAlert> alerts, UsageData data, string subject, string slot, UsageWindow? window, DateTime nowUtc)
     {
         if (window == null)
         {
@@ -55,8 +63,7 @@ public class UsageAlertEvaluator
 
         var pace = PaceCalculator.Project(window.Percent, window.WindowMinutes, window.ResetAt, nowUtc);
         var elapsedPercent = ResetTimeFormatter.ElapsedPercent(window.ResetAt, window.WindowMinutes, nowUtc);
-        var name = Capitalize(data.Provider);
-        var title = $"{name} {label.ToLowerInvariant()} usage";
+        var title = $"{subject} usage";
 
         // Highest-priority situation only, so one window never produces several toasts at once
         string? level = null;
@@ -65,7 +72,7 @@ public class UsageAlertEvaluator
         if (window.Percent >= 100)
         {
             level = "limit";
-            title = $"{name} {label.ToLowerInvariant()} limit reached";
+            title = $"{subject} limit reached";
             message = pace.Kind == PaceKind.LimitReached ? PaceCalculator.Summarize(pace) : "You've used all of it.";
         }
         else if (window.Percent >= NearLimitPercent)
@@ -80,7 +87,7 @@ public class UsageAlertEvaluator
                  && window.Percent - elapsed >= AheadOfPacePoints)
         {
             level = "pace";
-            title = $"{name} {label.ToLowerInvariant()}: using it fast";
+            title = $"{subject}: using it fast";
             message = $"{window.Percent:F0}% used with {elapsed:F0}% of the time gone. {PaceCalculator.Summarize(pace)}.";
         }
 

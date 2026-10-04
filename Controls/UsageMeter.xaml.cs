@@ -1,3 +1,4 @@
+using CodexBarWin.Helpers;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
@@ -50,21 +51,22 @@ public sealed partial class UsageMeter : UserControl
     }
 
     /// <summary>
-    /// True for the extra windows (Fable only, Claude and GPT quota, ...) as opposed to the main
-    /// session and weekly ones: their bar uses a different colour so the two kinds can be told apart.
-    /// Warning colours (amber, red) are the same for both because urgency matters more.
+    /// Which provider's models the bar is for. None (the default) is a main session/weekly window and uses
+    /// the standard blue; extra windows use a provider colour (Claude: faded Anthropic orange, OpenAI: teal,
+    /// both: an orange to teal gradient) so the two kinds can be told apart. Warning colours (amber, red)
+    /// are the same for every kind because urgency matters more.
     /// </summary>
-    public static readonly DependencyProperty IsSpecialProperty =
+    public static readonly DependencyProperty AccentProperty =
         DependencyProperty.Register(
-            nameof(IsSpecial),
-            typeof(bool),
+            nameof(Accent),
+            typeof(WindowAccent),
             typeof(UsageMeter),
-            new PropertyMetadata(false, OnPercentChanged));
+            new PropertyMetadata(WindowAccent.None, OnPercentChanged));
 
-    public bool IsSpecial
+    public WindowAccent Accent
     {
-        get => (bool)GetValue(IsSpecialProperty);
-        set => SetValue(IsSpecialProperty, value);
+        get => (WindowAccent)GetValue(AccentProperty);
+        set => SetValue(AccentProperty, value);
     }
 
     public double Percent
@@ -104,7 +106,7 @@ public sealed partial class UsageMeter : UserControl
         var percent = Math.Clamp(Percent, 0, 100);
 
         UsageBar.Width = ActualWidth * (percent / 100.0);
-        UsageBar.Fill = GetBarColor(percent, IsSpecial);
+        UsageBar.Fill = GetBarBrush(percent, Accent);
 
         if (TimePercent < 0)
         {
@@ -137,11 +139,33 @@ public sealed partial class UsageMeter : UserControl
         ToolTipService.SetToolTip(this, tip);
     }
 
-    private static SolidColorBrush GetBarColor(double percent, bool special) => percent switch
+    // Provider colours for extra windows: deliberately muted so they sit quietly next to the main blue bars
+    private static readonly Color ClaudeOrange = Color.FromArgb(255, 0xC4, 0x7A, 0x5E);   // faded Anthropic orange
+    private static readonly Color OpenAiTeal = Color.FromArgb(255, 0x3E, 0x9C, 0x8C);     // subtle teal
+
+    private static Brush GetBarBrush(double percent, WindowAccent accent)
     {
-        >= 95 => new SolidColorBrush(Color.FromArgb(255, 232, 17, 35)),   // Red - Critical
-        >= 80 => new SolidColorBrush(Color.FromArgb(255, 255, 185, 0)),   // Yellow - Warning
-        _ when special => new SolidColorBrush(Color.FromArgb(255, 20, 184, 166)),   // Teal - special window, normal
-        _ => new SolidColorBrush(Color.FromArgb(255, 0, 120, 212))        // Blue - Normal
-    };
+        // Urgency colours are the same for every kind of bar
+        if (percent >= 95) return new SolidColorBrush(Color.FromArgb(255, 232, 17, 35));   // Red - Critical
+        if (percent >= 80) return new SolidColorBrush(Color.FromArgb(255, 255, 185, 0));   // Yellow - Warning
+
+        return accent switch
+        {
+            WindowAccent.Claude => new SolidColorBrush(ClaudeOrange),
+            WindowAccent.OpenAi or WindowAccent.Other => new SolidColorBrush(OpenAiTeal),
+            WindowAccent.ClaudeAndOpenAi => ClaudeToOpenAiGradient(),
+            _ => new SolidColorBrush(Color.FromArgb(255, 0, 120, 212))   // Blue - main windows
+        };
+    }
+
+    /// <summary>
+    /// Orange (Claude) to teal (OpenAI), for a pool shared by Claude and GPT models.
+    /// </summary>
+    private static LinearGradientBrush ClaudeToOpenAiGradient()
+    {
+        var brush = new LinearGradientBrush { StartPoint = new Windows.Foundation.Point(0, 0.5), EndPoint = new Windows.Foundation.Point(1, 0.5) };
+        brush.GradientStops.Add(new GradientStop { Color = ClaudeOrange, Offset = 0 });
+        brush.GradientStops.Add(new GradientStop { Color = OpenAiTeal, Offset = 1 });
+        return brush;
+    }
 }

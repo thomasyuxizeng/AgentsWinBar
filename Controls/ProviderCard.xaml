@@ -205,7 +205,7 @@
                                 Grid.Column="0"
                                 Height="8"
                                 VerticalAlignment="Center"
-                                IsSpecial="True"
+                                Accent="{x:Bind Accent}"
                                 Percent="{x:Bind Percent}"
                                 TimePercent="{x:Bind TimePercent}"
                                 PaceText="{x:Bind PaceText}"/>

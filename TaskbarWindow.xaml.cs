@@ -28,8 +28,8 @@ public sealed class TaskbarItem
     public double WeeklyTimePercent { get; set; } = -1;
     public string SessionPace { get; set; } = string.Empty;
     public string WeeklyPace { get; set; } = string.Empty;
-    public bool SessionSpecial { get; set; }
-    public bool WeeklySpecial { get; set; }
+    public WindowAccent SessionAccent { get; set; }
+    public WindowAccent WeeklyAccent { get; set; }
     public string SessionText { get; set; } = string.Empty;
     public string WeeklyText { get; set; } = string.Empty;
     public Brush SessionBrush { get; set; } = null!;
@@ -234,8 +234,8 @@ public sealed partial class TaskbarWindow : Window
                 WeeklyTimePercent = second?.Window.ElapsedPercent ?? -1,
                 SessionPace = first?.TooltipText ?? string.Empty,
                 WeeklyPace = second?.TooltipText ?? string.Empty,
-                SessionSpecial = first?.Title != null,
-                WeeklySpecial = second?.Title != null,
+                SessionAccent = first?.Accent ?? WindowAccent.None,
+                WeeklyAccent = second?.Accent ?? WindowAccent.None,
                 SessionText = firstText,
                 WeeklyText = secondText,
                 SessionBrush = WarningBrush(first?.Window) ?? primary,

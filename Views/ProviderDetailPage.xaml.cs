@@ -12,6 +12,7 @@ namespace CodexBarWin.Views;
 public sealed class ExtraWindowRow
 {
     public string Title { get; set; } = string.Empty;
+    public Helpers.WindowAccent Accent { get; set; }
     public double Percent { get; set; }
     public double TimePercent { get; set; } = -1;
     public string PaceText { get; set; } = string.Empty;
@@ -97,6 +98,7 @@ public sealed partial class ProviderDetailPage : Page
         {
             TertiarySection.Visibility = Visibility.Visible;
             TertiaryMeter.Percent = _data.Tertiary.Percent;
+            TertiaryMeter.Accent = Helpers.WindowAccents.FromTitle(_data.TertiaryLabel);
             TertiaryMeter.TimePercent = _data.Tertiary.ElapsedPercent ?? -1;
             TertiaryMeter.PaceText = _data.Tertiary.PaceSummary;
             TertiaryPercentText.Text = $"{_data.Tertiary.PercentText} used";
@@ -111,6 +113,7 @@ public sealed partial class ProviderDetailPage : Page
         ExtraWindowsList.ItemsSource = _data.ExtraWindows.Select(x => new ExtraWindowRow
         {
             Title = x.Title,
+            Accent = Helpers.WindowAccents.FromTitle(x.Title),
             Percent = x.Window.Percent,
             TimePercent = x.Window.ElapsedPercent ?? -1,
             PaceText = x.Window.PaceSummary,
