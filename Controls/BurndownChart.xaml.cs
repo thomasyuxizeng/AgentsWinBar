@@ -37,23 +37,49 @@ public sealed partial class BurndownChart : UserControl
             compact ? Visibility.Collapsed : Visibility.Visible;
         chart.CompactBackdrop.Visibility = compact ? Visibility.Visible : Visibility.Collapsed;
         chart.Plot.Height = compact ? 72 : 100;
-        chart.Draw();
+        chart.RequestDraw();
     }
 
-    private static void OnDataChanged(DependencyObject d, DependencyPropertyChangedEventArgs e) => ((BurndownChart)d).Draw();
-    private void OnPlotSizeChanged(object sender, SizeChangedEventArgs e) => Draw();
+    private static void OnDataChanged(DependencyObject d, DependencyPropertyChangedEventArgs e) => ((BurndownChart)d).RequestDraw();
+    private void OnPlotSizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        try { RequestDraw(); }
+        catch (Exception ex) { App.Services.GetRequiredService<ILogger<BurndownChart>>().LogError(ex, "Usage history size update failed"); }
+    }
     private void OnActualThemeChanged(FrameworkElement sender, object args)
     {
-        try { Draw(); }
+        try { RequestDraw(); }
         catch (Exception ex)
         {
             App.Services.GetRequiredService<ILogger<BurndownChart>>().LogError(ex, "Usage history theme update failed");
         }
     }
 
+    private bool _drawQueued;
+    private BurndownSeries? _drawnSeries;
+    private (double Width, double Height, WindowAccent Accent, bool Compact, ElementTheme Theme)? _drawnSignature;
+
+    private void RequestDraw()
+    {
+        if (_drawQueued) return;
+        _drawQueued = DispatcherQueue.TryEnqueue(() =>
+        {
+            _drawQueued = false;
+            try { Draw(); }
+            catch (Exception ex)
+            {
+                App.Services.GetRequiredService<ILogger<BurndownChart>>().LogError(ex, "Usage history draw failed");
+            }
+        });
+    }
+
     private void Draw()
     {
         if (Plot == null) return;
+        var signature = (Plot.ActualWidth, Plot.Height, Accent, IsCompact, ActualTheme);
+        if (_drawnSignature == signature && DashboardContent.SeriesEquals(_drawnSeries, Series)) return;
+        _drawnSignature = signature;
+        _drawnSeries = Series;
         Plot.Children.Clear();
         var series = Series ?? new BurndownSeries();
         var width = Plot.ActualWidth; var height = Plot.Height;

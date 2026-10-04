@@ -55,6 +55,14 @@ public sealed partial class DashboardProviderPanel : UserControl
     private static void OnDataChanged(DependencyObject d, DependencyPropertyChangedEventArgs e) =>
         ((DashboardProviderPanel)d).Refresh();
 
+    public void RefreshTimes()
+    {
+        Bindings.Update();
+        foreach (var row in _rows.Values) row.RefreshTimes();
+        DashboardTemplateBindings.Update(CostSection, item => item is DashboardFact { Label: "Scanned" } fact && Data?.Cost is { } cost
+            ? fact with { Value = $"{DashboardFormat.Local(cost.CapturedAtUtc)} · {DashboardFormat.Ago(cost.CapturedAtUtc)}" } : item);
+    }
+
     private void Refresh()
     {
         var data = Data;
@@ -91,7 +99,8 @@ public sealed partial class DashboardProviderPanel : UserControl
                 row = new DashboardWindowRow { VerticalAlignment = VerticalAlignment.Top };
                 _rows[window.Key] = row;
             }
-            row.Data = window;
+            if (!DashboardContent.WindowEquals(row.Data, window)) row.Data = window;
+            else row.RefreshTimes();
         }
 
         var layout = $"{split}|{string.Join(',', left.Select(w => w.Key))}|{string.Join(',', right.Select(w => w.Key))}|{data?.DisplayName}";
@@ -124,8 +133,14 @@ public sealed partial class DashboardProviderPanel : UserControl
         for (var i = 0; i < right.Count; i++) Place(_rows[right[i].Key], i + 1, 1);
     }
 
+    private DashboardCost? _costRowsData;
+    private bool _costRowsBuilt;
+
     private void BuildCostRows(DashboardCost? cost)
     {
+        if (_costRowsBuilt && DashboardContent.CostEquals(_costRowsData, cost)) return;
+        _costRowsBuilt = true;
+        _costRowsData = cost;
         if (cost == null)
         {
             TokenRows = ModelRows = [];
@@ -142,12 +157,12 @@ public sealed partial class DashboardProviderPanel : UserControl
             ("Reasoning", cost.ReasoningTokens)
         }.Where(t => t.Count > 0).ToList();
         var tokenTotal = Math.Max(1, tokens.Sum(t => t.Count));
-        TokenRows = tokens.Select(t => new DashboardBarRow(t.Label,
+        var tokenRows = tokens.Select(t => new DashboardBarRow(t.Label,
             $"{CostFormatter.Tokens(t.Count)} · {t.Count * 100.0 / tokenTotal:0.#}%", t.Count * 100.0 / tokenTotal)).ToList();
 
         var maxCost = cost.TopModels.Max(m => m.Cost ?? 0m, 0m);
         var maxTokens = Math.Max(1, cost.TopModels.Select(m => m.TotalTokens).DefaultIfEmpty(1).Max());
-        ModelRows = cost.TopModels.Select(m => new DashboardBarRow(m.ModelName,
+        var modelRows = cost.TopModels.Select(m => new DashboardBarRow(m.ModelName,
             $"{(m.Cost.HasValue ? CostFormatter.Money(m.Cost.Value, cost.Currency) : "Unpriced")} · {CostFormatter.Tokens(m.TotalTokens)}",
             maxCost > 0 && m.Cost.HasValue ? (double)(m.Cost.Value / maxCost) * 100 : m.TotalTokens * 100.0 / maxTokens)).ToList();
 
@@ -162,7 +177,9 @@ public sealed partial class DashboardProviderPanel : UserControl
             new("Coverage", $"{coverage.Priced} priced · {coverage.Unpriced} unpriced · {coverage.Estimated} estimated · {coverage.Unmetered} unmetered"),
             new("Scanned", $"{DashboardFormat.Local(cost.CapturedAtUtc)} · {DashboardFormat.Ago(cost.CapturedAtUtc)}")
         };
-        CostFacts = facts;
+        if (!TokenRows.SequenceEqual(tokenRows)) TokenRows = tokenRows;
+        if (!ModelRows.SequenceEqual(modelRows)) ModelRows = modelRows;
+        if (!CostFacts.SequenceEqual(facts)) CostFacts = facts;
     }
 
     private static string ProvenanceText(string? provenance) => provenance switch

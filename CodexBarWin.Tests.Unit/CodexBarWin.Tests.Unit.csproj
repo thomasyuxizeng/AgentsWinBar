@@ -27,6 +27,7 @@
   <ItemGroup>
     <Compile Include="..\Helpers\AsyncHelper.cs" Link="Linked\AsyncHelper.cs" />
     <Compile Include="..\Models\DashboardSnapshot.cs" Link="Linked\DashboardSnapshot.cs" />
+    <Compile Include="..\Helpers\DashboardContent.cs" Link="Linked\DashboardContent.cs" />
     <Compile Include="..\Helpers\DashboardSnapshotBuilder.cs" Link="Linked\DashboardSnapshotBuilder.cs" />
     <Compile Include="..\Services\IActivityLog.cs" Link="Linked\IActivityLog.cs" />
     <Compile Include="..\Services\ActivityLog.cs" Link="Linked\ActivityLog.cs" />

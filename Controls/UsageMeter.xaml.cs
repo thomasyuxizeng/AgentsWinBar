@@ -1,4 +1,6 @@
 using CodexBarWin.Helpers;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
@@ -97,28 +99,47 @@ public sealed partial class UsageMeter : UserControl
 
     private void OnSizeChanged(object sender, SizeChangedEventArgs e)
     {
-        UpdateBar();
+        try { UpdateBar(); }
+        catch (Exception ex) { App.Services.GetRequiredService<ILogger<UsageMeter>>().LogError(ex, "Usage meter size update failed"); }
+    }
+
+    private (double Percent, double Time, WindowAccent Accent, string Pace, double Width)? _lastUpdate;
+    private string? _tooltip;
+    private readonly Dictionary<(WindowAccent Accent, int Band), Brush> _barBrushes = new();
+    private readonly Dictionary<WindowAccent, Brush> _timeBrushes = new();
+
+    private void SetTooltip(string? text)
+    {
+        if (_tooltip == text) return;
+        _tooltip = text;
+        ToolTipService.SetToolTip(this, text);
     }
 
     private void UpdateBar()
     {
+        var signature = (Percent, TimePercent, Accent, PaceText, ActualWidth);
+        if (_lastUpdate == signature) return;
+        _lastUpdate = signature;
         var percent = Math.Clamp(Percent, 0, 100);
 
         UsageBar.Width = ActualWidth * (percent / 100.0);
-        UsageBar.Fill = GetBarBrush(percent, Accent);
+        var key = (Accent, percent >= 95 ? 2 : percent >= 80 ? 1 : 0);
+        if (!_barBrushes.TryGetValue(key, out var barBrush)) _barBrushes[key] = barBrush = GetBarBrush(percent, Accent);
+        if (!ReferenceEquals(UsageBar.Fill, barBrush)) UsageBar.Fill = barBrush;
 
         if (TimePercent < 0)
         {
             TimeBar.Visibility = Visibility.Collapsed;
             TimeMarker.Visibility = Visibility.Collapsed;
-            ToolTipService.SetToolTip(this, string.IsNullOrEmpty(PaceText) ? null : PaceText);
+            SetTooltip(string.IsNullOrEmpty(PaceText) ? null : PaceText);
             return;
         }
 
         var time = Math.Clamp(TimePercent, 0, 100);
         TimeBar.Visibility = Visibility.Visible;
         TimeBar.Width = ActualWidth * (time / 100.0);
-        TimeBar.Fill = GetTimeBrush(Accent);
+        if (!_timeBrushes.TryGetValue(Accent, out var timeBrush)) _timeBrushes[Accent] = timeBrush = GetTimeBrush(Accent);
+        if (!ReferenceEquals(TimeBar.Fill, timeBrush)) TimeBar.Fill = timeBrush;
 
         // The marker only appears when usage is outpacing the schedule (the blue has run past the time
         // position, so the violet layer is hidden). Otherwise the violet layer already shows the headroom.
@@ -136,14 +157,27 @@ public sealed partial class UsageMeter : UserControl
             tip += Environment.NewLine + PaceText;
         }
 
-        ToolTipService.SetToolTip(this, tip);
+        SetTooltip(tip);
     }
 
     // Provider colours for extra windows
     private static readonly Color ClaudeOrange = Color.FromArgb(255, 0xD9, 0x77, 0x57);   // Anthropic orange (#D97757)
     private static readonly Color OpenAiTeal = Color.FromArgb(255, 0x10, 0xA3, 0x7F);     // OpenAI green (#10A37F)
 
+    // Solid brushes are immutable here. Gradients remain owned by each meter so their relative
+    // coordinates follow that meter's bounds rather than another control's bounds.
+    private static readonly Dictionary<(WindowAccent Accent, int Band), Brush> BarBrushes = new();
+    private static readonly Dictionary<WindowAccent, Brush> TimeBrushes = new();
+
     internal static Brush GetBarBrush(double percent, WindowAccent accent)
+    {
+        if (accent == WindowAccent.ClaudeAndOpenAi && percent < 80) return ClaudeToOpenAiGradient();
+        var key = (accent, percent >= 95 ? 2 : percent >= 80 ? 1 : 0);
+        if (!BarBrushes.TryGetValue(key, out var brush)) BarBrushes[key] = brush = CreateBarBrush(percent, accent);
+        return brush;
+    }
+
+    private static Brush CreateBarBrush(double percent, WindowAccent accent)
     {
         // Urgency colours are the same for every kind of bar
         if (percent >= 95) return new SolidColorBrush(Color.FromArgb(255, 232, 17, 35));   // Red - Critical
@@ -163,6 +197,13 @@ public sealed partial class UsageMeter : UserControl
     /// colour on the extra bars, so e.g. a Fable bar looks orange even before any usage fills it.
     /// </summary>
     internal static Brush GetTimeBrush(WindowAccent accent)
+    {
+        if (accent == WindowAccent.ClaudeAndOpenAi) return ClaudeToOpenAiGradient(0x88);
+        if (!TimeBrushes.TryGetValue(accent, out var brush)) TimeBrushes[accent] = brush = CreateTimeBrush(accent);
+        return brush;
+    }
+
+    private static Brush CreateTimeBrush(WindowAccent accent)
     {
         const byte alpha = 0x88;
         return accent switch

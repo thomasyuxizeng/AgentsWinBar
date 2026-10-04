@@ -28,6 +28,8 @@ public sealed partial class DashboardPage : Page
 
     private readonly Dictionary<string, DashboardProviderPanel> _panels = new();
     private readonly List<StackPanel> _columnStacks = new();
+    private DashboardSnapshot? _snapshot;
+    private List<DashboardTile> _tiles = [];
     private int _arrangedColumns = -1;
     private string _arrangedOrder = string.Empty;
 
@@ -53,16 +55,50 @@ public sealed partial class DashboardPage : Page
 
     public void Update(DashboardSnapshot snapshot)
     {
-        var summary = snapshot.Summary;
+        _snapshot = snapshot;
+        UpdateSubtitle(snapshot.Summary);
+
+        UpdateTiles(snapshot);
+        if (!DashboardContent.DiagnosticsEquals(Diagnostics.Data, snapshot.Diagnostics)) Diagnostics.Data = snapshot.Diagnostics;
+        else Diagnostics.RefreshTimes();
+        UpdateProviders(snapshot.Providers);
+    }
+
+    public void RefreshTimes()
+    {
+        if (_snapshot == null) return;
+        UpdateSubtitle(_snapshot.Summary);
+        UpdateTiles(_snapshot);
+        foreach (var panel in _panels.Values) panel.RefreshTimes();
+        Diagnostics.RefreshTimes();
+    }
+
+    private void UpdateTiles(DashboardSnapshot snapshot)
+    {
+        var tiles = BuildTiles(snapshot);
+        if (_tiles.Count != tiles.Count)
+        {
+            TilesRepeater.ItemsSource = _tiles = tiles.ToList();
+            return;
+        }
+        for (var i = 0; i < tiles.Count; i++)
+        {
+            var tile = tiles[i];
+            if (_tiles[i] == tile) continue;
+            _tiles[i] = tile;
+            if (TilesRepeater.TryGetElement(i) is { } element)
+                DashboardTemplateBindings.Update(element, _ => tile);
+        }
+    }
+
+    private void UpdateSubtitle(DashboardSummary summary)
+    {
         SubtitleText.Text = summary.LastRefreshUtc.HasValue
             ? $"Updated {DashboardFormat.LocalTime(summary.LastRefreshUtc.Value)} ({DashboardFormat.Ago(summary.LastRefreshUtc.Value)})" +
               (summary.NextRefreshUtc.HasValue ? $" · next refresh {DashboardFormat.In(summary.NextRefreshUtc)}" : string.Empty) +
               $" · every {DashboardFormat.Seconds(summary.RefreshIntervalSeconds)}"
             : "Waiting for the first refresh…";
 
-        TilesRepeater.ItemsSource = BuildTiles(snapshot);
-        Diagnostics.Data = snapshot.Diagnostics;
-        UpdateProviders(snapshot.Providers);
     }
 
     private IReadOnlyList<DashboardTile> BuildTiles(DashboardSnapshot snapshot)
@@ -116,7 +152,8 @@ public sealed partial class DashboardPage : Page
                 panel = new DashboardProviderPanel { VerticalAlignment = VerticalAlignment.Top };
                 _panels[provider.Id] = panel;
             }
-            panel.Data = provider;
+            if (!DashboardContent.ProviderEquals(panel.Data, provider)) panel.Data = provider;
+            else panel.RefreshTimes();
         }
 
         EmptyPanel.Visibility = providers.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
@@ -136,6 +173,8 @@ public sealed partial class DashboardPage : Page
         // Panels with an External pool (Gemini) show two window columns of their own, so with two or more
         // columns they take a full-width row below the others instead of sharing a narrow column
         var spanning = columns >= 2 ? order.Where(id => SpansRow(_panels[id].Data)).ToList() : [];
+        // Never more columns than panels that share them (two regular panels never get an empty third column)
+        columns = Math.Max(1, Math.Min(columns, order.Count - spanning.Count));
         var orderKey = string.Join('|', order) + "#" + string.Join('|', spanning);
         if (!force && columns == _arrangedColumns && orderKey == _arrangedOrder) return;
 

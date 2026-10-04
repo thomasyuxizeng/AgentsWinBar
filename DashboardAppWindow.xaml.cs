@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using CodexBarWin.Helpers;
 using CodexBarWin.Services;
 using CodexBarWin.ViewModels;
@@ -60,8 +61,8 @@ public sealed partial class DashboardAppWindow : Window
         _page.TopmostChanged += OnTopmostChanged;
         _page.FullScreenChanged += OnFullScreenChanged;
 
-        // Redraw shortly after new data arrives (several providers can land in quick succession) and every
-        // 30 seconds so relative times ("Resets in 4h", "2m ago") stay current.
+        // Redraw shortly after new data arrives (several providers can land in quick succession).
+        // The clock only re-evaluates relative-time bindings on existing controls.
         var queue = DispatcherQueue.GetForCurrentThread();
         _redrawTimer = queue.CreateTimer();
         _redrawTimer.Interval = TimeSpan.FromMilliseconds(250);
@@ -70,7 +71,11 @@ public sealed partial class DashboardAppWindow : Window
         _clockTimer = queue.CreateTimer();
         _clockTimer.Interval = TimeSpan.FromSeconds(30);
         _clockTimer.IsRepeating = true;
-        _clockTimer.Tick += (_, _) => Redraw();
+        _clockTimer.Tick += (_, _) =>
+        {
+            try { if (!_closed) _page.RefreshTimes(); }
+            catch (Exception ex) { _logger.LogError(ex, "Dashboard clock update failed"); }
+        };
         _clockTimer.Start();
 
         _viewModel.Providers.CollectionChanged += OnProvidersChanged;
@@ -122,7 +127,14 @@ public sealed partial class DashboardAppWindow : Window
         try
         {
             var lastRefreshUtc = _viewModel.LastUpdated == default ? (DateTime?)null : _viewModel.LastUpdated.ToUniversalTime();
-            _page.Update(_dashboardService.GetSnapshot(_viewModel.Providers.ToList(), lastRefreshUtc));
+            var timing = _logger.IsEnabled(LogLevel.Debug);
+            var start = timing ? Stopwatch.GetTimestamp() : 0;
+            var snapshot = _dashboardService.GetSnapshot(_viewModel.Providers.ToList(), lastRefreshUtc);
+            var snapshotEnd = timing ? Stopwatch.GetTimestamp() : 0;
+            _page.Update(snapshot);
+            if (timing) _logger.LogDebug("Dashboard redraw: GetSnapshot {SnapshotMs:F2} ms, Page.Update {UpdateMs:F2} ms",
+                Stopwatch.GetElapsedTime(start, snapshotEnd).TotalMilliseconds,
+                Stopwatch.GetElapsedTime(snapshotEnd).TotalMilliseconds);
         }
         catch (Exception ex)
         {
@@ -140,6 +152,7 @@ public sealed partial class DashboardAppWindow : Window
         {
             if (_closed) return;
             _page.SetBusy(_viewModel.IsLoading);
+            if (e.PropertyName == nameof(MainViewModel.IsLoading)) return;
             _redrawTimer.Stop();
             _redrawTimer.Start();
         });

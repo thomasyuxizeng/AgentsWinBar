@@ -21,6 +21,8 @@ public sealed partial class DashboardWindowRow : UserControl
         InitializeComponent();
     }
 
+    public void RefreshTimes() => Bindings.Update();
+
     private static void OnDataChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
     {
         if (e.NewValue != null) ((DashboardWindowRow)d).Bindings.Update();

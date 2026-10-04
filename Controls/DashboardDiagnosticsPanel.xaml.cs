@@ -14,7 +14,11 @@ public sealed partial class DashboardDiagnosticsPanel : UserControl
     public DashboardDiagnostics Data
     {
         get => (DashboardDiagnostics)GetValue(DataProperty);
-        set => SetValue(DataProperty, value);
+        set => SetValue(DataProperty, value with
+        {
+            RecentRefreshes = Data.RecentRefreshes.SequenceEqual(value.RecentRefreshes) ? Data.RecentRefreshes : value.RecentRefreshes,
+            RecentAlerts = Data.RecentAlerts.SequenceEqual(value.RecentAlerts) ? Data.RecentAlerts : value.RecentAlerts
+        });
     }
 
     public IReadOnlyList<DashboardFact> SystemFacts { get; private set; } = [];
@@ -30,11 +34,22 @@ public sealed partial class DashboardDiagnosticsPanel : UserControl
     private static void OnDataChanged(DependencyObject d, DependencyPropertyChangedEventArgs e) =>
         ((DashboardDiagnosticsPanel)d).Refresh();
 
+    public void RefreshTimes()
+    {
+        DashboardTemplateBindings.Update(Card3, item =>
+        {
+            if (item is not DashboardFact fact) return item;
+            var cache = Data.CostCache.FirstOrDefault(c => DashboardFormat.ProviderName(c.ProviderId) == fact.Label);
+            return cache?.LastAttemptUtc is { } utc
+                ? fact with { Value = $"{DashboardFormat.Ago(utc)} · {(cache.HasData ? "has data" : "no data")}" } : item;
+        });
+    }
+
     private void Refresh()
     {
         var d = Data ?? new DashboardDiagnostics();
 
-        SystemFacts =
+        IReadOnlyList<DashboardFact> systemFacts =
         [
             new("App version", VersionText(d.AppVersion)),
             new("CodexBar CLI", d.CliAvailable switch
@@ -47,7 +62,7 @@ public sealed partial class DashboardDiagnosticsPanel : UserControl
             new("Settings file", d.SettingsPath)
         ];
 
-        SettingsFacts =
+        IReadOnlyList<DashboardFact> settingsFacts =
         [
             new("Theme", DashboardFormat.Unknown(d.Theme)),
             new("Refresh every", DashboardFormat.Seconds(d.RefreshIntervalSeconds)),
@@ -63,7 +78,7 @@ public sealed partial class DashboardDiagnosticsPanel : UserControl
             new("Developer mode", DashboardFormat.OnOff(d.DeveloperModeEnabled))
         ];
 
-        HistoryFacts =
+        IReadOnlyList<DashboardFact> historyFacts =
         [
             new("Samples stored", d.HistorySampleCount.ToString("N0")),
             new("Oldest", DashboardFormat.Local(d.HistoryOldestUtc)),
@@ -71,11 +86,15 @@ public sealed partial class DashboardDiagnosticsPanel : UserControl
             new("File size", DashboardFormat.Bytes(d.HistoryFileBytes))
         ];
 
-        CostCacheFacts = d.CostCache.Select(c => new DashboardFact(DashboardFormat.ProviderName(c.ProviderId),
+        var costCacheFacts = d.CostCache.Select(c => new DashboardFact(DashboardFormat.ProviderName(c.ProviderId),
             c.LastAttemptUtc.HasValue
                 ? $"{DashboardFormat.Ago(c.LastAttemptUtc.Value)} · {(c.HasData ? "has data" : "no data")}"
                 : "not scanned yet")).ToList();
 
+        if (!SystemFacts.SequenceEqual(systemFacts)) SystemFacts = systemFacts;
+        if (!SettingsFacts.SequenceEqual(settingsFacts)) SettingsFacts = settingsFacts;
+        if (!HistoryFacts.SequenceEqual(historyFacts)) HistoryFacts = historyFacts;
+        if (!CostCacheFacts.SequenceEqual(costCacheFacts)) CostCacheFacts = costCacheFacts;
         Bindings.Update();
     }
 

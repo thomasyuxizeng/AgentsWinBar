@@ -1,5 +1,7 @@
 using CodexBarWin.Helpers;
 using CodexBarWin.Models;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
@@ -39,10 +41,25 @@ public sealed partial class DailyCostChart : UserControl
         Draw();
     }
 
-    private void OnPlotSizeChanged(object sender, SizeChangedEventArgs e) => Draw();
+    private void OnPlotSizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        try { Draw(); }
+        catch (Exception ex) { App.Services.GetRequiredService<ILogger<DailyCostChart>>().LogError(ex, "Daily cost chart size update failed"); }
+    }
+
+    private IReadOnlyList<DailyCost>? _drawnSeries;
+    private string? _drawnCurrency;
+    private double _drawnWidth = -1;
+    private double _drawnHeight = -1;
 
     private void Draw()
     {
+        if (_drawnSeries != null && _drawnCurrency == _currency && _drawnWidth == Plot.ActualWidth &&
+            _drawnHeight == Plot.Height && DashboardContent.SequenceEquals(_drawnSeries, _series, DashboardContent.DailyEquals)) return;
+        _drawnSeries = _series;
+        _drawnCurrency = _currency;
+        _drawnWidth = Plot.ActualWidth;
+        _drawnHeight = Plot.Height;
         Plot.Children.Clear();
         if (_series.Count == 0 || Plot.ActualWidth <= 0) return;
         var max = Math.Max(0.01m, _series.Max(d => d.TotalCost));
