@@ -62,7 +62,8 @@ public sealed partial class DashboardAppWindow : Window
         _page.FullScreenChanged += OnFullScreenChanged;
 
         // Redraw shortly after new data arrives (several providers can land in quick succession).
-        // The clock only re-evaluates relative-time bindings on existing controls.
+        // Every 30 seconds: take a fresh snapshot (the page skips whatever did not change and just refreshes the
+        // relative times), so nothing the change notifications missed stays stale.
         var queue = DispatcherQueue.GetForCurrentThread();
         _redrawTimer = queue.CreateTimer();
         _redrawTimer.Interval = TimeSpan.FromMilliseconds(250);
@@ -71,11 +72,7 @@ public sealed partial class DashboardAppWindow : Window
         _clockTimer = queue.CreateTimer();
         _clockTimer.Interval = TimeSpan.FromSeconds(30);
         _clockTimer.IsRepeating = true;
-        _clockTimer.Tick += (_, _) =>
-        {
-            try { if (!_closed) _page.RefreshTimes(); }
-            catch (Exception ex) { _logger.LogError(ex, "Dashboard clock update failed"); }
-        };
+        _clockTimer.Tick += (_, _) => Redraw();
         _clockTimer.Start();
 
         _viewModel.Providers.CollectionChanged += OnProvidersChanged;

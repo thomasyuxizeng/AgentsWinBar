@@ -77,20 +77,10 @@ public sealed partial class DashboardPage : Page
 
     private void UpdateTiles(DashboardSnapshot snapshot)
     {
+        // Seven small tiles: when any value changed, hand the repeater the new list (cheap, and always correct)
         var tiles = BuildTiles(snapshot);
-        if (_tiles.Count != tiles.Count)
-        {
-            TilesRepeater.ItemsSource = _tiles = tiles.ToList();
-            return;
-        }
-        for (var i = 0; i < tiles.Count; i++)
-        {
-            var tile = tiles[i];
-            if (_tiles[i] == tile) continue;
-            _tiles[i] = tile;
-            if (TilesRepeater.TryGetElement(i) is { } element)
-                DashboardTemplateBindings.Update(element, _ => tile);
-        }
+        if (_tiles.Count == tiles.Count && _tiles.SequenceEqual(tiles)) return;
+        TilesRepeater.ItemsSource = _tiles = tiles.ToList();
     }
 
     private void UpdateSubtitle(DashboardSummary summary)
