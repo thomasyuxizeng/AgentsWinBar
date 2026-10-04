@@ -94,6 +94,8 @@ internal static class DashboardFormat
     // Provider service status
     public static Brush StatusBrush(ProviderStatus? status) => Controls.ProviderStatusVisuals.Brush(status);
     public static string StatusText(ProviderStatus? status) => ProviderStatusPresentation.Description(status);
+    public static string StatusChecked(ProviderStatus? status) => status?.UpdatedAt is { } at
+        ? $"Status page updated {Ago(at)}" : status == null ? "No status reported" : string.Empty;
     public static Visibility StatusBanner(ProviderStatus? status) => Vis(ProviderStatusPresentation.ShowBanner(status));
     public static Uri? StatusUri(ProviderStatus? status) => ProviderStatusPresentation.StatusPageUri(status);
     public static Visibility StatusLink(ProviderStatus? status) => VisNotNull(ProviderStatusPresentation.StatusPageUri(status));
@@ -105,7 +107,7 @@ internal static class DashboardFormat
     public static string Freshness(DashboardProvider provider) => provider.IsLoading ? "Refreshing…"
         : $"Fetched {Local(provider.FetchedAtUtc)} · {Ago(provider.FetchedAtUtc)}";
 
-    public static string SourceText(string? source) => string.IsNullOrWhiteSpace(source) ? "—" : source!;
+    public static string SourceLine(string? source) => string.IsNullOrWhiteSpace(source) ? "Source unknown" : $"Source: {source}";
 
     public static Brush OkBrush(bool ok) => ok ? Green : Red;
     public static string OkGlyph(bool ok) => ok ? "" : "";   // check / cancel

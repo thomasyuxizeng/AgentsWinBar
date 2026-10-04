@@ -72,8 +72,10 @@
                         <TextBlock Text="{x:Bind views:DashboardFormat.StatusText(Data.ServiceStatus), Mode=OneWay}"
                                    FontSize="12" TextWrapping="Wrap" TextAlignment="Right" MaxWidth="220"/>
                     </StackPanel>
+                    <TextBlock Style="{StaticResource Meta}" HorizontalAlignment="Right" TextAlignment="Right"
+                               Text="{x:Bind views:DashboardFormat.StatusChecked(Data.ServiceStatus), Mode=OneWay}"/>
                     <TextBlock Style="{StaticResource Meta}" HorizontalAlignment="Right"
-                               Text="{x:Bind views:DashboardFormat.SourceText(Data.Source), Mode=OneWay}"
+                               Text="{x:Bind views:DashboardFormat.SourceLine(Data.Source), Mode=OneWay}"
                                ToolTipService.ToolTip="Where these numbers came from"/>
                 </StackPanel>
             </Grid>
