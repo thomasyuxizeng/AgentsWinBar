@@ -1,184 +1,271 @@
 # CodexBarWin
 
-Windows native UI for AI coding tool usage monitoring.
+**See how much of your Claude, Codex and Gemini limits you have left, without opening anything.**
 
-[![CI](https://github.com/nek0der/CodexBarWin/actions/workflows/build.yml/badge.svg)](https://github.com/nek0der/CodexBarWin/actions/workflows/build.yml)
-[![Test](https://github.com/nek0der/CodexBarWin/actions/workflows/test.yml/badge.svg)](https://github.com/nek0der/CodexBarWin/actions/workflows/test.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+A Windows 11 app that puts your AI coding usage on the desktop: a tray flyout, an always-on floating readout, and a strip that sits on the taskbar. It reads the numbers from the [CodexBar CLI](https://github.com/steipete/CodexBar) running in WSL.
+
+This is the Wave-OCE fork of [nek0der/CodexBarWin](https://github.com/nek0der/CodexBarWin), which is the Windows front end for [steipete/CodexBar](https://github.com/steipete/CodexBar). What changed in the fork is [listed below](#what-this-fork-adds).
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE.txt)
 [![.NET](https://img.shields.io/badge/.NET-10.0-512BD4)](https://dotnet.microsoft.com/)
 [![WinUI](https://img.shields.io/badge/WinUI-3-blue)](https://microsoft.github.io/microsoft-ui-xaml/)
+![Windows 11](https://img.shields.io/badge/Windows-11-0078D4)
 
-## Overview
+![Flyout, detail page and taskbar strip](docs/images/overview.png)
 
-A Windows 11 native app that displays usage limits for AI coding tools (Claude, Codex, Gemini) in the system tray.
+*Left: the tray flyout. Right: a provider's detail page (Gemini, showing Antigravity's separate Claude and GPT quota). Bottom: the taskbar strip.*
 
-This is a WinUI 3 frontend wrapper for [CodexBar CLI](https://github.com/steipete/CodexBar).
+## Contents
 
-## Screenshots
+- [What you get](#what-you-get)
+- [Quick start](#quick-start)
+- [Reading the bars](#reading-the-bars)
+- [What this fork adds](#what-this-fork-adds)
+- [How it works](#how-it-works)
+- [Troubleshooting](#troubleshooting)
+- [Configuration](#configuration)
+- [Development](#development)
 
-![CodexBarWin Main Window](docs/images/main-window.png)
+## What you get
 
-*Multi-provider usage monitoring with real-time updates*
+| | |
+|---|---|
+| **Flyout** | Click the tray icon (or the strip, or the overlay) for a card per provider: session, weekly and extra windows, with exact reset times. Click a card for its detail page. |
+| **Taskbar strip** | A compact, borderless strip flush with the left end of the taskbar: provider logo plus two bars each. Always visible, never takes focus. |
+| **Floating overlay** | The same readout as a small draggable window that stays above your apps. Position is remembered. |
+| **Usage alerts** | Windows notifications when you're burning through a limit too fast, nearly out, or out. |
+| **Pace awareness** | Every bar also shows how much of the window's time has passed, so you can tell "50% used" at the start of a window from "50% used" near the end. |
 
-## Features
+Supported providers: **Claude**, **Codex** (OpenAI) and **Gemini** (read through Google's Antigravity).
 
-- Native Windows 11 UI (WinUI 3 + Mica)
-- Multi-provider support
-- System tray integration
-- Dark mode support
-- Auto refresh
+The two compact displays, which you can run together or separately:
 
-## Supported Providers
+| Floating overlay | Taskbar strip |
+|:---:|:---:|
+| ![Floating overlay](docs/images/overlay.png) | ![Taskbar strip](docs/images/taskbar-strip.png) |
+| Rows are Claude, Codex and Gemini; each row shows two bars. | The same readout laid out along the taskbar. |
 
-- Claude
-- Codex (OpenAI)
-- Gemini
+## Quick start
 
-## Requirements
+You need about 15 minutes the first time. The app runs on Windows; the usage data comes from a small tool inside WSL, so there are three parts: WSL, sign-ins, then the app.
 
-- Windows 10 (1809+) / Windows 11
-- WSL 2 with a Linux distribution (Ubuntu recommended)
-- .NET 10.0 Runtime
-- [CodexBar CLI](https://github.com/steipete/CodexBar) (the scripts in [`tools/wsl`](tools/wsl/README.md) install it inside WSL together with a shim that keeps Claude and Gemini working)
+### 1. Prerequisites
 
-## Installation
+- **Windows 11.** The app is built and tested on it; the taskbar strip and Mica backdrop are designed for it.
+- **WSL 2 with Ubuntu.** From an administrator PowerShell: `wsl --install -d Ubuntu-24.04`, then restart. If that fails, see [WSL won't install](#wsl-wont-install).
+- To build the app yourself you also need the **.NET 10 SDK**. If you install a prebuilt package you don't.
 
-### Option 1: MSIX Package (Recommended)
+### 2. Set up the CLI inside WSL
 
-MSIX packages provide automatic updates and a clean installation experience.
+Clone this repo, then from PowerShell in `tools\wsl`:
 
-#### Step 1: Install the Certificate
-
-1. Download `CodexBarWin-vX.X.X-Certificate.cer` from [Releases](https://github.com/nek0der/CodexBarWin/releases)
-2. Right-click the `.cer` file and select **Install Certificate**
-3. Select **Local Machine** (requires Administrator)
-4. Choose **Place all certificates in the following store**
-5. Click **Browse** and select **Trusted People**
-6. Click **OK** and **Finish**
-
-#### Step 2: Install the App
-
-**Option A: Using .appinstaller (Auto-update enabled)**
-
-1. Download `CodexBarWin.appinstaller` from [Releases](https://github.com/nek0der/CodexBarWin/releases)
-2. Double-click the `.appinstaller` file
-3. Click **Install** in the App Installer dialog
-4. The app will automatically check for updates on launch
-
-**Option B: Using .msix (Manual install)**
-
-1. Download `CodexBarWin-vX.X.X-x64.msix` from [Releases](https://github.com/nek0der/CodexBarWin/releases)
-2. Double-click the `.msix` file
-3. Click **Install** in the App Installer dialog
-
-#### Uninstall
-
-1. Open **Settings** > **Apps** > **Installed apps**
-2. Find **CodexBarWin** and click **Uninstall**
-
-### Option 2: Build from Source
-
-```bash
-git clone https://github.com/nek0der/CodexBarWin.git
-cd CodexBarWin
-dotnet build -c Release -p:Platform=x64
+```powershell
+git clone https://github.com/Wave-OCE/CodexBarWin.git
+cd CodexBarWin\tools\wsl
+.\install-wsl-shim.ps1 -Distro Ubuntu-24.04
 ```
 
-## Usage
+This downloads the CodexBar CLI (checksum verified), installs it in `/opt/codexbar`, and installs a small wrapper (the "shim") that makes Claude and Gemini work reliably. Details in [tools/wsl/README.md](tools/wsl/README.md).
 
-1. Launch CodexBarWin
-2. App minimizes to system tray
-3. Click tray icon to view usage
+### 3. Sign in to each provider (once, inside WSL)
+
+Open a WSL shell (`wsl -d Ubuntu-24.04`) and sign in to the providers you use:
+
+| Provider | Steps |
+|----------|-------|
+| **Claude** | Run `claude` and log in with your Claude account. |
+| **Codex** | `npm install -g @openai/codex`, then `codex login` (use `codex login --device-auth` if the browser redirect doesn't reach WSL). It needs its own Linux copy; a Windows `codex` can't run in WSL. |
+| **Gemini** | `curl -fsSL https://antigravity.google/cli/install.sh \| bash`, run `agy` once and sign in with Google, then exit straight away (it is an agent and will act on anything you type). |
+
+Check that it works: `wsl -d Ubuntu-24.04 codexbar usage --provider claude --format json` should print JSON.
+
+### 4. Install the app
+
+The app is a signed MSIX package. The signature is self-signed, so Windows needs to trust the certificate once.
+
+**From a release** (when one is published):
+
+```powershell
+gh release download --repo Wave-OCE/CodexBarWin --pattern "*.msix" --pattern "*.cer"
+
+# Trust the certificate (administrator PowerShell)
+Import-Certificate -FilePath .\CodexBarWin-v*-Certificate.cer -CertStoreLocation Cert:\LocalMachine\TrustedPeople
+
+# Install
+Add-AppxPackage .\CodexBarWin-v*-x64.msix
+```
+
+Don't use `CodexBarWin.appinstaller`: it still points at the upstream project's releases and would install (and keep updating to) the upstream app, without the changes listed below.
+
+**From source:**
+
+```powershell
+# One-time: a signing certificate whose subject matches the manifest publisher
+$cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject "CN=CodexBarWin OSS" `
+  -KeyUsage DigitalSignature -CertStoreLocation Cert:\CurrentUser\My `
+  -TextExtension @("2.5.29.37={text}1.3.6.1.5.5.7.3.3", "2.5.29.19={text}")
+Export-Certificate -Cert $cert -FilePath CodexBarWin.cer
+Import-Certificate -FilePath CodexBarWin.cer -CertStoreLocation Cert:\LocalMachine\TrustedPeople   # admin
+
+# Build the package, sign it, install it
+msbuild CodexBarWin.csproj /p:Configuration=Release /p:Platform=x64 /p:UapAppxPackageBuildMode=SideloadOnly `
+  /p:AppxBundle=Never /p:AppxPackageDir="AppPackages\" /p:AppxPackageSigningEnabled=false `
+  /p:GenerateAppxPackageOnBuild=true /p:PublishReadyToRun=false /p:AppxVersion=0.9.6.0
+signtool sign /fd SHA256 /sha1 $cert.Thumbprint (Get-ChildItem AppPackages -Filter *.msix -Recurse).FullName
+Add-AppxPackage (Get-ChildItem AppPackages -Filter *.msix -Recurse).FullName
+```
+
+`signtool` ships with the Windows SDK. Bump `AppxVersion` for each build so Windows treats it as an update. The packaged app keeps its settings across updates.
+
+> **Running an unsigned build** (`dotnet run`, or the exe from `bin\`) is blocked on machines with Smart App Control or App Control for Business enabled. Install the signed package instead.
+
+### 5. Use it
+
+1. Launch **CodexBarWin** from the Start menu. It lives in the system tray (it may be under the `^` overflow).
+2. Click the tray icon for the flyout. Click a provider card for details, the gear for **Settings**.
+3. In **Settings**, turn on what you want:
+
+![Settings](docs/images/settings.png)
+
+| Setting | What it does |
+|---------|--------------|
+| Providers | Choose which providers show, and their order. Changes apply immediately. |
+| Refresh interval | How often usage is fetched (1, 2, 5 or 10 minutes). |
+| Always-on overlay | The floating readout. Drag to move, right-click for options. |
+| Taskbar display | The strip on the taskbar, bottom-left corner. |
+| Usage alerts | Windows notifications. "Send test notification" checks they reach you. |
+| Run at startup | Start with Windows. |
+
+Both compact displays hide themselves while a fullscreen game, video or presentation is running.
+
+## Reading the bars
+
+Every bar has up to three layers:
+
+| You see | It means |
+|---------|----------|
+| **Blue** fill | Usage so far in this window. |
+| **Lavender** behind it | How much of the window's time has passed. Lavender sticking out past the blue means you're using the window slowly. |
+| **White marker line** | Only appears when you're *ahead* of schedule (blue has passed the time position): you're using it faster than the window refills. |
+| **Amber** (80%+), **red** (95%+) | Getting close to the limit. These override every other colour. |
+
+Hover any bar for the exact numbers and a projection, for example *"At this pace you'll hit the limit in 1h 20m, 3h 10m before the reset"*.
+
+Extra windows have their own colours so they stand apart from the main session and weekly bars:
+
+| Colour | Window |
+|--------|--------|
+| Anthropic orange | Claude windows, such as Claude's **Fable only** limit. |
+| OpenAI green | OpenAI windows. |
+| Orange to green gradient | Antigravity's shared **Claude and GPT** quota, shown on Gemini's card. |
+
+![Flyout](docs/images/flyout.png)
+
+On the floating overlay and the taskbar strip, each provider shows its two most **relevant** bars rather than always session and weekly. In order: the bar that moved most recently (last 30 minutes), then a window running ahead of schedule, then one near its limit (90%+), then one at its limit. Windows at or near a limit rank last on purpose: if you can't use more of it anyway, you'd rather see what you still have.
+
+### Alerts
+
+One notification per usage window (re-armed when the window resets), at three levels: **far ahead of pace** (25+ points ahead and the limit would be hit well before the reset), **nearly out** (90%+), and **at the limit**. They cover the extra windows too.
+
+## What this fork adds
+
+Compared with upstream, this fork adds:
+
+- **Always-on overlay and taskbar strip.** Borderless, rounded where it should be, flush with the taskbar, never steals focus, and hides during fullscreen apps.
+- **A flyout that reliably appears over other programs**, instead of sometimes opening behind them.
+- **Pace layer, marker and run-out projections** on every bar.
+- **Usage alerts** as Windows notifications, with a test button.
+- **Codex support**, and **provider logos** in place of text labels on the compact displays.
+- **Extra windows**: Claude's Fable-only limit, and Antigravity's Claude and GPT quota under Gemini, on the flyout cards and detail page, in provider colours.
+- **Relevance-based bar selection** on the compact displays.
+- **A working Gemini.** Google shut down the Gemini CLI login for individual accounts, so Gemini is read from Antigravity and shown as 5-hour and weekly windows.
+- **Reliable Claude.** The OAuth usage endpoint is rate limited by Anthropic ("Command failed (exit code 3)"), and the CLI route became slow. The shim now uses OAuth first with a cooldown, falls back to the CLI, caches for 5 minutes and shows the last good result on failure.
+- **No more hidden 30-second cap** on WSL commands, which was the cause of "Command timed out after 30 seconds".
+- **Providers apply immediately** when enabled, disabled or reordered in Settings.
+- **`tools/wsl`**: one-step setup for the CLI and shim.
+- 249 unit tests.
+
+The full list is in the [changelog](CHANGELOG.md).
+
+## How it works
+
+```
+CodexBarWin (WinUI 3)  ->  wsl.exe  ->  codexbar shim  ->  CodexBar CLI  ->  Claude / Codex / Antigravity
+```
+
+The app runs `codexbar usage --provider <id> --format json` inside your WSL distro on a timer and draws the result. The shim sits in front of the real CLI and handles the provider-specific problems (Gemini via Antigravity, Claude rate limits and caching); everything else passes straight through. WSL itself shuts down when idle, which is why nothing in WSL can run as a background process: each refresh starts the command fresh.
 
 ## Troubleshooting
 
-### MSIX Installation Issues
+### Claude shows an error or old numbers
 
-#### "The app package must be signed" error
+Anthropic rate limits the usage endpoint. The shim backs off for 10 minutes and shows the last good result. If it shows an error with no numbers at all, run `claude` in WSL once to confirm you're signed in. Test the shim directly: `wsl -d Ubuntu-24.04 codexbar usage --provider claude --format json --source cli`.
 
-You need to install the certificate first (see Installation Step 1 above).
+### "Command timed out after N seconds"
 
-#### "This app package is not signed with a trusted certificate" error
+The limit is the larger of `wslCommandTimeoutSeconds` and the provider timeouts in [settings.json](#configuration). A cold WSL start plus a slow provider can still exceed it; raise `cliProviderFirstFetchTimeoutSeconds`.
 
-The certificate was not installed to **Trusted People**. Uninstall the certificate and reinstall it to the correct store.
+### A provider is missing
 
-#### Unable to install: "The package could not be installed"
+Enable it in Settings, Providers. Codex and Gemini also need their sign-in from [step 3](#3-sign-in-to-each-provider-once-inside-wsl).
 
-1. Ensure you're running Windows 10 (1809+) or Windows 11
-2. Check if there's an existing installation and uninstall it first
-3. Run PowerShell as Administrator and execute:
-   ```powershell
-   Get-AppxPackage *CodexBarWin* | Remove-AppxPackage
-   ```
+### "Part of this app has been blocked" / the app won't start
 
-### "WSL is not installed" error
+That's Smart App Control or App Control for Business rejecting an unsigned build. Install the signed MSIX ([step 4](#4-install-the-app)). The app's crash log is at `%LOCALAPPDATA%\CodexBarWin\crash.log`.
 
-1. Open PowerShell as Administrator
-2. Run: `wsl --install`
-3. Restart your computer
-4. Run: `wsl --set-default-version 2`
+### "The app package must be signed" or error `0x800B0109`
 
-### "CodexBar CLI not found" error
+The signing certificate isn't in **Trusted People** on the *Local Machine* store, or the certificate you trusted isn't the one that signed the package (each release is signed with a new certificate, so trust the `.cer` that came with that release). Compare thumbprints: `Get-AuthenticodeSignature .\CodexBarWin.msix`.
 
-1. Install [CodexBar CLI](https://github.com/steipete/CodexBar)
-2. Follow the installation instructions in the CLI repository
-3. Verify installation: `wsl codexbar --version`
+### WSL won't install
 
-### App doesn't start or crashes
-
-1. Ensure .NET 10.0 Runtime is installed
-2. Check Windows version (requires 1809+)
-3. Try running as Administrator
-4. Check `%LOCALAPPDATA%\CodexBarWin\` for logs
+If `wsl --install` fails with a network error, install the distro from the Microsoft Store or with `winget install Canonical.Ubuntu.2404`, then run `ubuntu2404.exe install --root`.
 
 ### Data not refreshing
 
-1. Check WSL is running: `wsl --status`
-2. Verify CodexBar CLI works: `wsl codexbar --provider claude --format json`
-3. Check Settings page for refresh interval configuration
+Check `wsl --status`, then run the CLI by hand (see [step 3](#3-sign-in-to-each-provider-once-inside-wsl)). If that works, check the refresh interval in Settings.
 
-### Configuration
+### Uninstall
 
-Settings are stored in `%LOCALAPPDATA%\CodexBarWin\settings.json`:
+**Settings, Apps, Installed apps, CodexBarWin, Uninstall.** To remove the WSL side, delete `/opt/codexbar` and `/usr/local/bin/codexbar` inside the distro. To keep the CLI but drop the shim: `ln -sf /opt/codexbar/CodexBarCLI /usr/local/bin/codexbar`.
+
+## Configuration
+
+Settings live in `settings.json`. For the packaged app it is under `%LOCALAPPDATA%\Packages\CodexBarWin_w05y65rx3mcz6\LocalCache\Local\CodexBarWin\`. Edit it with the app closed.
 
 ```json
 {
-  "version": 1,
-  "refreshIntervalSeconds": 120,
-  "startWithWindows": false,
-  "startMinimized": true,
+  "refreshIntervalSeconds": 300,
+  "alwaysOnOverlayEnabled": false,
+  "taskbarDisplayEnabled": true,
+  "alertsEnabled": true,
   "timeouts": {
     "wslCommandTimeoutSeconds": 30,
     "cliProviderFirstFetchTimeoutSeconds": 60,
-    "cliProviderTimeoutSeconds": 45,
-    "standardProviderFirstFetchTimeoutSeconds": 20,
-    "standardProviderTimeoutSeconds": 10
+    "cliProviderTimeoutSeconds": 45
   }
 }
 ```
 
-## Documentation
+`wslCommandTimeoutSeconds` is a minimum: it is never allowed to be shorter than the provider timeouts.
 
-- [Contributing Guidelines](CONTRIBUTING.md)
-- [Changelog](CHANGELOG.md)
-- [Security Policy](SECURITY.md)
-- [Code of Conduct](CODE_OF_CONDUCT.md)
+## Development
 
-## Contributing
-
-Contributions are welcome! Please read our [Contributing Guidelines](CONTRIBUTING.md) before submitting a Pull Request.
-
-## Related Projects
-
-- [CodexBar](https://github.com/steipete/CodexBar) - Original macOS app
-
-## License
-
-This project is licensed under the MIT License - see the [LICENSE.txt](LICENSE.txt) file for details.
-
-Third-party dependency licenses are automatically checked in CI. To generate a license report locally:
-
-```bash
-dotnet tool install --global nuget-license
-nuget-license --input CodexBarWin.sln
+```powershell
+dotnet restore CodexBarWin.sln
+dotnet build -c Release -p:Platform=x64
+dotnet test CodexBarWin.Tests.Unit -c Debug -p:Platform=x64
 ```
+
+Stack: .NET 10, WinUI 3 (Windows App SDK 1.8), MVVM with CommunityToolkit, H.NotifyIcon, MSTest. Pure logic (pace, alerts, bar selection, formatting) is covered by unit tests; new files in `Services/`, `Models/` and `Helpers/` need tests and must be linked into the test project.
+
+Releases are built by [`release.yml`](.github/workflows/release.yml): push a tag like `v0.9.6` and CI builds, signs and publishes the MSIX and certificate.
+
+- [Contributing guidelines](CONTRIBUTING.md)
+- [Changelog](CHANGELOG.md)
+- [Security policy](SECURITY.md)
+- [Code of conduct](CODE_OF_CONDUCT.md)
+
+## Credits and license
+
+Built on [nek0der/CodexBarWin](https://github.com/nek0der/CodexBarWin) and the [CodexBar](https://github.com/steipete/CodexBar) CLI by Peter Steinberger. MIT licensed, see [LICENSE.txt](LICENSE.txt). Third-party licenses are checked in CI.

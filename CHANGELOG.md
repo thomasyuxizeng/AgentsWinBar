@@ -37,7 +37,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Settings toggle to enable/disable developer mode
 
 ### Changed
-- N/A
+- README rewritten for the fork: quick start (WSL, sign-ins, install), how to read the bars, what the fork adds, troubleshooting; new screenshots of the flyout, detail page, floating overlay, taskbar strip and Settings
 
 ## [0.1.0] - TBD
 

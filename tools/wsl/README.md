@@ -23,7 +23,7 @@ This downloads the CodexBar CLI (checksum verified) to `/opt/codexbar`, installs
 | Provider | Behaviour |
 |----------|-----------|
 | `gemini` | Google shut down the Gemini CLI login for individual accounts, so Gemini quota is read from Antigravity (`agy`) and shown as the Gemini provider: 5-hour and weekly windows. |
-| `claude` | Uses the Claude CLI route instead of the OAuth usage endpoint (which Anthropic rate limits, giving exit code 3), caches results for 5 minutes, and falls back to the last good result if a fetch fails. |
+| `claude` | Tries the OAuth usage endpoint first (about 1 second; Anthropic rate limits it, so after a failure it is left alone for 10 minutes), then the Claude CLI as a fallback (slow, and skipped for 6 hours after it fails). Results are cached for 5 minutes, and the last good result is shown if every route fails. |
 | anything else | Passed straight through. |
 
 ## Sign in (once, inside WSL)
