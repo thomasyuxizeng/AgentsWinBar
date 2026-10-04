@@ -15,8 +15,23 @@ public class WslService : IWslService
     private readonly string? _distro;
 
     private TimeSpan Timeout => _settingsService != null
-        ? TimeSpan.FromSeconds(_settingsService.Settings.Timeouts.WslCommandTimeoutSeconds)
+        ? ResolveCommandTimeout(_settingsService.Settings.Timeouts)
         : TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// The hard limit for one WSL command. Callers such as <see cref="ICodexBarService"/> already enforce
+    /// their own, provider-specific timeout through the cancellation token, so this cap must never be
+    /// shorter than the longest of those: otherwise it fires first (as "Command timed out after 30 seconds")
+    /// and the provider's own, longer, timeout never gets a chance to apply.
+    /// </summary>
+    public static TimeSpan ResolveCommandTimeout(TimeoutSettings timeouts)
+    {
+        var longestProviderTimeout = Math.Max(
+            timeouts.CliProviderFirstFetchTimeoutSeconds,
+            timeouts.CliProviderTimeoutSeconds);
+
+        return TimeSpan.FromSeconds(Math.Max(timeouts.WslCommandTimeoutSeconds, longestProviderTimeout));
+    }
 
     private TimeSpan StatusCheckTimeout => _settingsService != null
         ? TimeSpan.FromSeconds(_settingsService.Settings.Timeouts.WslStatusCheckTimeoutSeconds)

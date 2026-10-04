@@ -234,6 +234,42 @@ public class WslServiceTests
         _mockSettingsService.Settings.Timeouts.WslStatusCheckTimeoutSeconds.Should().Be(15);
     }
 
+    [TestMethod]
+    public void ResolveCommandTimeout_WhenWslCapIsShorterThanProviderTimeouts_UsesTheLongerProviderTimeout()
+    {
+        // The default 30s WSL cap used to fire before the 45s/60s provider timeouts ("Command timed out after 30 seconds")
+        var timeouts = new TimeoutSettings
+        {
+            WslCommandTimeoutSeconds = 30,
+            CliProviderTimeoutSeconds = 45,
+            CliProviderFirstFetchTimeoutSeconds = 60
+        };
+
+        WslService.ResolveCommandTimeout(timeouts).Should().Be(TimeSpan.FromSeconds(60));
+    }
+
+    [TestMethod]
+    public void ResolveCommandTimeout_WhenWslCapIsAlreadyLongest_KeepsIt()
+    {
+        var timeouts = new TimeoutSettings
+        {
+            WslCommandTimeoutSeconds = 120,
+            CliProviderTimeoutSeconds = 45,
+            CliProviderFirstFetchTimeoutSeconds = 60
+        };
+
+        WslService.ResolveCommandTimeout(timeouts).Should().Be(TimeSpan.FromSeconds(120));
+    }
+
+    [TestMethod]
+    public void ResolveCommandTimeout_WithDefaults_IsNeverBelowTheCliProviderTimeouts()
+    {
+        var defaults = AppSettings.GetDefaults().Timeouts;
+
+        WslService.ResolveCommandTimeout(defaults).TotalSeconds
+            .Should().BeGreaterThanOrEqualTo(Math.Max(defaults.CliProviderTimeoutSeconds, defaults.CliProviderFirstFetchTimeoutSeconds));
+    }
+
     #endregion
 
     #region WslResult Tests

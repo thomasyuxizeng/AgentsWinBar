@@ -8,10 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- Claude "Command timed out after 30 seconds": the app had a hidden 30-second cap on every WSL command that fired before the provider's own 45 to 60 second timeout, and Claude's CLI route had become slow (about 18 seconds, then failing). Claude now uses the fast OAuth route first (about 1 second), keeps the CLI as a fallback that is skipped for 6 hours after it fails, and backs off for 10 minutes if Anthropic rate limits; the WSL cap is never shorter than the provider timeouts
 - Enabling, disabling or reordering providers in Settings now takes effect immediately; previously the list was only built at startup, so a newly enabled provider didn't appear until the app was restarted
 - Reset times read consistently as "Resets in 4h 59m" on the cards and detail page, and the detail page no longer squeezes or garbles the usage text
 - Flyout not appearing over other programs: it now takes the foreground reliably and stays above windows that become topmost
-- "Command failed (exit code 3)" for Claude: usage is now fetched through the Claude CLI instead of the rate-limited OAuth endpoint
+- "Command failed (exit code 3)" for Claude: results are cached for 5 minutes and the last good result is shown if Anthropic rate limits
 - Gemini windows are labelled "5-hour" and "Weekly" instead of "Pro" and "Flash"
 
 ### Added

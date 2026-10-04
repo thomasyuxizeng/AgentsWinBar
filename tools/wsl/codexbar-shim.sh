@@ -66,13 +66,39 @@ print(json.dumps(d))
   fi
 fi
 
-# Claude: cache for 5 min, prefer the CLI route, fall back to OAuth, then to the last good result
+# Claude: cache for 5 minutes and always answer quickly. Routes, in order:
+#   1. OAuth usage endpoint: ~1 second, but Anthropic rate limits it (exit code 3), so after a failure it is
+#      left alone for 10 minutes.
+#   2. Claude CLI: ~18 seconds, and currently returns "a subscription notice without session quota data"
+#      for some plans. Only tried as a fallback, and a failure is remembered for 6 hours so the slow
+#      attempt isn't repeated on every refresh (which used to push a refresh past the app's timeout).
+#   3. The last good result, however old.
 case " $* " in *" --provider claude "*)
   C=/var/tmp/codexbar-claude-$(printf '%s' "$*" | md5sum | cut -c1-8).json
-  if [ -s "$C" ] && [ $(( $(date +%s) - $(stat -c %Y "$C") )) -lt 300 ]; then cat "$C"; exit 0; fi
-  cli=(); for a in "${out[@]}"; do [ "$a" = oauth ] && a=cli; cli+=("$a"); done
-  o=$("$REAL" "${cli[@]}"); rc=$?
-  if [ $rc -ne 0 ]; then o=$("$REAL" "${out[@]}"); rc=$?; fi
+  COOLDOWN=/var/tmp/codexbar-claude-oauth-cooldown
+  CLI_BROKEN=/var/tmp/codexbar-claude-cli-broken
+  age() { echo $(( $(date +%s) - $(stat -c %Y "$1") )); }
+
+  if [ -s "$C" ] && [ "$(age "$C")" -lt 300 ]; then cat "$C"; exit 0; fi
+
+  oauth=(); cli=()
+  for a in "${out[@]}"; do
+    if [ "$a" = oauth ] || [ "$a" = cli ]; then oauth+=("oauth"); cli+=("cli"); else oauth+=("$a"); cli+=("$a"); fi
+  done
+
+  o='[{"provider":"claude","source":"oauth","error":{"kind":"provider","code":3,"message":"Claude usage is rate limited right now; retrying shortly."}}]'
+  rc=3
+
+  if [ ! -e "$COOLDOWN" ] || [ "$(age "$COOLDOWN")" -ge 600 ]; then
+    r=$("$REAL" "${oauth[@]}"); rc=$?
+    if [ $rc -eq 0 ]; then o=$r; rm -f "$COOLDOWN"; else o=$r; touch "$COOLDOWN"; fi
+  fi
+
+  if [ $rc -ne 0 ] && { [ ! -e "$CLI_BROKEN" ] || [ "$(age "$CLI_BROKEN")" -ge 21600 ]; }; then
+    r=$("$REAL" "${cli[@]}"); rc2=$?
+    if [ $rc2 -eq 0 ]; then o=$r; rc=0; rm -f "$CLI_BROKEN"; else touch "$CLI_BROKEN"; fi
+  fi
+
   if [ $rc -eq 0 ]; then printf '%s\n' "$o" > "$C"; printf '%s\n' "$o"; exit 0; fi
   if [ -s "$C" ]; then cat "$C"; exit 0; fi
   printf '%s\n' "$o"; exit $rc ;;
