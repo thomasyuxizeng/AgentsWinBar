@@ -22,6 +22,7 @@ public sealed record DashboardSummary
     public DateTime? LastRefreshUtc { get; init; }
     public DateTime? NextRefreshUtc { get; init; }
     public int RefreshIntervalSeconds { get; init; }
+    public int EffectiveRefreshIntervalSeconds { get; init; }
 
     public int ProviderCount { get; init; }
 
@@ -166,6 +167,7 @@ public sealed record DashboardDiagnostics
 
     public string Theme { get; init; } = string.Empty;
     public int RefreshIntervalSeconds { get; init; }
+    public int EffectiveRefreshIntervalSeconds { get; init; }
     public int CacheExpiryMinutes { get; init; }
     public int WslCommandTimeoutSeconds { get; init; }
     public int CliProviderTimeoutSeconds { get; init; }

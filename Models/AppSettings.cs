@@ -42,6 +42,7 @@ public class AppSettings
     public int Version { get; set; } = 1;
     public List<ProviderConfig> Providers { get; set; } = [];
     public int RefreshIntervalSeconds { get; set; } = 120;
+    public bool AdaptiveRefreshEnabled { get; set; } = true;
     public bool StartWithWindows { get; set; } = false;
     public bool StartMinimized { get; set; } = false;
     public AppTheme Theme { get; set; } = AppTheme.System;
@@ -116,6 +117,7 @@ public class AppSettings
     {
         Providers = ProviderConfig.GetDefaults().ToList(),
         RefreshIntervalSeconds = 120,
+        AdaptiveRefreshEnabled = true,
         StartWithWindows = false,
         StartMinimized = true,
         Theme = AppTheme.System,

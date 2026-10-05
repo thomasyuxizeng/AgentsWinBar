@@ -26,6 +26,9 @@
   <!-- Link source files from main project (no Windows App SDK dependency) -->
   <ItemGroup>
     <Compile Include="..\Helpers\AsyncHelper.cs" Link="Linked\AsyncHelper.cs" />
+    <Compile Include="..\Helpers\AdaptiveRefreshPolicy.cs" Link="Linked\AdaptiveRefreshPolicy.cs" />
+    <Compile Include="..\Helpers\UsageFingerprint.cs" Link="Linked\UsageFingerprint.cs" />
+    <Compile Include="..\Helpers\WorkingSetTrimmer.cs" Link="Linked\WorkingSetTrimmer.cs" />
     <Compile Include="..\Models\DashboardSnapshot.cs" Link="Linked\DashboardSnapshot.cs" />
     <Compile Include="..\Helpers\DashboardValues.cs" Link="Linked\DashboardValues.cs" />
     <Compile Include="..\Helpers\DashboardContent.cs" Link="Linked\DashboardContent.cs" />

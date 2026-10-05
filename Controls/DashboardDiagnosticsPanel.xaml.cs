@@ -65,7 +65,9 @@ public sealed partial class DashboardDiagnosticsPanel : UserControl
         IReadOnlyList<DashboardFact> settingsFacts =
         [
             new("Theme", DashboardFormat.Unknown(d.Theme)),
-            new("Refresh every", DashboardFormat.Seconds(d.RefreshIntervalSeconds)),
+            new("Refresh every", d.EffectiveRefreshIntervalSeconds > d.RefreshIntervalSeconds
+                ? $"{DashboardFormat.Seconds(d.RefreshIntervalSeconds)} (now {DashboardFormat.Seconds(d.EffectiveRefreshIntervalSeconds)}, usage idle)"
+                : DashboardFormat.Seconds(d.RefreshIntervalSeconds)),
             new("Cache expires after", DashboardFormat.Plural(d.CacheExpiryMinutes, "minute")),
             new("WSL command limit", DashboardFormat.Seconds(d.WslCommandTimeoutSeconds)),
             new("CLI provider limit", DashboardFormat.Seconds(d.CliProviderTimeoutSeconds)),

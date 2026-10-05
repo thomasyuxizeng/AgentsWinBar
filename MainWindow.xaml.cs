@@ -101,6 +101,7 @@ public sealed partial class MainWindow : Window
     private const int WindowMarginRight = 7;  // Adjusted for window shadow (target: 15px from edge)
     private const int WindowMarginBottom = 2; // Adjusted for window shadow (target: 10px from taskbar)
     private bool _isWindowVisible;
+    private IDisposable? _costDemand;
     private bool _isAnimating;
     private bool _isShowingAnimation;  // Track animation direction
     private DispatcherTimer? _animationTimer;
@@ -537,6 +538,9 @@ public sealed partial class MainWindow : Window
 
     private void OnWindowClosed(object sender, WindowEventArgs args)
     {
+        _costDemand?.Dispose();
+        _costDemand = null;
+        _viewModel.SetFlyoutVisible(false);
         if (Content is FrameworkElement rootElement)
         {
             rootElement.ActualThemeChanged -= OnActualThemeChanged;
@@ -604,6 +608,10 @@ public sealed partial class MainWindow : Window
         WindowExtensions.Show(this);
         Activate();
         _isWindowVisible = true;
+        _viewModel.SetFlyoutVisible(true);
+        _costDemand ??= _viewModel.AcquireCostDemand();
+        _viewModel.RefreshIfStaleAsync(TimeSpan.FromMinutes(2)).SafeFireAndForget(
+            onError: ex => App.Services.GetRequiredService<ILogger<MainWindow>>().LogError(ex, "Flyout stale refresh failed"));
 
         // Win the foreground even when another app (or a topmost window) owns it
         var hwnd = WindowNative.GetWindowHandle(this);
@@ -694,6 +702,9 @@ public sealed partial class MainWindow : Window
             {
                 WindowExtensions.Hide(this);
                 _isWindowVisible = false;
+                _costDemand?.Dispose();
+                _costDemand = null;
+                _viewModel.SetFlyoutVisible(false);
                 StopFlyoutForegroundWatcher();
             }
         }

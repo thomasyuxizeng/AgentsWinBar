@@ -7,6 +7,35 @@ namespace CodexBarWin.Tests.Unit.Models;
 public class AppSettingsTests
 {
     [TestMethod]
+    public void GetDefaults_AdaptiveRefreshEnabled_DefaultsToTrue()
+    {
+        AppSettings.GetDefaults().AdaptiveRefreshEnabled.Should().BeTrue();
+        new AppSettings().AdaptiveRefreshEnabled.Should().BeTrue();
+    }
+
+    [TestMethod]
+    public void Deserialize_AdaptiveRefreshOptionMissing_DefaultsToTrue()
+    {
+        var settings = System.Text.Json.JsonSerializer.Deserialize("{}", AppJsonSerializerContext.Default.AppSettings)!;
+        settings.Normalize();
+        settings.AdaptiveRefreshEnabled.Should().BeTrue();
+    }
+
+    [TestMethod]
+    [DataRow(true)]
+    [DataRow(false)]
+    public void Serialize_AdaptiveRefreshOption_RoundTrips(bool enabled)
+    {
+        var settings = AppSettings.GetDefaults();
+        settings.AdaptiveRefreshEnabled = enabled;
+        var json = System.Text.Json.JsonSerializer.Serialize(settings, AppJsonSerializerContext.Default.AppSettings);
+        json.Should().Contain("\"adaptiveRefreshEnabled\": " + enabled.ToString().ToLowerInvariant());
+        var restored = System.Text.Json.JsonSerializer.Deserialize(json, AppJsonSerializerContext.Default.AppSettings)!;
+        restored.Normalize();
+        restored.AdaptiveRefreshEnabled.Should().Be(enabled);
+    }
+
+    [TestMethod]
     public void Normalize_NullSectionsAndInvalidNumbers_RecoversDefaults()
     {
         var settings = System.Text.Json.JsonSerializer.Deserialize(

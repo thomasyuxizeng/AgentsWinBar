@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Refreshes back off while usage is unchanged (configurable with `adaptiveRefreshEnabled` in settings.json); cost scans run while the flyout or dashboard is open, and the working set is trimmed when idle.
+
 ### Fixed
 - A provider fetch that hits its timeout now says "Request timed out" instead of "A task was canceled."
 - The dashboard no longer shows an "F11" tooltip when hovering over its contents

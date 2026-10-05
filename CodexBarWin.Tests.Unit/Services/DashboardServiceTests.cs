@@ -74,6 +74,24 @@ public class DashboardServiceTests
     }
 
     [TestMethod]
+    public void GetSnapshot_AdaptiveRefreshSchedule_PassesActualScheduleAndEffectiveInterval()
+    {
+        var now = _clock.Now.UtcDateTime;
+        var next = now.AddMinutes(9);
+        var snapshot = _service.GetSnapshot([], now.AddMinutes(-1), next, TimeSpan.FromMinutes(10));
+        snapshot.Summary.NextRefreshUtc.Should().Be(next);
+        snapshot.Summary.RefreshIntervalSeconds.Should().Be(_settings.Object.Settings.RefreshIntervalSeconds);
+        snapshot.Summary.EffectiveRefreshIntervalSeconds.Should().Be(600);
+        snapshot.Diagnostics.EffectiveRefreshIntervalSeconds.Should().Be(600);
+    }
+
+    [TestMethod]
+    public void GetSnapshot_NoScheduledRefresh_ReturnsNullNextRefresh()
+    {
+        _service.GetSnapshot([], _clock.Now.UtcDateTime).Summary.NextRefreshUtc.Should().BeNull();
+    }
+
+    [TestMethod]
     public async Task RefreshDiagnosticsAsync_WithinTenMinutes_CachesFactsThenRefreshesAtExpiry()
     {
         await _service.RefreshDiagnosticsAsync();

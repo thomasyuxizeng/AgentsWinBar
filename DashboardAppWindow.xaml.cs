@@ -33,6 +33,8 @@ public sealed partial class DashboardAppWindow : Window
     private volatile bool _closed;
     private bool _redrawing;
     private bool _topmost;
+    private IDisposable? _costDemand;
+    private IDisposable? _visibility;
     private readonly List<KeyboardAccelerator> _accelerators = [];
 
     public DashboardAppWindow()
@@ -81,6 +83,7 @@ public sealed partial class DashboardAppWindow : Window
         _viewModel.Providers.CollectionChanged += OnProvidersChanged;
         _viewModel.PropertyChanged += OnViewModelPropertyChanged;
         Closed += OnClosed;
+        Activated += OnActivated;
         _appWindow.Changed += OnAppWindowChanged;
 
         if (Content is UIElement root)
@@ -99,6 +102,7 @@ public sealed partial class DashboardAppWindow : Window
 
         _page.SetBusy(_viewModel.IsLoading);
         Redraw();
+        _costDemand = _viewModel.AcquireCostDemand();
 
         // CLI version and similar facts come from WSL; fetch them in the background and redraw when known.
         RefreshDiagnosticsAsync().SafeFireAndForget(onError: ex => _logger.LogDebug(ex, "Dashboard diagnostics refresh failed"));
@@ -134,7 +138,8 @@ public sealed partial class DashboardAppWindow : Window
             var lastRefreshUtc = _viewModel.LastUpdated == default ? (DateTime?)null : _viewModel.LastUpdated.ToUniversalTime();
             var timing = _logger.IsEnabled(LogLevel.Debug);
             var start = timing ? Stopwatch.GetTimestamp() : 0;
-            var snapshot = _dashboardService.GetSnapshot(_viewModel.Providers.ToList(), lastRefreshUtc);
+            var snapshot = _dashboardService.GetSnapshot(_viewModel.Providers.ToList(), lastRefreshUtc,
+                _viewModel.NextRefreshUtc, _viewModel.EffectiveRefreshInterval);
             var snapshotEnd = timing ? Stopwatch.GetTimestamp() : 0;
             _page.Update(snapshot);
             if (timing) _logger.LogDebug("Dashboard redraw: GetSnapshot {SnapshotMs:F2} ms, Page.Update {UpdateMs:F2} ms",
@@ -153,7 +158,8 @@ public sealed partial class DashboardAppWindow : Window
 
     private void OnViewModelPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
-        if (e.PropertyName is not (nameof(MainViewModel.IsLoading) or nameof(MainViewModel.LastUpdated))) return;
+        if (e.PropertyName is not (nameof(MainViewModel.IsLoading) or nameof(MainViewModel.LastUpdated)
+            or nameof(MainViewModel.NextRefreshUtc) or nameof(MainViewModel.EffectiveRefreshInterval))) return;
         Post(() =>
         {
             _page.SetBusy(_viewModel.IsLoading);
@@ -193,7 +199,37 @@ public sealed partial class DashboardAppWindow : Window
     private void OnAppWindowChanged(AppWindow sender, AppWindowChangedEventArgs args) => HandleEvent(() =>
     {
         if (args.DidPresenterChange) _page.SetFullScreen(sender.Presenter.Kind == AppWindowPresenterKind.FullScreen);
+        UpdateVisibility();
     });
+
+    private void OnActivated(object sender, WindowActivatedEventArgs args) => HandleEvent(() =>
+    {
+        var becameVisible = UpdateVisibility();
+        if (!becameVisible && args.WindowActivationState != WindowActivationState.Deactivated)
+            RefreshIfStale();
+    });
+
+    private bool UpdateVisibility()
+    {
+        var visible = _appWindow.IsVisible && _appWindow.Presenter is not
+            OverlappedPresenter { State: OverlappedPresenterState.Minimized };
+        if (visible && _visibility == null)
+        {
+            _visibility = _viewModel.AcquireDashboardVisibility();
+            RefreshIfStale();
+            return true;
+        }
+        if (!visible)
+        {
+            _visibility?.Dispose();
+            _visibility = null;
+        }
+        return false;
+    }
+
+    private void RefreshIfStale() =>
+        _viewModel.RefreshIfStaleAsync(TimeSpan.FromMinutes(2)).SafeFireAndForget(
+            onError: ex => _logger.LogError(ex, "Dashboard stale refresh failed"));
 
     private void Post(Action action) => HandleEvent(() =>
         DispatcherQueue.TryEnqueue(() => HandleEvent(action)));
@@ -262,6 +298,11 @@ public sealed partial class DashboardAppWindow : Window
         if (_closed) return;
         _closed = true;
         Closed -= OnClosed;
+        Activated -= OnActivated;
+        _costDemand?.Dispose();
+        _costDemand = null;
+        _visibility?.Dispose();
+        _visibility = null;
         _redrawTimer.Tick -= OnTimerTick;
         _clockTimer.Tick -= OnTimerTick;
         _page.RefreshRequested -= OnRefreshRequested;

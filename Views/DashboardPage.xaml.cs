@@ -88,7 +88,9 @@ public sealed partial class DashboardPage : Page
         SubtitleText.Text = summary.LastRefreshUtc.HasValue
             ? $"Updated {DashboardFormat.LocalTime(summary.LastRefreshUtc.Value)} ({DashboardFormat.Ago(summary.LastRefreshUtc.Value)})" +
               (summary.NextRefreshUtc.HasValue ? $" · next refresh {DashboardFormat.In(summary.NextRefreshUtc)}" : string.Empty) +
-              $" · every {DashboardFormat.Seconds(summary.RefreshIntervalSeconds)}"
+              (summary.EffectiveRefreshIntervalSeconds > summary.RefreshIntervalSeconds
+                  ? $" · every {DashboardFormat.Seconds(summary.EffectiveRefreshIntervalSeconds)} while usage is idle"
+                  : $" · every {DashboardFormat.Seconds(summary.RefreshIntervalSeconds)}")
             : "Waiting for the first refresh…";
 
     }

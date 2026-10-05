@@ -20,7 +20,8 @@ public class DashboardSnapshotBuilderTests
         var inputs = Inputs(Provider() with { Session = Window(95), Weekly = Window(94.99, 100),
             Tertiary = Window(80, 200), ExtraWindows = [new() { Key = "low", Title = "GPT", Window = Window(79.99, -1) }] },
             Provider("codex") with { Session = Window(100, 50) });
-        inputs = inputs with { LastRefreshUtc = Now.AddSeconds(-20), Settings = new() { RefreshIntervalSeconds = 120 } };
+        inputs = inputs with { LastRefreshUtc = Now.AddSeconds(-20), NextRefreshUtc = Now.AddSeconds(100),
+            Settings = new() { RefreshIntervalSeconds = 120 } };
         var snapshot = DashboardSnapshotBuilder.Build(inputs);
         snapshot.Summary.ProviderCount.Should().Be(2);
         snapshot.Summary.HealthyProviderCount.Should().Be(2);
@@ -33,6 +34,40 @@ public class DashboardSnapshotBuilderTests
         snapshot.Summary.NextResetWindow.Should().BeEquivalentTo(snapshot.Summary.MostUsedWindow);
         snapshot.Summary.LastRefreshUtc.Should().Be(Now.AddSeconds(-20));
         snapshot.Summary.NextRefreshUtc.Should().Be(Now.AddSeconds(100));
+    }
+
+    [TestMethod]
+    public void Build_AdaptiveSchedule_UsesActualNextRefreshAndEffectiveInterval()
+    {
+        var next = Now.AddMinutes(8);
+        var snapshot = DashboardSnapshotBuilder.Build(Inputs() with
+        {
+            LastRefreshUtc = Now.AddMinutes(-1), NextRefreshUtc = next,
+            EffectiveRefreshInterval = TimeSpan.FromMinutes(10), Settings = new() { RefreshIntervalSeconds = 300 }
+        });
+        snapshot.Summary.NextRefreshUtc.Should().Be(next);
+        snapshot.Summary.RefreshIntervalSeconds.Should().Be(300);
+        snapshot.Summary.EffectiveRefreshIntervalSeconds.Should().Be(600);
+        snapshot.Diagnostics.RefreshIntervalSeconds.Should().Be(300);
+        snapshot.Diagnostics.EffectiveRefreshIntervalSeconds.Should().Be(600);
+    }
+
+    [TestMethod]
+    public void Build_NoScheduledRefresh_DoesNotDeriveNextRefreshFromLastRefresh()
+    {
+        var snapshot = DashboardSnapshotBuilder.Build(Inputs() with
+        { LastRefreshUtc = Now, Settings = new() { RefreshIntervalSeconds = 120 } });
+        snapshot.Summary.NextRefreshUtc.Should().BeNull();
+        snapshot.Summary.EffectiveRefreshIntervalSeconds.Should().Be(120);
+        snapshot.Diagnostics.EffectiveRefreshIntervalSeconds.Should().Be(120);
+    }
+
+    [TestMethod]
+    public void Build_LocalScheduledTime_NormalizesNextRefreshToUtc()
+    {
+        var snapshot = DashboardSnapshotBuilder.Build(Inputs() with { NextRefreshUtc = Now.ToLocalTime() });
+        snapshot.Summary.NextRefreshUtc.Should().Be(Now);
+        snapshot.Summary.NextRefreshUtc!.Value.Kind.Should().Be(DateTimeKind.Utc);
     }
 
     [TestMethod]

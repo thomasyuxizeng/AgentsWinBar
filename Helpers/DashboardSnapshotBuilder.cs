@@ -12,6 +12,8 @@ public sealed record DashboardInputs
     public long HistoryFileBytes { get; init; }
     public DateTime NowUtc { get; init; }
     public DateTime? LastRefreshUtc { get; init; }
+    public DateTime? NextRefreshUtc { get; init; }
+    public TimeSpan? EffectiveRefreshInterval { get; init; }
     public string? CliVersion { get; init; }
     public bool? CliAvailable { get; init; }
     public string? WslDistro { get; init; }
@@ -94,19 +96,17 @@ public static class DashboardSnapshotBuilder
         }))).ToArray();
         var costs = providers.Select(p => p.Cost).OfType<DashboardCost>().ToArray();
         var lastRefresh = Utc(inputs.LastRefreshUtc);
-        DateTime? nextRefresh = null;
-        if (lastRefresh.HasValue)
-        {
-            try { nextRefresh = lastRefresh.Value.AddSeconds(settings.RefreshIntervalSeconds); }
-            catch (ArgumentOutOfRangeException) { /* No representable next refresh. */ }
-        }
+        var effectiveIntervalSeconds = inputs.EffectiveRefreshInterval.HasValue
+            ? (int)Math.Clamp(inputs.EffectiveRefreshInterval.Value.TotalSeconds, 0, int.MaxValue)
+            : settings.RefreshIntervalSeconds;
         return new DashboardSnapshot
         {
             GeneratedAtUtc = now, Providers = providers,
             Summary = new DashboardSummary
             {
-                LastRefreshUtc = lastRefresh, NextRefreshUtc = nextRefresh,
-                RefreshIntervalSeconds = settings.RefreshIntervalSeconds, ProviderCount = providers.Length,
+                LastRefreshUtc = lastRefresh, NextRefreshUtc = Utc(inputs.NextRefreshUtc),
+                RefreshIntervalSeconds = settings.RefreshIntervalSeconds,
+                EffectiveRefreshIntervalSeconds = effectiveIntervalSeconds, ProviderCount = providers.Length,
                 HealthyProviderCount = providers.Count(p => string.IsNullOrEmpty(p.Error) && !p.IsStale),
                 ErrorProviderCount = providers.Count(p => !string.IsNullOrEmpty(p.Error)),
                 StaleProviderCount = providers.Count(p => p.IsStale),
@@ -126,6 +126,7 @@ public static class DashboardSnapshotBuilder
                 AppVersion = inputs.AppVersion, CliVersion = inputs.CliVersion, CliAvailable = inputs.CliAvailable,
                 WslDistro = inputs.WslDistro, SettingsPath = inputs.SettingsPath ?? string.Empty,
                 Theme = settings.Theme.ToString(), RefreshIntervalSeconds = settings.RefreshIntervalSeconds,
+                EffectiveRefreshIntervalSeconds = effectiveIntervalSeconds,
                 CacheExpiryMinutes = settings.CacheExpiryMinutes, WslCommandTimeoutSeconds = timeouts.WslCommandTimeoutSeconds,
                 CliProviderTimeoutSeconds = timeouts.CliProviderTimeoutSeconds,
                 StandardProviderTimeoutSeconds = timeouts.StandardProviderTimeoutSeconds,

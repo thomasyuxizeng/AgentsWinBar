@@ -4,6 +4,7 @@ namespace CodexBarWin.Services;
 
 public interface IDashboardService
 {
-    DashboardSnapshot GetSnapshot(IReadOnlyList<UsageData> providers, DateTime? lastRefreshUtc);
+    DashboardSnapshot GetSnapshot(IReadOnlyList<UsageData> providers, DateTime? lastRefreshUtc,
+        DateTime? nextRefreshUtc = null, TimeSpan? effectiveRefreshInterval = null);
     Task RefreshDiagnosticsAsync(CancellationToken ct = default);
 }

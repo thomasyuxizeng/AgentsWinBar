@@ -30,7 +30,8 @@ public sealed class DashboardService : IDashboardService
         _activity = activity; _cli = cli; _logger = logger; _clock = timeProvider ?? TimeProvider.System;
     }
 
-    public DashboardSnapshot GetSnapshot(IReadOnlyList<UsageData> providers, DateTime? lastRefreshUtc)
+    public DashboardSnapshot GetSnapshot(IReadOnlyList<UsageData> providers, DateTime? lastRefreshUtc,
+        DateTime? nextRefreshUtc = null, TimeSpan? effectiveRefreshInterval = null)
     {
         string? version;
         bool? available;
@@ -42,6 +43,7 @@ public sealed class DashboardService : IDashboardService
         {
             Providers = providers, Settings = _settings.Settings, HistorySamples = _history.Samples,
             HistoryFileBytes = bytes, NowUtc = _clock.GetUtcNow().UtcDateTime, LastRefreshUtc = lastRefreshUtc,
+            NextRefreshUtc = nextRefreshUtc, EffectiveRefreshInterval = effectiveRefreshInterval,
             CliVersion = version, CliAvailable = available, AppVersion = _appVersion,
             SettingsPath = _settings.SettingsFilePath, RecentRefreshes = _activity.RecentRefreshes,
             RecentAlerts = _activity.RecentAlerts, CostCache = _cli.GetCostCacheInfo()
