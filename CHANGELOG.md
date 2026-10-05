@@ -15,6 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - The single-process WSL batch could fail and silently fall back to one WSL call per provider: the shell script now runs with `wsl --exec` (so Windows' default shell no longer expands `$VARIABLES` and `$(...)` in it) and never contains carriage returns, whatever line endings the source file was checked out with.
+- A corrupt entry in the saved usage cache no longer discards the valid providers beside it, and developer mode never reads or writes the real usage cache or setup memo.
+- When the single-process batch has to fall back to one WSL call per provider, the fallback is recorded in the dashboard's refresh log instead of only a log file.
+- A manual Refresh now cancels an in-progress background cost scan and waits briefly for it to stop, so a late background result cannot overwrite the fresh totals.
 
 ## [0.9.8] - 2026-10-05
 
