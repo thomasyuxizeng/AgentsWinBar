@@ -7,18 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
-- Settings saves are serialized and replace the complete file atomically; failed saves restore uncommitted values, keep Settings open and scroll to a visible error. Descriptions clear their switches at 150% scaling. Malformed provider lists, timer intervals, timeouts and animation settings recover safely
-- Settings changes cancel obsolete refreshes, including late cost results; canceled cost scans preserve prior totals and allow immediate retries instead of creating a 15-minute empty-cache backoff. Developer samples no longer overwrite real usage caches or leak into history. Quit stops refreshes and flushes history before exiting
-- Setup completes once and creates the main window before closing the wizard, preventing an early exit. Setup guidance now uses the fork's WSL installer, and its footer fits at 150% scaling
-- Start minimized now controls startup visibility, Settings reuses its existing window, and Settings and flyout action controls have explicit accessibility names. The tray menu uses the native popup path to avoid the secondary-window XamlRoot crash
-- Detail-page "Last fetched" timestamps now use local time instead of UTC. History captions use "1 sample", the even-use guide has stronger light/dark contrast, and collecting-data text no longer overlaps chart lines. Card cost estimates show each period on a separate wrapping line instead of cutting off the 30-day totals
-- Claude "Command timed out after 30 seconds": the app had a hidden 30-second cap on every WSL command that fired before the provider's own 45 to 60 second timeout, and Claude's CLI route had become slow (about 18 seconds, then failing). Claude now uses the fast OAuth route first (about 1 second), keeps the CLI as a fallback that is skipped for 6 hours after it fails, and backs off for 10 minutes if Anthropic rate limits; the WSL cap is never shorter than the provider timeouts
-- Enabling, disabling or reordering providers in Settings now takes effect immediately; previously the list was only built at startup, so a newly enabled provider didn't appear until the app was restarted
-- Reset times read consistently as "Resets in 4h 59m" on the cards and detail page, and the detail page no longer squeezes or garbles the usage text
-- Flyout not appearing over other programs: it now takes the foreground reliably and stays above windows that become topmost
-- "Command failed (exit code 3)" for Claude: results are cached for 5 minutes and the last good result is shown if Anthropic rate limits
-- Gemini windows are labelled "5-hour" and "Weekly" instead of "Pro" and "Flash"
+## [0.9.7] - 2026-10-05
 
 ### Added
 - Dashboard: a full window (resizable, maximizable, full screen with F11, optional keep-on-top) opened from the new button in the flyout footer. It shows everything the app knows at once: headline tiles (provider health, incidents, limits, most-used window, next reset, cost today and 30 days), a panel per provider with every usage window (pace, reset times, burndown), service status, cost and token mix, top models and history, plus a diagnostics column (CLI and app versions, effective settings, history store, cost scans, refresh log and alerts this session)
@@ -27,6 +16,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Per-window usage history charts with an even-use guide, observed-rate projection, capture time and sample count. Snapshots persist atomically beside Settings for 14 days, deduplicated at half-point changes, ten-minute intervals and window resets. New installations show a collecting-data state until enough samples are available
 - Estimated cost and token totals from local Windows Claude/Codex logs and WSL Antigravity logs, with a 15-minute scan cadence, manual refresh, daily cost bars and top models on the detail page, and a Settings toggle. Cost commands bypass the shim's usage cache so log-path changes cannot reuse a zero-cost result
 - Provider service status badges: green operational, amber minor incidents or maintenance, red major or critical incidents, and grey when status is unavailable. Detail pages show the provider's report and a status-page link; compact displays show a small logo dot only during incidents
+
+### Changed
+- Dashboard overview: every usage bar at once, right under the headline tiles. One compact card per provider with a one-line bar for each window (name, bar with its pace layer, percent used, time to reset), so nothing needs scrolling to see; the detailed panels follow below
+- Dashboard performance: refreshes no longer rebuild the whole window. Unchanged providers, tiles and diagnostics are skipped, the 30-second clock only updates relative times, and the charts and bars redraw only when their data changes, so scrolling stays smooth while a refresh runs
+- Dashboard layout: diagnostics always sit below the providers (also in full screen), and Gemini takes a full-width row with its own models and the External pool side by side
+- Shorter labels for the extra usage windows so the flyout bars get more room: "Fable only" is now "Fable", Antigravity's "Claude and GPT 5-hour" and "Claude and GPT weekly" are "External 5h" and "External 7d" (everywhere: cards, compact displays, detail pages, alerts and the dashboard)
+
+### Fixed
+- Dashboard hardening: no re-entrant redraws, handlers released on close, a minimized dashboard is restored when reopened, keep-on-top survives full screen, duplicate or odd usage windows (non-finite percentages, local or unspecified timestamps, negative costs, huge durations) no longer break the display, usage history is ordered by its UTC time, and today-only or unpriced-model usage now counts as cost data
+- Settings saves are serialized and replace the complete file atomically; failed saves restore uncommitted values, keep Settings open and scroll to a visible error. Descriptions clear their switches at 150% scaling. Malformed provider lists, timer intervals, timeouts and animation settings recover safely
+- Settings changes cancel obsolete refreshes, including late cost results; canceled cost scans preserve prior totals and allow immediate retries instead of creating a 15-minute empty-cache backoff. Developer samples no longer overwrite real usage caches or leak into history. Quit stops refreshes and flushes history before exiting
+- Setup completes once and creates the main window before closing the wizard, preventing an early exit. Setup guidance now uses the fork's WSL installer, and its footer fits at 150% scaling
+- Start minimized now controls startup visibility, Settings reuses its existing window, and Settings and flyout action controls have explicit accessibility names. The tray menu uses the native popup path to avoid the secondary-window XamlRoot crash
+- Detail-page "Last fetched" timestamps now use local time instead of UTC. History captions use "1 sample", the even-use guide has stronger light/dark contrast, and collecting-data text no longer overlaps chart lines. Card cost estimates show each period on a separate wrapping line instead of cutting off the 30-day totals
+
+## [0.9.6] - 2026-10-04
+
+### Added
 - Usage alerts also cover the extra windows (Claude and GPT quota, Fable only, ...) with the same three levels
 - Extra bars are coloured by provider: Anthropic orange (#D97757) for Claude windows (e.g. Fable only), OpenAI green (#10A37F) for OpenAI, and an orange to teal gradient for the shared Claude and GPT quota (routed through gold and green so the middle stays clean instead of turning brown); the time-passed layer behind these bars takes the same colour, softened (so Fable looks orange even at 0% used); amber and red still apply
 - Extra usage windows now appear on the main flyout cards too: Claude's "Fable only" bar, and Antigravity's Claude and GPT quota on Gemini's card. They are coloured differently from the main session and weekly bars
@@ -48,11 +55,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Settings toggle to enable/disable developer mode
 
 ### Changed
-- Dashboard overview: every usage bar at once, right under the headline tiles. One compact card per provider with a one-line bar for each window (name, bar with its pace layer, percent used, time to reset), so nothing needs scrolling to see; the detailed panels follow below
-- Dashboard performance: refreshes no longer rebuild the whole window. Unchanged providers, tiles and diagnostics are skipped, the 30-second clock only updates relative times, and the charts and bars redraw only when their data changes, so scrolling stays smooth while a refresh runs
-- Dashboard layout: diagnostics always sit below the providers (also in full screen), and Gemini takes a full-width row with its own models and the External pool side by side
-- Shorter labels for the extra usage windows so the flyout bars get more room: "Fable only" is now "Fable", Antigravity's "Claude and GPT 5-hour" and "Claude and GPT weekly" are "External 5h" and "External 7d" (everywhere: cards, compact displays, detail pages, alerts and the dashboard)
 - README rewritten for the fork: quick start (WSL, sign-ins, install), how to read the bars, what the fork adds, troubleshooting; new screenshots of the flyout, detail page, floating overlay, taskbar strip and Settings
+
+### Fixed
+- Claude "Command timed out after 30 seconds": the app had a hidden 30-second cap on every WSL command that fired before the provider's own 45 to 60 second timeout, and Claude's CLI route had become slow (about 18 seconds, then failing). Claude now uses the fast OAuth route first (about 1 second), keeps the CLI as a fallback that is skipped for 6 hours after it fails, and backs off for 10 minutes if Anthropic rate limits; the WSL cap is never shorter than the provider timeouts
+- Enabling, disabling or reordering providers in Settings now takes effect immediately; previously the list was only built at startup, so a newly enabled provider didn't appear until the app was restarted
+- Reset times read consistently as "Resets in 4h 59m" on the cards and detail page, and the detail page no longer squeezes or garbles the usage text
+- Flyout not appearing over other programs: it now takes the foreground reliably and stays above windows that become topmost
+- "Command failed (exit code 3)" for Claude: results are cached for 5 minutes and the last good result is shown if Anthropic rate limits
+- Gemini windows are labelled "5-hour" and "Weekly" instead of "Pro" and "Flash"
 
 ## [0.1.0] - TBD
 
@@ -65,5 +76,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Window slide-in animation from system tray
 - Setup wizard for first-time configuration
 
-[Unreleased]: https://github.com/nek0der/CodexBarWin/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/Wave-OCE/CodexBarWin/compare/v0.9.7...HEAD
+[0.9.7]: https://github.com/Wave-OCE/CodexBarWin/compare/v0.9.6...v0.9.7
+[0.9.6]: https://github.com/Wave-OCE/CodexBarWin/releases/tag/v0.9.6
 [0.1.0]: https://github.com/nek0der/CodexBarWin/releases/tag/v0.1.0
