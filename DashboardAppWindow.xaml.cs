@@ -204,9 +204,8 @@ public sealed partial class DashboardAppWindow : Window
 
     private void OnActivated(object sender, WindowActivatedEventArgs args) => HandleEvent(() =>
     {
-        var becameVisible = UpdateVisibility();
-        if (!becameVisible && args.WindowActivationState != WindowActivationState.Deactivated)
-            RefreshIfStale();
+        // Opening or restoring refreshes stale data; plain re-activation (alt-tab) must not wake WSL again
+        UpdateVisibility();
     });
 
     private bool UpdateVisibility()

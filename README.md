@@ -143,7 +143,7 @@ The packaged app keeps its settings across updates.
 | Setting | What it does |
 |---------|--------------|
 | Providers | Choose which providers show, and their order. Changes apply immediately. |
-| Refresh interval | How often usage is fetched (1, 2, 5 or 10 minutes). While your usage isn't changing the app waits longer (up to 3x, capped at 15 minutes) and returns to this interval as soon as something moves, or when you open the flyout or dashboard and the data is more than 2 minutes old. Turn this off with `adaptiveRefreshEnabled` ([Configuration](#configuration)). |
+| Refresh interval | How often usage is fetched (1, 2, 5 or 10 minutes). While your usage isn't changing the app waits longer (up to 3x, capped at 15 minutes) and returns to this interval as soon as something moves, or when you open the flyout or dashboard and the data is older than the refresh interval. Turn this off with `adaptiveRefreshEnabled` ([Configuration](#configuration)). |
 | Always-on overlay | The floating readout. Drag to move, right-click for options. |
 | Taskbar display | The strip on the taskbar, bottom-left corner. |
 | Usage alerts | Windows notifications. "Send test notification" checks they reach you. |

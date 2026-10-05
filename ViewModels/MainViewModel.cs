@@ -125,9 +125,14 @@ public partial class MainViewModel : ObservableObject, IDisposable
         return RefreshCoreAsync(forceCostRefresh: true);
     }
 
-    /// <summary>Refreshes stale visible data without forcing a new cost scan.</summary>
+    /// <summary>
+    /// Refreshes visible data that is older than <paramref name="maxAge"/> (never less than the base refresh interval,
+    /// so opening a window at normal cadence costs nothing extra) without forcing a new cost scan.
+    /// </summary>
     public Task RefreshIfStaleAsync(TimeSpan maxAge)
     {
+        var baseInterval = TimeSpan.FromSeconds(_settingsService.Settings.RefreshIntervalSeconds);
+        if (maxAge < baseInterval) maxAge = baseInterval;
         if (_disposed || _stopped || _exiting ||
             (LastUpdated != default && DateTime.Now - LastUpdated <= maxAge)) return Task.CompletedTask;
         ResetAdaptiveRefresh();

@@ -299,6 +299,18 @@ public class MainViewModelTests
     }
 
     [TestMethod]
+    public async Task RefreshIfStaleAsync_DataNewerThanBaseInterval_SkipsRefresh()
+    {
+        _values.RefreshIntervalSeconds = 300;
+        _usage.Setup(s => s.GetAllUsageStreamAsync(It.IsAny<CancellationToken>()))
+            .Returns((CancellationToken ct) => Stream(Task.CompletedTask, Data(20), ct));
+        await _viewModel.StartAsync();
+        _viewModel.LastUpdated = DateTime.Now.AddMinutes(-3);
+        await _viewModel.RefreshIfStaleAsync(TimeSpan.FromMinutes(2));
+        _usage.Verify(s => s.GetAllUsageStreamAsync(It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [TestMethod]
     public async Task RefreshIfStaleAsync_StaleData_ResetsBackoffWithoutForcingCosts()
     {
         _values.RefreshIntervalSeconds = 300;
@@ -309,7 +321,7 @@ public class MainViewModelTests
         await PeriodicRefreshAsync();
         await PeriodicRefreshAsync();
         _viewModel.EffectiveRefreshInterval.Should().Be(TimeSpan.FromMinutes(10));
-        _viewModel.LastUpdated = DateTime.Now.AddMinutes(-3);
+        _viewModel.LastUpdated = DateTime.Now.AddMinutes(-6);
         await _viewModel.RefreshIfStaleAsync(TimeSpan.FromMinutes(2));
         _viewModel.EffectiveRefreshInterval.Should().Be(TimeSpan.FromMinutes(5));
         _viewModel.NextRefreshUtc.Should().BeCloseTo(DateTime.UtcNow.AddMinutes(5), TimeSpan.FromSeconds(2));
