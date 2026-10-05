@@ -7,8 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.8] - 2026-10-05
+
 ### Changed
-- Refreshes back off while usage is unchanged (configurable with `adaptiveRefreshEnabled` in settings.json); cost scans run while the flyout or dashboard is open, and the working set is trimmed when idle.
+- Refreshes back off while usage is unchanged (up to 3x the interval, capped at 15 minutes; turn off with `adaptiveRefreshEnabled` in settings.json) and return to normal when usage moves or a window opens on data older than the interval. Cost scans run only while the flyout or dashboard is open. The app trims its working set when idle (about 175 MB down to 10-50 MB)
+- A suggested `.wslconfig` (4 GB cap, gradual memory reclaim) in the README keeps the WSL VM small between refreshes
 - Usage for all providers is now fetched through a single WSL process per refresh.
 
 ### Fixed
@@ -84,7 +87,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Window slide-in animation from system tray
 - Setup wizard for first-time configuration
 
-[Unreleased]: https://github.com/Wave-OCE/CodexBarWin/compare/v0.9.7...HEAD
+[Unreleased]: https://github.com/Wave-OCE/CodexBarWin/compare/v0.9.8...HEAD
+[0.9.8]: https://github.com/Wave-OCE/CodexBarWin/compare/v0.9.7...v0.9.8
 [0.9.7]: https://github.com/Wave-OCE/CodexBarWin/compare/v0.9.6...v0.9.7
 [0.9.6]: https://github.com/Wave-OCE/CodexBarWin/releases/tag/v0.9.6
 [0.1.0]: https://github.com/nek0der/CodexBarWin/releases/tag/v0.1.0
