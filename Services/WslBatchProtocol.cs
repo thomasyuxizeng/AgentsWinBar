@@ -22,7 +22,7 @@ internal static class WslBatchProtocol
 
         var script = new StringBuilder("""
             set +e +u +m
-            command -v timeout >/dev/null && command -v flock >/dev/null && command -v base64 >/dev/null && command -v grep >/dev/null || exit 125
+            command -v timeout >/dev/null && command -v flock >/dev/null && command -v base64 >/dev/null || exit 125
             umask 077
             cbw_dir=$(mktemp -d) || exit 125
             cbw_pids=()
@@ -49,18 +49,18 @@ internal static class WslBatchProtocol
             if (command.Command.Contains('\0'))
                 throw new ArgumentException("Shell commands cannot contain NUL", nameof(commands));
             var seconds = command.Timeout.TotalSeconds.ToString("0.#########", CultureInfo.InvariantCulture);
+            var timeoutThreshold = (Math.Ceiling(command.Timeout.TotalSeconds) - 1).ToString("0", CultureInfo.InvariantCulture);
             // GNU timeout supervises a separate process group, so shell children
-            // are terminated too. --kill-after bounds TERM-resistant commands.
-            script.Append("(\n LC_MESSAGES=C timeout --verbose --kill-after=2s ").Append(seconds)
+            // are terminated too. Its background PID is also the process group ID.
+            // Kill remaining descendants even if their immediate parent exits early.
+            script.Append("(\n cbw_start=$SECONDS\n timeout --kill-after=2s ").Append(seconds)
                 .Append("s bash -c 'exec >\"$1\" 2>\"$2\"; exec bash -c \"$3\"' cbw \"$cbw_dir/")
                 .Append(i).Append(".out\" \"$cbw_dir/").Append(i).Append(".err\" ")
-                .Append(Quote(command.Command)).Append(" 2>\"$cbw_dir/").Append(i)
-                .Append(".timeout\" &\n cbw_job=$!\n printf '%s\\n' \"$cbw_job\" >\"$cbw_dir/")
-                .Append(i).Append(".pid\"\n wait \"$cbw_job\"\n cbw_exit=$?\n rm -f -- \"$cbw_dir/")
-                .Append(i).Append(".pid\"\n if [ \"$cbw_exit\" -eq 137 ] && grep -q '^timeout: sending signal ' \"$cbw_dir/")
-                .Append(i).Append(".timeout\"; then cbw_exit=124; fi\n")
-                .Append(" if [ \"$cbw_exit\" -ne 124 ]; then cat \"$cbw_dir/").Append(i)
-                .Append(".timeout\" >>\"$cbw_dir/").Append(i).Append(".err\"; fi\n")
+                .Append(Quote(command.Command)).Append(" &\n cbw_job=$!\n printf '%s\\n' \"$cbw_job\" >\"$cbw_dir/")
+                .Append(i).Append(".pid\"\n wait \"$cbw_job\"\n cbw_exit=$?\n kill -KILL -- \"-$cbw_job\" 2>/dev/null || :\n rm -f -- \"$cbw_dir/")
+                .Append(i).Append(".pid\"\n cbw_elapsed=$((SECONDS - cbw_start))\n")
+                .Append(" case \"$cbw_exit\" in 137|124|143) if [ \"$cbw_elapsed\" -ge ")
+                .Append(timeoutThreshold).Append(" ]; then cbw_exit=124; fi ;; esac\n")
                 .Append(" cbw_out=$(base64 -w 0 <\"$cbw_dir/").Append(i).Append(".out\") || exit 125\n")
                 .Append(" cbw_err=$(base64 -w 0 <\"$cbw_dir/").Append(i).Append(".err\") || exit 125\n")
                 .Append(" ( flock -x 9 || exit 125\n printf '\\n%s|%s|%s|%s|%s\\n' ")

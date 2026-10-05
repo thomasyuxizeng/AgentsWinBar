@@ -237,6 +237,13 @@ public class CodexBarService : ICodexBarService
         else
         {
             var commands = providers.Select(BuildProviderCommand).ToArray();
+            var retryInIndividualShell = new bool[providers.Count];
+            async Task RetryProviderAsync(int index)
+            {
+                if (retryInIndividualShell[index])
+                    _logger.LogInformation("WSL batch command not found for {Provider}; retrying individually", providers[index]);
+                Complete(index, await FetchProviderAsync(providers[index], commands[index], ct));
+            }
             try
             {
                 var batch = await _wslService.ExecuteBatchAsync(commands, (index, result) =>
@@ -244,13 +251,28 @@ public class CodexBarService : ICodexBarService
                     ct.ThrowIfCancellationRequested();
                     if (index < 0 || index >= results.Length)
                         throw new InvalidDataException("WSL batch returned an invalid command index");
+                    // The nested batch shell cannot see aliases or unexported functions from .bashrc.
+                    if (result.ExitCode == 127)
+                    {
+                        retryInIndividualShell[index] = true;
+                        return;
+                    }
                     if (results[index] == null) Complete(index, InterpretProviderResult(providers[index], result));
                 }, ct);
                 ct.ThrowIfCancellationRequested();
                 if (batch == null || batch.Count != commands.Length)
                     throw new InvalidDataException("WSL batch returned an incomplete result list");
                 for (var i = 0; i < batch.Count; i++)
-                    if (results[i] == null) Complete(i, InterpretProviderResult(providers[i], batch[i]));
+                {
+                    if (results[i] != null) continue;
+                    if (batch[i].ExitCode == 127)
+                    {
+                        retryInIndividualShell[i] = true;
+                    }
+                    else Complete(i, InterpretProviderResult(providers[i], batch[i]));
+                }
+                await Task.WhenAll(Enumerable.Range(0, providers.Count)
+                    .Where(i => results[i] == null && retryInIndividualShell[i]).Select(RetryProviderAsync));
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
             catch (Exception ex)
@@ -258,7 +280,7 @@ public class CodexBarService : ICodexBarService
                 ct.ThrowIfCancellationRequested();
                 _logger.LogWarning(ex, "WSL batch unavailable; retrying unfinished providers individually");
                 await Task.WhenAll(Enumerable.Range(0, providers.Count).Where(i => results[i] == null)
-                    .Select(async i => Complete(i, await FetchProviderAsync(providers[i], commands[i], ct))));
+                    .Select(RetryProviderAsync));
             }
         }
         ct.ThrowIfCancellationRequested();

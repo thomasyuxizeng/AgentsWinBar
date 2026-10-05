@@ -204,6 +204,75 @@ public class CodexBarServiceTests
         results.Should().OnlyContain(r => r.Error == "Request timed out");
     }
 
+    [TestMethod]
+    [DataRow(true)]
+    [DataRow(false)]
+    public async Task GetAllUsageAsync_BatchCommandNotFound_RetriesOnlyThatProviderWithSameCommand(bool notifyCompletion)
+    {
+        _mockSettingsService.SetProviders([new() { Id = "claude" }, new() { Id = "gemini" }, new() { Id = "codex" }]);
+        _mockSettingsService.Settings.Timeouts.CliProviderFirstFetchTimeoutSeconds = 1;
+        const string retryCommand = "codexbar usage --provider gemini --format json --source cli --status --verbose";
+        _mockWslService.BatchHandler = (commands, completed, _) =>
+        {
+            commands[1].Command.Should().Be(retryCommand);
+            commands[1].Timeout.Should().Be(TimeSpan.FromSeconds(1));
+            IReadOnlyList<WslResult> batch = [
+                new() { Success = true, Output = """[{"provider":"claude","usage":{"primary":{"usedPercent":20}}}]""" },
+                new() { ExitCode = 127, Error = "codexbar: command not found" },
+                new() { Success = true, Output = """[{"provider":"codex","usage":{"primary":{"usedPercent":30}}}]""" }
+            ];
+            if (notifyCompletion)
+                for (var i = 0; i < batch.Count; i++) completed!(i, batch[i]);
+            return Task.FromResult(batch);
+        };
+        _mockWslService.CommandHandler = (command, token) =>
+        {
+            command.Should().Be(retryCommand);
+            token.CanBeCanceled.Should().BeTrue();
+            return Task.FromResult(new WslResult
+            {
+                Success = true, Output = """[{"provider":"gemini","usage":{"primary":{"usedPercent":75}}}]"""
+            });
+        };
+
+        var results = await _service.GetAllUsageAsync();
+
+        results.Select(r => r.Provider).Should().Equal("claude", "gemini", "codex");
+        results.Select(r => r.Session!.Percent).Should().Equal(20, 75, 30);
+        results.Should().OnlyContain(r => !r.HasError);
+        _mockWslService.ExecutedCommands.Should().Equal(retryCommand);
+        _mockWslService.ExecutedBatches.Should().ContainSingle();
+        _mockCacheService.SetCallCount.Should().Be(3);
+        _mockLogger.Verify(logger => logger.Log(LogLevel.Information, It.IsAny<EventId>(),
+            It.Is<It.IsAnyType>((state, _) => state != null && state.ToString()!.Contains("gemini")),
+            It.IsAny<Exception?>(), It.IsAny<Func<It.IsAnyType, Exception?, string>>()), Times.Once);
+    }
+
+    [TestMethod]
+    public async Task GetAllUsageAsync_BatchCommandNotFound_IndividualRetryUsesProviderTimeout()
+    {
+        _mockSettingsService.SetProviders([new() { Id = "gemini" }]);
+        _mockSettingsService.Settings.Timeouts.CliProviderFirstFetchTimeoutSeconds = 1;
+        _mockWslService.BatchHandler = (_, completed, _) =>
+        {
+            var missing = new WslResult { ExitCode = 127 };
+            completed!(0, missing);
+            return Task.FromResult<IReadOnlyList<WslResult>>([missing]);
+        };
+        _mockWslService.CommandHandler = async (_, token) =>
+        {
+            await Task.Delay(Timeout.Infinite, token);
+            return new WslResult();
+        };
+
+        var result = await _service.GetAllUsageAsync().WaitAsync(TimeSpan.FromSeconds(5));
+
+        result.Should().ContainSingle().Which.Error.Should().Be("Request timed out");
+        _mockWslService.ExecutedCommands.Should().Equal(
+            "codexbar usage --provider gemini --format json --source cli --status --verbose");
+        _mockWslService.ExecutedBatches.Single().Single().Timeout.Should().Be(TimeSpan.FromSeconds(1));
+    }
+
     private void SetCostResponse(string provider = "claude", bool success = true, string? json = null)
     {
         var command = CodexBarWin.Helpers.CostCommandBuilder.Build(provider, "C:\\Users\\Test", _ => true);

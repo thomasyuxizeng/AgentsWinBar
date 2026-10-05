@@ -109,17 +109,43 @@ public class WslBatchProtocolTests
         {
             CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo("fr-FR");
             var script = WslBatchProtocol.BuildScript([new(command, TimeSpan.FromSeconds(1.5))], WslBatchProtocol.CreateMarker());
-            script.Should().Contain("timeout --verbose --kill-after=2s 1.5s");
+            script.Should().Contain("timeout --kill-after=2s 1.5s");
             script.Should().Contain(WslBatchProtocol.Quote(command));
             script.Should().Contain("set +e +u +m");
             script.Should().Contain("flock -x 9");
             script.Should().Contain("trap cbw_cleanup EXIT");
             script.Should().Contain("base64 -w 0");
             script.Should().Contain("cbw_exit=124");
-            script.Should().Contain("grep -q '^timeout: sending signal '");
+            script.Should().NotContain("grep");
+            script.Should().NotContain("--verbose");
+            script.Should().NotContain(".timeout");
+            script.Should().NotContain("LC_MESSAGES");
+            script.Should().NotContain("LC_ALL");
         }
         finally { CultureInfo.CurrentCulture = previous; }
         WslBatchProtocol.Quote("a'b$`\n").Should().Be("'a'\"'\"'b$`\n'");
+    }
+
+    [TestMethod]
+    public void BuildScript_BackgroundTimeout_CapturesSupervisorPidAndKillsGroupBeforeRemovingPidFile()
+    {
+        var script = WslBatchProtocol.BuildScript([new("true", TimeSpan.FromSeconds(10))], WslBatchProtocol.CreateMarker());
+
+        script.Should().Contain("(\n cbw_start=$SECONDS\n timeout --kill-after=2s 10s bash -c");
+        script.Should().Contain("'true' &\n cbw_job=$!\n printf '%s\\n' \"$cbw_job\" >\"$cbw_dir/0.pid\"");
+        script.Should().Contain("wait \"$cbw_job\"\n cbw_exit=$?\n kill -KILL -- \"-$cbw_job\" 2>/dev/null || :\n rm -f -- \"$cbw_dir/0.pid\"");
+    }
+
+    [TestMethod]
+    [DataRow(10.0, 9)]
+    [DataRow(1.5, 1)]
+    [DataRow(0.5, 0)]
+    public void BuildScript_SignalExitCodes_NormalizesOnlyWhenElapsedTimeReachesDeadline(double seconds, int threshold)
+    {
+        var script = WslBatchProtocol.BuildScript([new("true", TimeSpan.FromSeconds(seconds))], WslBatchProtocol.CreateMarker());
+
+        script.Should().Contain("cbw_elapsed=$((SECONDS - cbw_start))");
+        script.Should().Contain($"case \"$cbw_exit\" in 137|124|143) if [ \"$cbw_elapsed\" -ge {threshold} ]; then cbw_exit=124; fi ;; esac");
     }
 
     [TestMethod]

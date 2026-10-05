@@ -217,7 +217,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
         finally
         {
-            _costRefreshCts = null;
+            if (ReferenceEquals(_costRefreshCts, scanCts)) _costRefreshCts = null;
             ScheduleWorkingSetTrim();
             // Reopening, restarting or changing settings can restore demand before cancellation settles.
             // Retry only canceled passes; a completed empty scan remains subject to the service cache.
@@ -373,8 +373,28 @@ public partial class MainViewModel : ObservableObject, IDisposable
             ct.ThrowIfCancellationRequested();
             await _historyPersistence.SaveAsync(ct: ct);
             // Demand-start scans run separately so usage never waits behind a slow scan.
-            if (forceCostRefresh || (Volatile.Read(ref _costDemand) > 0 && _costRefreshCts == null))
-                await RefreshCostsAsync(Providers.Select(p => p.Provider).ToList(), forceCostRefresh, ct);
+            if (forceCostRefresh)
+                await RefreshCostsAsync(Providers.Select(p => p.Provider).ToList(), true, ct);
+            else if (Volatile.Read(ref _costDemand) > 0 && _costRefreshCts == null)
+            {
+                using var scanCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                _costRefreshCts = scanCts;
+                try
+                {
+                    await RefreshCostsAsync(Providers.Select(p => p.Provider).ToList(), false, scanCts.Token);
+                }
+                catch (OperationCanceledException) when (scanCts.IsCancellationRequested && !ct.IsCancellationRequested)
+                {
+                    _logger.LogDebug("Obsolete periodic cost refresh canceled");
+                }
+                finally
+                {
+                    if (ReferenceEquals(_costRefreshCts, scanCts)) _costRefreshCts = null;
+                    if (scanCts.IsCancellationRequested && !ct.IsCancellationRequested)
+                        RefreshDemandedCostsAsync().SafeFireAndForget(
+                            onError: ex => _logger.LogError(ex, "Pending demanded cost refresh failed"));
+                }
+            }
 
             ct.ThrowIfCancellationRequested();
             var fingerprint = UsageFingerprint.Create(Providers);
