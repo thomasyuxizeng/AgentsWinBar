@@ -143,11 +143,11 @@ The packaged app keeps its settings across updates.
 | Setting | What it does |
 |---------|--------------|
 | Providers | Choose which providers show, and their order. Changes apply immediately. |
-| Refresh interval | How often usage is fetched (1, 2, 5 or 10 minutes). |
+| Refresh interval | How often usage is fetched (1, 2, 5 or 10 minutes). While your usage isn't changing the app waits longer (up to 3x, capped at 15 minutes) and returns to this interval as soon as something moves, or when you open the flyout or dashboard and the data is more than 2 minutes old. Turn this off with `adaptiveRefreshEnabled` ([Configuration](#configuration)). |
 | Always-on overlay | The floating readout. Drag to move, right-click for options. |
 | Taskbar display | The strip on the taskbar, bottom-left corner. |
 | Usage alerts | Windows notifications. "Send test notification" checks they reach you. |
-| Show cost and token totals | Local log estimates on cards and detail pages. Scans run every 15 minutes and when you click Refresh. |
+| Show cost and token totals | Local log estimates on cards and detail pages. Scans run while the flyout or dashboard is open (at most every 15 minutes) and when you click Refresh. |
 | Run at startup | Start with Windows. |
 
 Both compact displays hide themselves while a fullscreen game, video or presentation is running.
@@ -270,6 +270,7 @@ Settings live in `settings.json`. For the packaged app it is under `%LOCALAPPDAT
 ```json
 {
   "refreshIntervalSeconds": 300,
+  "adaptiveRefreshEnabled": true,
   "alwaysOnOverlayEnabled": false,
   "taskbarDisplayEnabled": true,
   "alertsEnabled": true,
@@ -291,6 +292,19 @@ and can omit unpriced or unmetered activity.
 Usage snapshots live in `usage-history.json` beside `settings.json`. The app records a sample when usage
 changes by at least half a percentage point, ten minutes pass, or a limit window resets. Each chart shows
 only the current window; old-window samples remain on disk until the 14-day retention period expires.
+
+### Keeping WSL light
+
+Each refresh starts the WSL VM, which by default can claim up to half your RAM and gives memory back slowly.
+A `%USERPROFILE%\.wslconfig` keeps it small (apply with `wsl --shutdown`):
+
+```ini
+[wsl2]
+memory=4GB
+
+[experimental]
+autoMemoryReclaim=gradual
+```
 
 ## Development
 

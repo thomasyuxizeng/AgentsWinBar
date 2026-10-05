@@ -154,7 +154,7 @@
                     </Grid.ColumnDefinitions>
                     <StackPanel VerticalAlignment="Center" Margin="0,0,12,0">
                         <TextBlock Text="Show cost and token totals" TextWrapping="Wrap"/>
-                        <TextBlock Text="Estimates from local session logs, refreshed every 15 minutes"
+                        <TextBlock Text="Estimates from local session logs, scanned while the flyout or dashboard is open"
                                    TextWrapping="Wrap" Style="{StaticResource CaptionTextBlockStyle}"
                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
                     </StackPanel>
