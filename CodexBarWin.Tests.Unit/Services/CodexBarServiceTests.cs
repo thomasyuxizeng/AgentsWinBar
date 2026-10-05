@@ -184,6 +184,26 @@ public class CodexBarServiceTests
         wsl.Verify(s => s.ExecuteAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Exactly(2));
     }
 
+    [TestMethod]
+    public async Task GetAllUsageAsync_WhenProviderTimeoutCancelsCommand_ReportsRequestTimedOut()
+    {
+        var wsl = new Mock<IWslService>();
+        wsl.Setup(s => s.ExecuteAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).Returns(async (string _, CancellationToken token) =>
+        {
+            try { await Task.Delay(Timeout.Infinite, token); }
+            catch (OperationCanceledException ex) { return new WslResult { Success = false, Error = ex.Message, ExitCode = -1 }; }
+            return new WslResult();
+        });
+        _mockSettingsService.Settings.Timeouts.CliProviderTimeoutSeconds = 1;
+        _mockSettingsService.Settings.Timeouts.CliProviderFirstFetchTimeoutSeconds = 1;
+        var service = new CodexBarService(wsl.Object, _mockCacheService, _mockSettingsService, _mockSampleDataLoader, _mockLogger.Object);
+
+        var results = await service.GetAllUsageAsync();
+
+        results.Should().NotBeEmpty();
+        results.Should().OnlyContain(r => r.Error == "Request timed out");
+    }
+
     private void SetCostResponse(string provider = "claude", bool success = true, string? json = null)
     {
         var command = CodexBarWin.Helpers.CostCommandBuilder.Build(provider, "C:\\Users\\Test", _ => true);

@@ -85,6 +85,8 @@ public sealed partial class DashboardAppWindow : Window
 
         if (Content is UIElement root)
         {
+            // Window-wide shortcuts: without this WinUI shows the key as a tooltip on whatever is hovered
+            root.KeyboardAcceleratorPlacementMode = KeyboardAcceleratorPlacementMode.Hidden;
             var f11 = new KeyboardAccelerator { Key = Windows.System.VirtualKey.F11 };
             f11.Invoked += OnF11Invoked;
             _accelerators.Add(f11);

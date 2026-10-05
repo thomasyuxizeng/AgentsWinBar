@@ -265,6 +265,14 @@ public class CodexBarService : ICodexBarService
                 $"codexbar usage --provider {normalizedProvider} --format json --source {source} --status{verboseFlag}", cts.Token);
             ct.ThrowIfCancellationRequested();
 
+            // The WSL layer reports a cancelled command as a bare "A task was canceled." when this timeout (not the
+            // caller) cancelled it; name it for what it is.
+            if (!result.Success && cts.IsCancellationRequested)
+            {
+                _logger.LogDebug("{Provider} timed out", provider);
+                return new UsageData { Provider = provider, Error = "Request timed out", FetchedAt = DateTime.UtcNow };
+            }
+
             if (result.Success && !string.IsNullOrWhiteSpace(result.Output))
             {
                 var dataList = ParseUsageJsonArray(result.Output);
