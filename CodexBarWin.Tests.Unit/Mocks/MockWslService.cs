@@ -13,6 +13,26 @@ public class MockWslService : IWslService
     private List<string> _distros = ["Ubuntu"];
 
     public List<string> ExecutedCommands { get; } = [];
+    public List<IReadOnlyList<WslBatchCommand>> ExecutedBatches { get; } = [];
+    public Func<IReadOnlyList<WslBatchCommand>, Action<int, WslResult>?, CancellationToken,
+        Task<IReadOnlyList<WslResult>>>? BatchHandler { get; set; }
+    public Func<string, CancellationToken, Task<WslResult>>? CommandHandler { get; set; }
+
+    public async Task<IReadOnlyList<WslResult>> ExecuteBatchAsync(IReadOnlyList<WslBatchCommand> commands,
+        Action<int, WslResult>? onCompleted = null, CancellationToken ct = default)
+    {
+        ExecutedBatches.Add(commands);
+        if (BatchHandler != null) return await BatchHandler(commands, onCompleted, ct);
+        var results = new List<WslResult>();
+        for (var i = 0; i < commands.Count; i++)
+        {
+            ct.ThrowIfCancellationRequested();
+            var result = await ExecuteAsync(commands[i].Command, ct);
+            results.Add(result);
+            onCompleted?.Invoke(i, result);
+        }
+        return results;
+    }
 
     public void SetCommandResult(string command, WslResult result)
     {
@@ -32,6 +52,7 @@ public class MockWslService : IWslService
     public Task<WslResult> ExecuteAsync(string command, CancellationToken ct = default)
     {
         ExecutedCommands.Add(command);
+        if (CommandHandler != null) return CommandHandler(command, ct);
 
         if (_commandResults.TryGetValue(command, out var result))
         {

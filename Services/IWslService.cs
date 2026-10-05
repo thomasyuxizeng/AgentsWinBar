@@ -13,6 +13,13 @@ public interface IWslService
     Task<WslResult> ExecuteAsync(string command, CancellationToken ct = default);
 
     /// <summary>
+    /// Executes independent commands together, notifying callers as each completes.
+    /// The returned results have the same order as the commands.
+    /// </summary>
+    Task<IReadOnlyList<WslResult>> ExecuteBatchAsync(IReadOnlyList<WslBatchCommand> commands,
+        Action<int, WslResult>? onCompleted = null, CancellationToken ct = default);
+
+    /// <summary>
     /// Checks if WSL is installed.
     /// </summary>
     Task<bool> IsWslInstalledAsync(CancellationToken ct = default);
@@ -27,6 +34,9 @@ public interface IWslService
     /// </summary>
     Task<List<string>> GetDistrosAsync(CancellationToken ct = default);
 }
+
+/// <summary>A shell command and its individual execution deadline.</summary>
+public sealed record WslBatchCommand(string Command, TimeSpan Timeout);
 
 /// <summary>
 /// Result of a WSL command execution.

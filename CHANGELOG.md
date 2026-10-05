@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - Refreshes back off while usage is unchanged (configurable with `adaptiveRefreshEnabled` in settings.json); cost scans run while the flyout or dashboard is open, and the working set is trimmed when idle.
+- Usage for all providers is now fetched through a single WSL process per refresh.
 
 ### Fixed
 - A provider fetch that hits its timeout now says "Request timed out" instead of "A task was canceled."

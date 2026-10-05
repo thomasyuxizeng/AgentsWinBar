@@ -150,187 +150,195 @@ public class CodexBarService : ICodexBarService
 
     public async Task<IReadOnlyList<UsageData>> GetAllUsageAsync(CancellationToken ct = default)
     {
-        var enabledProviders = _settingsService.Settings.Providers
-            .Where(p => p.IsEnabled && ProviderConstants.IsValidProvider(p.Id))
-            .Select(p => p.Id)
-            .ToList();
-
-        if (enabledProviders.Count == 0)
-        {
-            return [];
-        }
-
-        // Fetch providers sequentially to avoid WSL conflicts
-        var results = new List<UsageData>();
-        foreach (var id in enabledProviders)
-        {
-            var source = ProviderConstants.GetSource(id);
-            results.Add(await FetchProviderAsync(id, source, ct));
-        }
-
-        Interlocked.Exchange(ref _isFirstFetch, 0);
-
-        // All results are non-null now (may contain error info)
-        return results.ToList();
+        var providers = GetEnabledProviders();
+        if (providers.Count == 0) { ct.ThrowIfCancellationRequested(); return []; }
+        return await FetchAllProvidersAsync(providers, null, ct);
     }
 
     public async IAsyncEnumerable<UsageData> GetAllUsageStreamAsync([System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
     {
-        var enabledProviders = _settingsService.Settings.Providers
-            .Where(p => p.IsEnabled && ProviderConstants.IsValidProvider(p.Id))
-            .Select(p => p.Id)
-            .ToList();
-
-        if (enabledProviders.Count == 0)
+        var providers = GetEnabledProviders();
+        if (providers.Count == 0) { ct.ThrowIfCancellationRequested(); yield break; }
+        var channel = System.Threading.Channels.Channel.CreateUnbounded<UsageData>(new()
         {
-            yield break;
-        }
-
-        // Start all fetches in parallel
-        var tasks = enabledProviders
-            .Select(id => FetchProviderAsync(id, ProviderConstants.GetSource(id), ct))
-            .ToList();
-
-        // Yield results as they complete
-        while (tasks.Count > 0)
-        {
-            var completedTask = await Task.WhenAny(tasks);
-            tasks.Remove(completedTask);
-
-            var result = await completedTask;
-            ct.ThrowIfCancellationRequested();
-            yield return result;
-        }
-
-        Interlocked.Exchange(ref _isFirstFetch, 0);
-    }
-
-    // Use int for thread-safe atomic operations with Interlocked
-    // 1 = first fetch, 0 = subsequent fetches
-    private int _isFirstFetch = 1;
-
-    private async Task<UsageData> FetchProviderAsync(string provider, string source, CancellationToken ct)
-    {
+            SingleReader = true, SingleWriter = false, AllowSynchronousContinuations = false
+        });
+        using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        var producer = ProduceAsync();
         try
         {
-            // Validate provider (defense in depth)
-            var normalizedProvider = ProviderConstants.ValidateAndNormalize(provider);
-
-            // Developer mode: Use sample data instead of WSL
-            if (_settingsService.Settings.DeveloperModeEnabled)
+            await foreach (var result in channel.Reader.ReadAllAsync(ct))
             {
-                _logger.LogDebug("Developer mode: Loading sample data for {Provider}", normalizedProvider);
-                
-                var sampleJson = _sampleDataLoader.LoadSampleJson(normalizedProvider);
-                if (!string.IsNullOrWhiteSpace(sampleJson))
-                {
-                    var dataList = ParseUsageJsonArray(sampleJson);
-                    if (dataList.Count > 0)
-                    {
-                        var data = dataList[0];
-                        _logger.LogDebug("Loaded sample data for {Provider}", normalizedProvider);
-                        return data;
-                    }
-                }
-
-                // Fallback: Sample data not available
-                _logger.LogWarning("Sample data not available for {Provider} (Developer mode)", normalizedProvider);
-                return new UsageData
-                {
-                    Provider = provider,
-                    Error = "Sample data not available (Developer mode)",
-                    FetchedAt = DateTime.UtcNow
-                };
+                ct.ThrowIfCancellationRequested();
+                yield return result;
             }
+            await producer;
+        }
+        finally
+        {
+            // Disposing an enumeration early must also stop its WSL work.
+            lifetime.Cancel();
+            try { await producer; }
+            catch (OperationCanceledException) when (lifetime.IsCancellationRequested) { }
+        }
 
-            // Use timeout settings from configuration
-            // CLI-based providers (codex, gemini) are slower, especially on first fetch
-            var timeoutSettings = _settingsService.Settings.Timeouts;
-            // Read _isFirstFetch atomically for thread-safety
-            var isFirstFetch = Interlocked.CompareExchange(ref _isFirstFetch, 1, 1) == 1;
-            var timeout = source == "cli"
-                ? (isFirstFetch
-                    ? TimeSpan.FromSeconds(timeoutSettings.CliProviderFirstFetchTimeoutSeconds)
-                    : TimeSpan.FromSeconds(timeoutSettings.CliProviderTimeoutSeconds))
-                : (isFirstFetch
-                    ? TimeSpan.FromSeconds(timeoutSettings.StandardProviderFirstFetchTimeoutSeconds)
-                    : TimeSpan.FromSeconds(timeoutSettings.StandardProviderTimeoutSeconds));
+        async Task ProduceAsync()
+        {
+            try
+            {
+                await FetchAllProvidersAsync(providers, data => channel.Writer.TryWrite(data), lifetime.Token);
+                channel.Writer.TryComplete();
+            }
+            catch (Exception ex)
+            {
+                channel.Writer.TryComplete(ex);
+            }
+        }
+    }
 
-            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            cts.CancelAfter(timeout);
+    private List<string> GetEnabledProviders() => _settingsService.Settings.Providers
+        .Where(p => p.IsEnabled && ProviderConstants.IsValidProvider(p.Id))
+        .Select(p => ProviderConstants.ValidateAndNormalize(p.Id)).ToList();
 
-            // Workaround: gemini crashes without --verbose (codexbar bug)
-            var verboseFlag = normalizedProvider == "gemini" ? " --verbose" : "";
-            var result = await _wslService.ExecuteAsync(
-                $"codexbar usage --provider {normalizedProvider} --format json --source {source} --status{verboseFlag}", cts.Token);
+    // 1 = first fetch, 0 = subsequent fetches. Only a completed refresh advances it.
+    private int _isFirstFetch = 1;
+
+    private WslBatchCommand BuildProviderCommand(string provider)
+    {
+        var normalized = ProviderConstants.ValidateAndNormalize(provider);
+        var source = ProviderConstants.GetSource(normalized);
+        var settings = _settingsService.Settings.Timeouts;
+        var first = Volatile.Read(ref _isFirstFetch) == 1;
+        var seconds = source == "cli"
+            ? (first ? settings.CliProviderFirstFetchTimeoutSeconds : settings.CliProviderTimeoutSeconds)
+            : (first ? settings.StandardProviderFirstFetchTimeoutSeconds : settings.StandardProviderTimeoutSeconds);
+        var verbose = normalized == "gemini" ? " --verbose" : "";
+        return new($"codexbar usage --provider {normalized} --format json --source {source} --status{verbose}",
+            TimeSpan.FromSeconds(seconds));
+    }
+
+    private async Task<IReadOnlyList<UsageData>> FetchAllProvidersAsync(IReadOnlyList<string> providers,
+        Action<UsageData>? onCompleted, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        var results = new UsageData?[providers.Count];
+        void Complete(int index, UsageData data)
+        {
             ct.ThrowIfCancellationRequested();
-
-            // The WSL layer reports a cancelled command as a bare "A task was canceled." when this timeout (not the
-            // caller) cancelled it; name it for what it is.
-            if (!result.Success && cts.IsCancellationRequested)
-            {
-                _logger.LogDebug("{Provider} timed out", provider);
-                return new UsageData { Provider = provider, Error = "Request timed out", FetchedAt = DateTime.UtcNow };
-            }
-
-            if (result.Success && !string.IsNullOrWhiteSpace(result.Output))
-            {
-                var dataList = ParseUsageJsonArray(result.Output);
-                if (dataList.Count > 0)
-                {
-                    var data = dataList[0];
-                    _cacheService.Set(data.Provider, data);
-                    _logger.LogDebug("Fetched {Provider} successfully", provider);
-                    return data;
-                }
-
-                // Empty response from codexbar
-                _logger.LogDebug("{Provider} returned empty data", provider);
-                return new UsageData
-                {
-                    Provider = provider,
-                    Error = "No data available",
-                    FetchedAt = DateTime.UtcNow
-                };
-            }
-
-            // Command failed
-            _logger.LogDebug("{Provider} failed: {Error}", provider, result.Error);
-            return new UsageData
-            {
-                Provider = provider,
-                Error = string.IsNullOrWhiteSpace(result.Error)
-                    ? $"Command failed (exit code {result.ExitCode})"
-                    : result.Error.Trim(),
-                FetchedAt = DateTime.UtcNow
-            };
+            if (results[index] != null) return;
+            results[index] = data;
+            onCompleted?.Invoke(data);
         }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+
+        if (_settingsService.Settings.DeveloperModeEnabled)
         {
-            throw;
+            for (var i = 0; i < providers.Count; i++) Complete(i, LoadSample(providers[i]));
         }
-        catch (OperationCanceledException)
+        else
         {
-            _logger.LogDebug("{Provider} timed out", provider);
-            return new UsageData
+            var commands = providers.Select(BuildProviderCommand).ToArray();
+            try
             {
-                Provider = provider,
-                Error = "Request timed out",
-                FetchedAt = DateTime.UtcNow
-            };
+                var batch = await _wslService.ExecuteBatchAsync(commands, (index, result) =>
+                {
+                    ct.ThrowIfCancellationRequested();
+                    if (index < 0 || index >= results.Length)
+                        throw new InvalidDataException("WSL batch returned an invalid command index");
+                    if (results[index] == null) Complete(index, InterpretProviderResult(providers[index], result));
+                }, ct);
+                ct.ThrowIfCancellationRequested();
+                if (batch == null || batch.Count != commands.Length)
+                    throw new InvalidDataException("WSL batch returned an incomplete result list");
+                for (var i = 0; i < batch.Count; i++)
+                    if (results[i] == null) Complete(i, InterpretProviderResult(providers[i], batch[i]));
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch (Exception ex)
+            {
+                ct.ThrowIfCancellationRequested();
+                _logger.LogWarning(ex, "WSL batch unavailable; retrying unfinished providers individually");
+                await Task.WhenAll(Enumerable.Range(0, providers.Count).Where(i => results[i] == null)
+                    .Select(async i => Complete(i, await FetchProviderAsync(providers[i], commands[i], ct))));
+            }
+        }
+        ct.ThrowIfCancellationRequested();
+        Interlocked.Exchange(ref _isFirstFetch, 0);
+        return results.Select(r => r!).ToArray();
+    }
+
+    private UsageData LoadSample(string provider)
+    {
+        var normalized = ProviderConstants.ValidateAndNormalize(provider);
+        try
+        {
+            var json = _sampleDataLoader.LoadSampleJson(normalized);
+            if (!string.IsNullOrWhiteSpace(json))
+            {
+                var data = ParseUsageJsonArray(json).FirstOrDefault();
+                if (data != null) return data;
+            }
+            return ProviderError(provider, "Sample data not available (Developer mode)");
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Failed to fetch {Provider}", provider);
-            return new UsageData
-            {
-                Provider = provider,
-                Error = "Unexpected error occurred",
-                FetchedAt = DateTime.UtcNow
-            };
+            _logger.LogWarning(ex, "Failed to load sample for {Provider}", provider);
+            return ProviderError(provider, "Unexpected error occurred");
         }
     }
 
+    private async Task<UsageData> FetchProviderAsync(string provider, WslBatchCommand command, CancellationToken ct)
+    {
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        deadline.CancelAfter(command.Timeout);
+        try
+        {
+            var result = await _wslService.ExecuteAsync(command.Command, deadline.Token);
+            ct.ThrowIfCancellationRequested();
+            return deadline.IsCancellationRequested
+                ? ProviderError(provider, "Request timed out")
+                : InterpretProviderResult(provider, result);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (OperationCanceledException) { return ProviderError(provider, "Request timed out"); }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to fetch {Provider}", provider);
+            return ProviderError(provider, "Unexpected error occurred");
+        }
+    }
+
+    private UsageData InterpretProviderResult(string provider, WslResult result)
+    {
+        try { return InterpretProviderResultCore(provider, result); }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to interpret {Provider}", provider);
+            return ProviderError(provider, "Unexpected error occurred");
+        }
+    }
+
+    private UsageData InterpretProviderResultCore(string provider, WslResult result)
+    {
+        if (!result.Success && (result.ExitCode == 124 ||
+            (result.ExitCode == -1 && result.Error.Contains("timed out", StringComparison.OrdinalIgnoreCase))))
+            return ProviderError(provider, "Request timed out");
+        if (result.Success && !string.IsNullOrWhiteSpace(result.Output))
+        {
+            var data = ParseUsageJsonArray(result.Output).FirstOrDefault();
+            if (data == null) return ProviderError(provider, "No data available");
+            _cacheService.Set(data.Provider, data);
+            _logger.LogDebug("Fetched {Provider} successfully", provider);
+            return data;
+        }
+        _logger.LogDebug("{Provider} failed: {Error}", provider, result.Error);
+        return ProviderError(provider, string.IsNullOrWhiteSpace(result.Error)
+            ? $"Command failed (exit code {result.ExitCode})" : result.Error.Trim());
+    }
+
+    private static UsageData ProviderError(string provider, string error) => new()
+    {
+        Provider = provider, Error = error, FetchedAt = DateTime.UtcNow
+    };
     public async Task<string?> GetVersionAsync(CancellationToken ct = default)
     {
         try
