@@ -129,6 +129,101 @@ public class WslService : IWslService
         }
     }
 
+    public async Task<IReadOnlyList<WslResult>> ExecuteBatchAsync(IReadOnlyList<WslBatchCommand> commands,
+        Action<int, WslResult>? onCompleted = null, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        ArgumentNullException.ThrowIfNull(commands);
+        if (commands.Count == 0) return [];
+        var marker = WslBatchProtocol.CreateMarker();
+        var script = WslBatchProtocol.BuildScript(commands, marker);
+        var results = new WslResult?[commands.Count];
+        var psi = new ProcessStartInfo
+        {
+            FileName = "wsl", RedirectStandardOutput = true, RedirectStandardError = true,
+            UseShellExecute = false, CreateNoWindow = true,
+            StandardOutputEncoding = Encoding.UTF8, StandardErrorEncoding = Encoding.UTF8
+        };
+        if (_distro != null) { psi.ArgumentList.Add("-d"); psi.ArgumentList.Add(_distro); }
+        psi.ArgumentList.Add("--");
+        psi.ArgumentList.Add("bash");
+        psi.ArgumentList.Add("-ic");
+        psi.ArgumentList.Add(script);
+
+        // Individual jobs own their deadlines. This watchdog covers shell startup,
+        // a broken framing utility, or other infrastructure that never terminates.
+        using var watchdog = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        watchdog.CancelAfter(commands.Max(c => c.Timeout) + TimeSpan.FromSeconds(15));
+        Process? process = null;
+        Task? outputTask = null;
+        Task<string>? errorTask = null;
+        Exception? failure = null;
+        try
+        {
+            process = new Process { StartInfo = psi };
+            if (!process.Start()) throw new InvalidOperationException("WSL batch process did not start");
+            errorTask = process.StandardError.ReadToEndAsync(watchdog.Token);
+            outputTask = WslBatchProtocol.ReadResultsAsync(process.StandardOutput, marker, results,
+                onCompleted, watchdog.Token);
+            // Read while the jobs run, rather than waiting for the slowest provider.
+            await outputTask;
+            await process.WaitForExitAsync(watchdog.Token);
+            var error = await errorTask;
+            ct.ThrowIfCancellationRequested();
+            if (results.Any(r => r == null))
+                throw new InvalidDataException($"WSL batch ended without all frames (exit {process.ExitCode}): {error.Trim()}");
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            failure = ex;
+        }
+        finally
+        {
+            KillProcessSafely(process);
+            // Observe pending I/O after killing the process so cancellation and bad
+            // frames cannot leave unobserved tasks or a live process behind.
+            watchdog.Cancel();
+            if (outputTask != null) { try { await outputTask; } catch { } }
+            if (errorTask != null) { try { await errorTask; } catch { } }
+            process?.Dispose();
+        }
+
+        ct.ThrowIfCancellationRequested();
+        if (failure != null)
+        {
+            _logger.LogWarning(failure, "WSL batch unavailable; retrying unfinished commands individually");
+            await Task.WhenAll(Enumerable.Range(0, commands.Count).Where(i => results[i] == null).Select(async i =>
+            {
+                using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                deadline.CancelAfter(commands[i].Timeout);
+                WslResult result;
+                try
+                {
+                    result = await ExecuteAsync(commands[i].Command, deadline.Token);
+                    ct.ThrowIfCancellationRequested();
+                    if (deadline.IsCancellationRequested) result = TimedOutResult(result);
+                }
+                catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+                {
+                    result = TimedOutResult();
+                }
+                ct.ThrowIfCancellationRequested();
+                results[i] = result;
+                onCompleted?.Invoke(i, result);
+            }));
+        }
+        return results.Select(r => r!).ToArray();
+    }
+
+    private static WslResult TimedOutResult(WslResult? result = null) => new()
+    {
+        Success = false, ExitCode = -1, Output = result?.Output ?? "", Error = "Command timed out"
+    };
+
     public async Task<bool> IsWslInstalledAsync(CancellationToken ct = default)
     {
         var result = await CheckWslStatusAsync(ct);

@@ -63,6 +63,7 @@
     <Compile Include="..\Services\ISetupChecker.cs" Link="Linked\ISetupChecker.cs" />
     <Compile Include="..\Services\ISampleDataLoader.cs" Link="Linked\ISampleDataLoader.cs" />
     <Compile Include="..\Services\WslService.cs" Link="Linked\WslService.cs" />
+    <Compile Include="..\Services\WslBatchProtocol.cs" Link="Linked\WslBatchProtocol.cs" />
     <Compile Include="..\Services\CodexBarService.cs" Link="Linked\CodexBarService.cs" />
     <Compile Include="..\Services\SettingsService.cs" Link="Linked\SettingsService.cs" />
     <Compile Include="..\Services\CacheService.cs" Link="Linked\CacheService.cs" />

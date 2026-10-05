@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Usage for all providers is now fetched through a single WSL process per refresh.
+
 ### Fixed
 - A provider fetch that hits its timeout now says "Request timed out" instead of "A task was canceled."
 - The dashboard no longer shows an "F11" tooltip when hovering over its contents
