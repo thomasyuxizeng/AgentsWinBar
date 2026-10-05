@@ -2,7 +2,7 @@
 
 **See how much of your Claude, Codex and Gemini limits you have left, without opening anything.**
 
-A Windows 11 app that puts your AI coding usage on the desktop: a tray flyout, an always-on floating readout, and a strip that sits on the taskbar. It reads the numbers from the [CodexBar CLI](https://github.com/steipete/CodexBar) running in WSL.
+A Windows 11 app that puts your AI coding usage on the desktop: a tray flyout, an always-on floating readout, a strip that sits on the taskbar, and a full dashboard that shows every limit at once. It reads the numbers from the [CodexBar CLI](https://github.com/steipete/CodexBar) running in WSL.
 
 This is the Wave-OCE fork of [nek0der/CodexBarWin](https://github.com/nek0der/CodexBarWin), which is the Windows front end for [steipete/CodexBar](https://github.com/steipete/CodexBar). What changed in the fork is [listed below](#what-this-fork-adds).
 
@@ -15,11 +15,16 @@ This is the Wave-OCE fork of [nek0der/CodexBarWin](https://github.com/nek0der/Co
 
 *Left: the tray flyout. Right: a provider's detail page (Gemini, showing Antigravity's separate Claude and GPT quota). Bottom: the taskbar strip.*
 
+![The dashboard](docs/images/dashboard.png)
+
+*The dashboard: headline tiles, every usage bar on one screen, then a detailed panel per provider.*
+
 ## Contents
 
 - [What you get](#what-you-get)
 - [Quick start](#quick-start)
 - [Reading the bars](#reading-the-bars)
+- [The dashboard](#the-dashboard)
 - [What this fork adds](#what-this-fork-adds)
 - [How it works](#how-it-works)
 - [Troubleshooting](#troubleshooting)
@@ -31,6 +36,7 @@ This is the Wave-OCE fork of [nek0der/CodexBarWin](https://github.com/nek0der/Co
 | | |
 |---|---|
 | **Flyout** | Click the tray icon (or the strip, or the overlay) for a card per provider: session, weekly and extra windows, with exact reset times. Click a card for its detail page. |
+| **Dashboard** | A full, resizable window (full screen with F11, optional keep-on-top) opened from the button in the flyout footer. See [The dashboard](#the-dashboard). |
 | **Taskbar strip** | A compact, borderless strip flush with the left end of the taskbar: provider logo plus two bars each. Always visible, never takes focus. |
 | **Floating overlay** | The same readout as a small draggable window that stays above your apps. Position is remembered. |
 | **Usage alerts** | Windows notifications when you're burning through a limit too fast, nearly out, or out. |
@@ -129,7 +135,7 @@ The packaged app keeps its settings across updates.
 ### 5. Use it
 
 1. Launch **CodexBarWin** from the Start menu. It lives in the system tray (it may be under the `^` overflow).
-2. Click the tray icon for the flyout. Click a provider card for details, the gear for **Settings**.
+2. Click the tray icon for the flyout. Click a provider card for details, the gear for **Settings**, or the dashboard button in the footer for the [full dashboard](#the-dashboard).
 3. In **Settings**, turn on what you want:
 
 ![Settings](docs/images/settings.png)
@@ -175,10 +181,26 @@ On the floating overlay and the taskbar strip, each provider shows its two most 
 
 One notification per usage window (re-armed when the window resets), at three levels: **far ahead of pace** (25+ points ahead and the limit would be hit well before the reset), **nearly out** (90%+), and **at the limit**. They cover the extra windows too.
 
+## The dashboard
+
+The flyout is for a quick look; the dashboard is for when you want the whole picture. Click the dashboard button in the flyout footer (or reopen it the same way; a minimized dashboard is restored). It is a normal window: resize it, maximize it, press **F11** for full screen (Esc leaves it), or pin it on top with the pin button. Refresh runs a fetch right away, and the window follows the app's refresh interval otherwise.
+
+From top to bottom:
+
+| Section | What it shows |
+|---------|---------------|
+| **Headline tiles** | Provider health, service incidents, how many limits are at or near their cap and how many are ahead of pace, the most-used window, the next reset, and cost today and over 30 days. |
+| **Usage overview** | One card per provider with a one-line bar for every window (name, bar with its pace layer, percent used, time to reset). Every limit is visible on load without scrolling. Hover a row for the exact numbers. |
+| **Provider panels** | A detailed panel per provider: every usage window with reset time, pace projection and a usage history chart; service status; cost and token totals with daily cost bars; top models. Gemini gets a full-width panel with its own models and the External (Claude and GPT) pool side by side. |
+| **Diagnostics** | Always at the bottom, also in full screen: CLI and app versions, the effective settings, the history store, cost scans, and this session's refresh log and alerts. |
+
+Refreshes only redraw what changed, so scrolling stays smooth while data loads.
+
 ## What this fork adds
 
 Compared with upstream, this fork adds:
 
+- **A dashboard window** with headline tiles, a usage overview with every bar at once, a detailed panel per provider and a diagnostics section. See [The dashboard](#the-dashboard).
 - **Always-on overlay and taskbar strip.** Borderless, rounded where it should be, flush with the taskbar, never steals focus, and hides during fullscreen apps.
 - **A flyout that reliably appears over other programs**, instead of sometimes opening behind them.
 - **Pace layer, marker and run-out projections** on every bar.
@@ -195,7 +217,7 @@ Compared with upstream, this fork adds:
 - **Providers apply immediately** when enabled, disabled or reordered in Settings.
 - **Safer settings and refreshes.** Settings saves replace a complete file atomically, failed saves show a visible error and restore uncommitted values, and malformed values recover to defaults. Canceled refreshes cannot put old results back on screen. Quit flushes history before exiting.
 - **`tools/wsl`**: one-step setup for the CLI and shim.
-- 400 unit tests, including settings persistence, refresh cancellation races and cost-cache recovery after cancellation.
+- Close to 500 unit tests, including settings persistence, refresh cancellation races and cost-cache recovery after cancellation.
 
 The full list is in the [changelog](CHANGELOG.md).
 
