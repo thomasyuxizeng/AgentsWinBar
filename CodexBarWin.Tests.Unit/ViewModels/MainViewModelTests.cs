@@ -877,4 +877,214 @@ public class MainViewModelTests
         _viewModel.ErrorMessage.Should().BeNull();
         _usage.Verify(s => s.GetAllUsageStreamAsync(It.IsAny<CancellationToken>()), Times.Once);
     }
+
+    [TestMethod]
+    public async Task StartAsync_StopWhileRestartAwaitsOldRefresh_DoesNotRestartScheduler()
+    {
+        var gate = Signal();
+        _usage.Setup(s => s.GetAllUsageStreamAsync(It.IsAny<CancellationToken>()))
+            .Returns((CancellationToken ct) => Stream(gate.Task, Data(90), ct));
+        var first = _viewModel.StartAsync();
+        var restart = _viewModel.StartAsync();
+        _viewModel.Stop();
+        gate.SetResult();
+        await Task.WhenAll(first, restart).WaitAsync(TimeSpan.FromSeconds(5));
+        _viewModel.NextRefreshUtc.Should().BeNull();
+        _history.Samples.Should().BeEmpty();
+        _usage.Verify(s => s.GetAllUsageStreamAsync(It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [TestMethod]
+    public async Task SettingsChanged_BackgroundThread_AppliesOnlyOnCapturedUiContext()
+    {
+        _viewModel.Dispose();
+        var context = new QueuedContext();
+        var previous = SynchronizationContext.Current;
+        SynchronizationContext.SetSynchronizationContext(context);
+        try
+        {
+            _viewModel = new(_usage.Object, _settings.Object, new UsageAlertEvaluator(), _toast.Object,
+                NullLogger<MainViewModel>.Instance, _history, _persistence, _activity, _session, _cache.Object, _memo.Object);
+        }
+        finally { SynchronizationContext.SetSynchronizationContext(previous); }
+        SetupImmediateUsage();
+        await _viewModel.StartAsync();
+        var cost = new CostData { Provider = "claude", Last30DaysCostUSD = 10 };
+        _viewModel.Providers[0] = _viewModel.Providers[0] with { Cost = cost };
+        _values.ShowCostTotals = false;
+        await Task.Run(() => _settings.Raise(s => s.SettingsChanged += null, EventArgs.Empty));
+        _viewModel.Providers[0].Cost.Should().BeSameAs(cost);
+        _usage.Verify(s => s.GetAllUsageStreamAsync(It.IsAny<CancellationToken>()), Times.Once);
+        context.Drain();
+        _viewModel.Providers[0].Cost.Should().BeNull();
+        _usage.Verify(s => s.GetAllUsageStreamAsync(It.IsAny<CancellationToken>()), Times.Exactly(2));
+        _viewModel.Stop();
+        // Cancellation unwinds awaited cache persistence on the captured context.
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        while (_viewModel.IsLoading) { context.Drain(); await Task.Delay(10, timeout.Token); }
+    }
+
+    [TestMethod]
+    public async Task StartAsync_FreshCacheAfterFailedLoad_ClearsPreviousError()
+    {
+        _usage.Setup(s => s.GetAllUsageStreamAsync(It.IsAny<CancellationToken>()))
+            .Throws(new IOException("fetch failed"));
+        await _viewModel.StartAsync();
+        _viewModel.ErrorMessage.Should().NotBeNull();
+        _cache.Setup(c => c.Get("claude")).Returns(Data(20));
+        await _viewModel.StartAsync();
+        _viewModel.ErrorMessage.Should().BeNull();
+        _viewModel.Providers.Should().ContainSingle().Which.HasError.Should().BeFalse();
+        _viewModel.NextRefreshUtc.Should().NotBeNull();
+        _usage.Verify(s => s.GetAllUsageStreamAsync(It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [TestMethod]
+    public async Task StartAsync_FreshCacheWithExistingCostDemand_LoadsMissingCosts()
+    {
+        _viewModel.Stop();
+        _cache.Setup(c => c.Get("claude")).Returns(Data(20));
+        var cost = new CostData { Provider = "claude", Last30DaysCostUSD = 10 };
+        _usage.Setup(s => s.GetCostAsync("claude", false, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(cost);
+        using var demand = _viewModel.AcquireCostDemand();
+        await _viewModel.StartAsync();
+        _viewModel.Providers.Single().Cost.Should().BeSameAs(cost);
+        _usage.Verify(s => s.GetCostAsync("claude", false, It.IsAny<CancellationToken>()), Times.Once);
+        _usage.Verify(s => s.GetAllUsageStreamAsync(It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [TestMethod]
+    public async Task RefreshCommand_DemandScanStillRunning_WaitsBeforeForcingAndDiscardsOldTotals()
+    {
+        SetupImmediateUsage();
+        await _viewModel.StartAsync();
+        var scan = new TaskCompletionSource<CostData?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        CancellationToken demandToken = default;
+        _usage.Setup(s => s.GetCostAsync("claude", false, It.IsAny<CancellationToken>()))
+            .Returns((string provider, bool force, CancellationToken ct) => { demandToken = ct; return scan.Task; });
+        var current = new CostData { Provider = "claude", Last30DaysCostUSD = 10 };
+        _usage.Setup(s => s.GetCostAsync("claude", true, It.IsAny<CancellationToken>())).ReturnsAsync(current);
+        using var demand = _viewModel.AcquireCostDemand();
+        var refresh = _viewModel.RefreshCommand.ExecuteAsync(null);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        while (!demandToken.IsCancellationRequested) await Task.Delay(10, timeout.Token);
+        _usage.Verify(s => s.GetCostAsync("claude", true, It.IsAny<CancellationToken>()), Times.Never);
+        scan.SetResult(new CostData { Provider = "claude", Last30DaysCostUSD = 100 });
+        await refresh.WaitAsync(TimeSpan.FromSeconds(5));
+        _viewModel.Providers.Single().Cost.Should().BeSameAs(current);
+        _usage.Verify(s => s.GetCostAsync("claude", false, It.IsAny<CancellationToken>()), Times.Once);
+        _usage.Verify(s => s.GetCostAsync("claude", true, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [TestMethod]
+    public async Task RefreshCommand_StopWhileWaitingForDemandScan_CompletesWithoutStartingForcedScan()
+    {
+        SetupImmediateUsage();
+        await _viewModel.StartAsync();
+        var scan = new TaskCompletionSource<CostData?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        CancellationToken demandToken = default;
+        _usage.Setup(s => s.GetCostAsync("claude", false, It.IsAny<CancellationToken>()))
+            .Returns((string provider, bool force, CancellationToken ct) => { demandToken = ct; return scan.Task; });
+        using var demand = _viewModel.AcquireCostDemand();
+        var refresh = _viewModel.RefreshCommand.ExecuteAsync(null);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        while (!demandToken.IsCancellationRequested) await Task.Delay(10, timeout.Token);
+        _viewModel.Stop();
+        await refresh.WaitAsync(TimeSpan.FromSeconds(5));
+        _viewModel.NextRefreshUtc.Should().BeNull();
+        _usage.Verify(s => s.GetCostAsync("claude", true, It.IsAny<CancellationToken>()), Times.Never);
+        scan.SetResult(null);
+    }
+
+    [TestMethod]
+    public async Task SessionResumed_UsageRefreshInProgress_KeepsNextRefreshUnsetUntilCompletion()
+    {
+        var gate = Signal();
+        _usage.Setup(s => s.GetAllUsageStreamAsync(It.IsAny<CancellationToken>()))
+            .Returns((CancellationToken ct) => Stream(gate.Task, Data(20), ct));
+        var refresh = _viewModel.StartAsync();
+        _session.Resume();
+        _viewModel.IsLoading.Should().BeTrue();
+        _viewModel.NextRefreshUtc.Should().BeNull();
+        gate.SetResult();
+        await refresh.WaitAsync(TimeSpan.FromSeconds(5));
+        _viewModel.NextRefreshUtc.Should().NotBeNull();
+    }
+
+    [TestMethod]
+    public async Task SettingsChanged_UsageRefreshInProgress_KeepsNextRefreshUnsetUntilCompletion()
+    {
+        var gate = Signal();
+        _usage.Setup(s => s.GetAllUsageStreamAsync(It.IsAny<CancellationToken>()))
+            .Returns((CancellationToken ct) => Stream(gate.Task, Data(20), ct));
+        var refresh = _viewModel.StartAsync();
+        _settings.Raise(s => s.SettingsChanged += null, EventArgs.Empty);
+        _viewModel.NextRefreshUtc.Should().BeNull();
+        _viewModel.Stop();
+        gate.SetResult();
+        await refresh.WaitAsync(TimeSpan.FromSeconds(5));
+        _viewModel.NextRefreshUtc.Should().BeNull();
+    }
+
+    [TestMethod]
+    public async Task RefreshIfStaleAsync_LastUpdatedInFuture_RefreshesAfterClockMovesBackward()
+    {
+        SetupImmediateUsage();
+        await _viewModel.StartAsync();
+        _viewModel.LastUpdated = DateTime.Now.AddHours(1);
+        await _viewModel.RefreshIfStaleAsync(TimeSpan.FromMinutes(2));
+        _usage.Verify(s => s.GetAllUsageStreamAsync(It.IsAny<CancellationToken>()), Times.Exactly(2));
+    }
+
+    [TestMethod]
+    public async Task StartAsync_StreamContainsDisabledProvider_KeepsOnlyEnabledProviders()
+    {
+        async IAsyncEnumerable<UsageData> Results()
+        {
+            yield return Data(20);
+            await Task.Yield();
+            yield return Data(80) with { Provider = "codex" };
+        }
+        _usage.Setup(s => s.GetAllUsageStreamAsync(It.IsAny<CancellationToken>())).Returns(() => Results());
+        await _viewModel.StartAsync();
+        _viewModel.Providers.Select(p => p.Provider).Should().Equal("claude");
+    }
+
+    [TestMethod]
+    [DataRow(DateTimeKind.Utc)]
+    [DataRow(DateTimeKind.Local)]
+    [DataRow(DateTimeKind.Unspecified)]
+    public async Task StartAsync_FreshCacheTimestampKinds_UsesUtcAge(DateTimeKind kind)
+    {
+        _values.RefreshIntervalSeconds = 300;
+        var fetchedUtc = DateTime.UtcNow.AddMinutes(-2);
+        var fetched = kind == DateTimeKind.Local ? fetchedUtc.ToLocalTime() : DateTime.SpecifyKind(fetchedUtc, kind);
+        _cache.Setup(c => c.Get("claude")).Returns(Data(20) with { FetchedAt = fetched });
+        await _viewModel.StartAsync();
+        _viewModel.LastUpdated.Should().Be(fetchedUtc.ToLocalTime());
+        _viewModel.NextRefreshUtc.Should().BeCloseTo(fetchedUtc.AddMinutes(5), TimeSpan.FromSeconds(2));
+        _usage.Verify(s => s.GetAllUsageStreamAsync(It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [TestMethod]
+    public async Task StartAsync_FreshCacheContainsError_FetchesImmediately()
+    {
+        _cache.Setup(c => c.Get("claude")).Returns(Data(20) with { Error = "fetch failed" });
+        SetupImmediateUsage();
+        await _viewModel.StartAsync();
+        _viewModel.Providers.Should().ContainSingle().Which.HasError.Should().BeFalse();
+        _usage.Verify(s => s.GetAllUsageStreamAsync(It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [TestMethod]
+    public async Task StartAsync_DisabledProviderCacheMissing_RestoresEnabledProvidersOnly()
+    {
+        _values.Providers = [new() { Id = "codex", IsEnabled = false }, new() { Id = "claude" }];
+        _cache.Setup(c => c.Get("claude")).Returns(Data(20));
+        await _viewModel.StartAsync();
+        _viewModel.Providers.Select(p => p.Provider).Should().Equal("claude");
+        _cache.Verify(c => c.Get("codex"), Times.Never);
+        _usage.Verify(s => s.GetAllUsageStreamAsync(It.IsAny<CancellationToken>()), Times.Never);
+    }
 }

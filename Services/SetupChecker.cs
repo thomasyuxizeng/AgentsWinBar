@@ -27,7 +27,16 @@ public partial class SetupChecker : ISetupChecker
 
     public async Task<SetupStatus> CheckAsync(CancellationToken ct = default)
     {
-        var status = await CheckCoreAsync(ct);
+        SetupStatus status;
+        try
+        {
+            status = await CheckCoreAsync(ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogError(ex, "Setup probe failed");
+            status = new SetupStatus { WslError = WslErrorType.Other };
+        }
         if (_memo != null)
         {
             if (status.IsReady) await _memo.SaveAsync(status.CodexBarVersion, ct);

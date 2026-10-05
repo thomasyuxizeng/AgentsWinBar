@@ -67,6 +67,17 @@ public class WslServiceTests
     #region ExecuteAsync Tests
 
     [TestMethod]
+    [DataRow(2, 127)]
+    [DataRow(5, -1)]
+    public void ExecutionFailure_Win32StartupFailure_ClassifiesOnlyMissingExecutableAsCommandNotFound(int nativeError, int exit)
+    {
+        var result = WslService.ExecutionFailure(new System.ComponentModel.Win32Exception(nativeError, "startup failure"));
+        result.Success.Should().BeFalse();
+        result.ExitCode.Should().Be(exit);
+        result.Error.Should().Be("startup failure");
+    }
+
+    [TestMethod]
     public async Task ExecuteAsync_WithCancellationToken_RespectsToken()
     {
         // Arrange
@@ -259,6 +270,15 @@ public class WslServiceTests
         };
 
         WslService.ResolveCommandTimeout(timeouts).Should().Be(TimeSpan.FromSeconds(120));
+    }
+
+    [TestMethod]
+    public void ResolveCommandTimeout_ShortProviderSettings_AllowsSixtySecondCostScan()
+    {
+        WslService.ResolveCommandTimeout(new TimeoutSettings
+        {
+            WslCommandTimeoutSeconds = 10, CliProviderTimeoutSeconds = 15, CliProviderFirstFetchTimeoutSeconds = 20
+        }).Should().Be(TimeSpan.FromSeconds(60));
     }
 
     [TestMethod]

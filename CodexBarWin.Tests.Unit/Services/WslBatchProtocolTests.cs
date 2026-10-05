@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Diagnostics;
 using System.Text;
 using AwesomeAssertions;
 using CodexBarWin.Services;
@@ -132,6 +133,134 @@ public class WslBatchProtocolTests
         var script = WslBatchProtocol.BuildScript(
             [new("echo hi", TimeSpan.FromSeconds(5)), new("echo 'a'", TimeSpan.FromSeconds(5))], WslBatchProtocol.CreateMarker());
         script.Should().NotContain("\r");
+    }
+
+    [TestMethod]
+    public void BuildScript_LiteralCommandCrLf_PreservesPayloadBytes()
+    {
+        var command = "printf '%s' 'first\r\nsecond'";
+        var script = WslBatchProtocol.BuildScript([new(command, TimeSpan.FromSeconds(5))], WslBatchProtocol.CreateMarker());
+        script.Should().Contain(WslBatchProtocol.Quote(command));
+        script.Replace(WslBatchProtocol.Quote(command), "").Should().NotContain("\r");
+    }
+
+    [TestMethod]
+    [TestCategory("BashIntegration")]
+    public async Task BuildScript_RealBashMixedPayloadsAndStderr_PreservesResultsAndLiteralBytes()
+    {
+        var payload = "quotes ' \" dollars $HOME backticks `whoami`\nUnicode 한글 😀\r\nno final newline";
+        var marker = WslBatchProtocol.CreateMarker();
+        WslBatchCommand[] commands =
+        [
+            new("printf '%s' " + WslBatchProtocol.Quote(payload), TimeSpan.FromSeconds(5)),
+            new("printf '%s' diagnostic >&2; printf '%s' partial; exit 7", TimeSpan.FromSeconds(5)),
+            new("head -c 204800 /dev/zero | tr '\\0' x", TimeSpan.FromSeconds(5)),
+            new("if read -r input; then printf unexpected; else printf eof; fi", TimeSpan.FromSeconds(2))
+        ];
+        var results = await RunInBashAsync(commands, marker);
+        results[0]!.Output.Should().Be(payload);
+        results[0]!.Success.Should().BeTrue();
+        results[1]!.ExitCode.Should().Be(7);
+        results[1]!.Output.Should().Be("partial");
+        results[1]!.Error.Should().Be("diagnostic");
+        results[2]!.Output.Should().Be(new string('x', 204800));
+        results[3]!.Output.Should().Be("eof");
+        results.Should().OnlyContain(result => result != null);
+    }
+
+    [TestMethod]
+    [TestCategory("BashIntegration")]
+    public async Task BuildScript_RealBashSleepingPastDeadline_PreservesPartialOutputAndTimesOut()
+    {
+        var results = await RunInBashAsync(
+            [new("printf partial; printf warning >&2; sleep 20; printf late", TimeSpan.FromSeconds(1.5))],
+            WslBatchProtocol.CreateMarker());
+        results[0]!.ExitCode.Should().Be(124);
+        results[0]!.Success.Should().BeFalse();
+        results[0]!.Output.Should().Be("partial");
+        results[0]!.Error.Should().Contain("warning").And.Contain("timed out");
+    }
+
+    [TestMethod]
+    public void TryParseLine_InvalidUtf8_UsesReplacementCharactersWithoutLosingFrame()
+    {
+        var marker = WslBatchProtocol.CreateMarker();
+        WslBatchProtocol.TryParseLine($"{marker}|0|0|/w==|", marker, 1, out _, out var result).Should().BeTrue();
+        result!.Output.Should().Be("\uFFFD");
+    }
+
+    private static async Task<WslResult?[]> RunInBashAsync(WslBatchCommand[] commands, string marker)
+    {
+        const string prerequisites = "command -v timeout && command -v flock && command -v base64";
+        // Prefer the real thing: WSL launched exactly like production (--exec, no default-shell re-parsing).
+        // Otherwise a Unix-style bash, but never the System32 bash.exe stub, which is the WSL launcher and
+        // re-expands the script through the default shell.
+        var candidates = new List<(string File, string[] Prefix)>();
+        var system32 = Environment.GetFolderPath(Environment.SpecialFolder.System);
+        var wsl = Path.Combine(system32, "wsl.exe");
+        if (OperatingSystem.IsWindows() && File.Exists(wsl)) candidates.Add((wsl, ["--exec", "bash", "-ic"]));
+        foreach (var path in (Environment.GetEnvironmentVariable("PATH") ?? "").Split(Path.PathSeparator))
+        {
+            var bash = Path.Combine(path.Trim('"'), OperatingSystem.IsWindows() ? "bash.exe" : "bash");
+            if (File.Exists(bash) && !bash.StartsWith(system32, StringComparison.OrdinalIgnoreCase))
+                candidates.Add((bash, ["--noprofile", "--norc", "-ic"]));
+        }
+        candidates.Add((@"C:\Program Files\Gitinash.exe", ["--noprofile", "--norc", "-ic"]));
+
+        ProcessStartInfo StartInfo((string File, string[] Prefix) shell, string script)
+        {
+            var info = new ProcessStartInfo(shell.File)
+            {
+                UseShellExecute = false, CreateNoWindow = true,
+                RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true,
+                StandardOutputEncoding = Encoding.UTF8, StandardErrorEncoding = Encoding.UTF8
+            };
+            foreach (var argument in shell.Prefix) info.ArgumentList.Add(argument);
+            info.ArgumentList.Add(script);
+            return info;
+        }
+
+        (string File, string[] Prefix)? chosen = null;
+        foreach (var candidate in candidates.Where(c => File.Exists(c.File)))
+        {
+            using var probeDeadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            try
+            {
+                using var probe = Process.Start(StartInfo(candidate, prerequisites))!;
+                probe.StandardInput.Close();
+                var probeOut = probe.StandardOutput.ReadToEndAsync(probeDeadline.Token);
+                var probeErr = probe.StandardError.ReadToEndAsync(probeDeadline.Token);
+                try { await probe.WaitForExitAsync(probeDeadline.Token); }
+                finally { if (!probe.HasExited) probe.Kill(entireProcessTree: true); }
+                await Task.WhenAll(probeOut, probeErr);
+                if (probe.ExitCode == 0) { chosen = candidate; break; }
+            }
+            catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or OperationCanceledException or IOException) { }
+        }
+        if (chosen == null) Assert.Inconclusive("no bash with timeout, flock and base64 is available");
+        var shell = chosen!.Value;
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+
+        // Include both startup noise streams; they must never become provider payloads.
+        using var process = Process.Start(StartInfo(shell, "printf 'startup noise\\n'; printf 'interactive warning\\n' >&2;\n" +
+            WslBatchProtocol.BuildScript(commands, marker)))!;
+        process.StandardInput.Close();
+        var results = new WslResult?[commands.Length];
+        var reading = WslBatchProtocol.ReadResultsAsync(process.StandardOutput, marker, results, null, deadline.Token);
+        var errors = process.StandardError.ReadToEndAsync(deadline.Token);
+        try
+        {
+            await Task.WhenAll(reading, errors, process.WaitForExitAsync(deadline.Token));
+            process.ExitCode.Should().Be(0, await errors);
+            results.Should().OnlyContain(result => result != null);
+            return results;
+        }
+        finally
+        {
+            if (!process.HasExited) process.Kill(entireProcessTree: true);
+            deadline.Cancel();
+            try { await Task.WhenAll(reading, errors); } catch (OperationCanceledException) { }
+        }
     }
 
     [TestMethod]

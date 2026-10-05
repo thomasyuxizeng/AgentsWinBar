@@ -90,6 +90,40 @@ public class SetupMemoServiceTests
     }
 
     [TestMethod]
+    public async Task IsValidAsync_DeveloperMode_DoesNotReadWriteOrDeleteRealMemo()
+    {
+        var clock = new Clock();
+        var memo = Create(clock);
+        await memo.SaveAsync("0.17.0");
+        var original = await File.ReadAllTextAsync(memo.FilePath);
+        var settings = new Mocks.MockSettingsService();
+        settings.Settings.DeveloperModeEnabled = true;
+        var devMemo = new SetupMemoService(settings, NullLogger<SetupMemoService>.Instance, clock, memo.FilePath);
+
+        (await devMemo.IsValidAsync()).Should().BeFalse();
+        await devMemo.SaveAsync("1.0.0");
+        await devMemo.InvalidateAsync();
+
+        (await File.ReadAllTextAsync(memo.FilePath)).Should().Be(original);
+        settings.Settings.DeveloperModeEnabled = false;
+        (await devMemo.IsValidAsync()).Should().BeTrue();
+    }
+
+    [TestMethod]
+    public async Task IsValidAsync_NonUtcTimestamp_UsesOffsetWhenCheckingAge()
+    {
+        var clock = new Clock();
+        var memo = Create(clock);
+        Directory.CreateDirectory(Path.GetDirectoryName(memo.FilePath)!);
+        var timestamp = clock.Now.AddHours(-23).ToOffset(TimeSpan.FromHours(9)).ToString("O");
+        await File.WriteAllTextAsync(memo.FilePath,
+            "{\"cliVersion\":\"0.17.0\",\"checkedAtUtc\":\"" + timestamp + "\"}");
+        (await memo.IsValidAsync()).Should().BeTrue();
+        clock.Now += TimeSpan.FromHours(1);
+        (await memo.IsValidAsync()).Should().BeFalse();
+    }
+
+    [TestMethod]
     public async Task InvalidateAsync_PreviousSuccess_DeletesMemo()
     {
         var memo = Create(new Clock());

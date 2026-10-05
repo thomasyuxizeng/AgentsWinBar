@@ -21,6 +21,35 @@ public class CodexBarBatchTests
     };
 
     [TestMethod]
+    public async Task GetAllUsageAsync_CommandNotFoundFallback_RecordsActivityWithoutChangingSuccess()
+    {
+        _settings.SetProviders([new() { Id = "claude" }]);
+        _wsl.BatchHandler = (_, _, _) => Task.FromResult<IReadOnlyList<WslResult>>([new() { ExitCode = 127 }]);
+        _wsl.CommandHandler = (_, _) => Task.FromResult(Data("claude"));
+        var activity = new ActivityLog();
+        var service = new CodexBarService(_wsl, _cache, _settings, _samples,
+            NullLogger<CodexBarService>.Instance, activityLog: activity);
+        (await service.GetAllUsageAsync()).Single().HasError.Should().BeFalse();
+        activity.RecentRefreshes.Should().ContainSingle().Which.Should().BeEquivalentTo(new
+        {
+            ProviderId = "claude", Success = false, Message = "WSL batch fallback: Command failed (exit code 127)"
+        });
+    }
+
+    [TestMethod]
+    public async Task GetAllUsageAsync_BrokenBatchFallback_RecordsFailureReason()
+    {
+        _settings.SetProviders([new() { Id = "claude" }]);
+        _wsl.BatchHandler = (_, _, _) => throw new InvalidDataException("missing frames");
+        _wsl.CommandHandler = (_, _) => Task.FromResult(Data("claude"));
+        var activity = new ActivityLog();
+        var service = new CodexBarService(_wsl, _cache, _settings, _samples,
+            NullLogger<CodexBarService>.Instance, activityLog: activity);
+        await service.GetAllUsageAsync();
+        activity.RecentRefreshes.Should().ContainSingle().Which.Message.Should().Be("WSL batch fallback: missing frames");
+    }
+
+    [TestMethod]
     public async Task GetAllUsageAsync_BatchCompletesOutOfOrder_ReturnsInputOrderAndUsesOneBatch()
     {
         _settings.SetProviders([new() { Id = "claude" }, new() { Id = "gemini" },

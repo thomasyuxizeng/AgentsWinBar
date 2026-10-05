@@ -39,7 +39,7 @@ internal static class WslBatchProtocol
             }
             trap cbw_cleanup EXIT
             trap 'exit 130' HUP INT TERM
-            """ + "\n");
+            """.Replace("\r\n", "\n") + "\n");
 
         for (var i = 0; i < commands.Count; i++)
         {
@@ -68,8 +68,8 @@ internal static class WslBatchProtocol
                 .Append(" ) 9>\"$cbw_dir/lock\"\n) &\ncbw_pids+=($!)\n");
         }
         script.Append("cbw_failed=0\nfor cbw_pid in \"${cbw_pids[@]}\"; do wait \"$cbw_pid\" || cbw_failed=1; done\ncbw_pids=()\nexit \"$cbw_failed\"\n");
-        // The raw-string template takes the source file's line endings; bash must never see a carriage return.
-        return script.ToString().Replace("\r\n", "\n");
+        // Normalize the template above, never the quoted command: CRLF can be literal payload data.
+        return script.ToString();
     }
 
     internal static bool TryParseLine(string line, string marker, int count, out int index, out WslResult? result)

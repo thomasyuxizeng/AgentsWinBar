@@ -5,6 +5,8 @@
 
 # Scripts that run inside WSL (Linux) must keep LF line endings
 *.sh text eol=lf
+# This raw string is executed by bash; keep its checkout bytes stable as well.
+Services/WslBatchProtocol.cs text eol=lf
 
 ###############################################################################
 # Set default behavior for command prompt diff.

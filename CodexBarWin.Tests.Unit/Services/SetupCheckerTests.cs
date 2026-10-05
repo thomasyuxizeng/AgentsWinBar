@@ -384,4 +384,44 @@ public class SetupCheckerTests
         // Assert
         SetupChecker.MinCodexBarVersion.Should().Be(new Version("0.17.0"));
     }
+
+    [TestMethod]
+    [DataRow(true)]
+    [DataRow(false)]
+    public async Task CheckAsync_WslProbeThrows_ReturnsErrorAndInvalidatesMemo(bool statusProbe)
+    {
+        var wsl = new Mock<IWslService>();
+        wsl.Setup(w => w.CheckWslStatusAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new WslStatusResult { IsInstalled = true, IsRunning = true });
+        if (statusProbe)
+            wsl.Setup(w => w.CheckWslStatusAsync(It.IsAny<CancellationToken>()))
+                .ThrowsAsync(new IOException("WSL removed"));
+        else
+            wsl.Setup(w => w.GetDistrosAsync(It.IsAny<CancellationToken>()))
+                .ThrowsAsync(new IOException("WSL removed"));
+        var memo = new Mock<ISetupMemoService>();
+        var checker = new SetupChecker(wsl.Object, _mockLogger.Object, memo.Object);
+
+        var status = await checker.CheckAsync();
+
+        status.IsReady.Should().BeFalse();
+        status.WslError.Should().Be(WslErrorType.Other);
+        memo.Verify(m => m.InvalidateAsync(It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [TestMethod]
+    public async Task CheckAsync_CancelledProbe_PropagatesCancellationWithoutUpdatingMemo()
+    {
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+        var wsl = new Mock<IWslService>();
+        wsl.Setup(w => w.CheckWslStatusAsync(cts.Token)).ThrowsAsync(new OperationCanceledException(cts.Token));
+        var memo = new Mock<ISetupMemoService>();
+        var checker = new SetupChecker(wsl.Object, _mockLogger.Object, memo.Object);
+
+        await Assert.ThrowsExactlyAsync<OperationCanceledException>(() => checker.CheckAsync(cts.Token));
+
+        memo.Verify(m => m.InvalidateAsync(It.IsAny<CancellationToken>()), Times.Never);
+        memo.Verify(m => m.SaveAsync(It.IsAny<string?>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
 }

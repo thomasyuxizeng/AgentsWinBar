@@ -13,10 +13,11 @@ public class WslService : IWslService
     private readonly ILogger<WslService> _logger;
     private readonly ISettingsService? _settingsService;
     private readonly string? _distro;
+    private readonly IActivityLog? _activityLog;
 
     private TimeSpan Timeout => _settingsService != null
         ? ResolveCommandTimeout(_settingsService.Settings.Timeouts)
-        : TimeSpan.FromSeconds(30);
+        : TimeSpan.FromSeconds(60);
 
     /// <summary>
     /// The hard limit for one WSL command. Callers such as <see cref="ICodexBarService"/> already enforce
@@ -30,18 +31,21 @@ public class WslService : IWslService
             timeouts.CliProviderFirstFetchTimeoutSeconds,
             timeouts.CliProviderTimeoutSeconds);
 
-        return TimeSpan.FromSeconds(Math.Max(timeouts.WslCommandTimeoutSeconds, longestProviderTimeout));
+        // Cost scans also receive a minimum 60-second deadline, including individual fallbacks.
+        return TimeSpan.FromSeconds(Math.Max(60, Math.Max(timeouts.WslCommandTimeoutSeconds, longestProviderTimeout)));
     }
 
     private TimeSpan StatusCheckTimeout => _settingsService != null
         ? TimeSpan.FromSeconds(_settingsService.Settings.Timeouts.WslStatusCheckTimeoutSeconds)
         : TimeSpan.FromSeconds(10);
 
-    public WslService(ILogger<WslService> logger, ISettingsService? settingsService = null, string? distro = null)
+    public WslService(ILogger<WslService> logger, ISettingsService? settingsService = null, string? distro = null,
+        IActivityLog? activityLog = null)
     {
         _logger = logger;
         _settingsService = settingsService;
         _distro = distro;
+        _activityLog = activityLog;
     }
 
     public async Task<WslResult> ExecuteAsync(string command, CancellationToken ct = default)
@@ -68,7 +72,7 @@ public class WslService : IWslService
             psi.ArgumentList.Add("-d");
             psi.ArgumentList.Add(_distro);
         }
-        psi.ArgumentList.Add("--");
+        psi.ArgumentList.Add("--exec");
         psi.ArgumentList.Add("bash");
         psi.ArgumentList.Add("-ic");  // -i for interactive (loads .bashrc for Codex CLI)
         psi.ArgumentList.Add(shellScript);
@@ -114,12 +118,7 @@ public class WslService : IWslService
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to execute WSL command: {Command}", command);
-            return new WslResult
-            {
-                Success = false,
-                Error = ex.Message,
-                ExitCode = -1
-            };
+            return ExecutionFailure(ex);
         }
         finally
         {
@@ -198,6 +197,11 @@ public class WslService : IWslService
         if (failure != null)
         {
             _logger.LogWarning(failure, "WSL batch unavailable; retrying unfinished commands individually");
+            _activityLog?.RecordRefresh(new DashboardRefreshEntry
+            {
+                TimestampUtc = DateTime.UtcNow, ProviderId = "wsl", Success = false,
+                Message = "WSL batch fallback: " + failure.Message
+            });
             await Task.WhenAll(Enumerable.Range(0, commands.Count).Where(i => results[i] == null).Select(async i =>
             {
                 using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -224,6 +228,13 @@ public class WslService : IWslService
     private static WslResult TimedOutResult(WslResult? result = null) => new()
     {
         Success = false, ExitCode = -1, Output = result?.Output ?? "", Error = "Command timed out"
+    };
+
+    internal static WslResult ExecutionFailure(Exception exception) => new()
+    {
+        Success = false, Error = exception.Message,
+        // A removed WSL executable must invalidate the cached setup verdict, just like a missing CLI.
+        ExitCode = exception is System.ComponentModel.Win32Exception { NativeErrorCode: 2 } ? 127 : -1
     };
 
     public async Task<bool> IsWslInstalledAsync(CancellationToken ct = default)

@@ -10,6 +10,7 @@ public sealed partial class SetupMemoService : ISetupMemoService
 {
     private readonly ILogger<SetupMemoService> _logger;
     private readonly TimeProvider _clock;
+    private readonly ISettingsService _settings;
     private readonly SemaphoreSlim _ioGate = new(1, 1);
 
     public string FilePath { get; }
@@ -18,6 +19,7 @@ public sealed partial class SetupMemoService : ISetupMemoService
         TimeProvider? timeProvider = null, string? filePath = null)
     {
         _logger = logger;
+        _settings = settings;
         _clock = timeProvider ?? TimeProvider.System;
         FilePath = filePath ?? Path.Combine(
             Path.GetDirectoryName(Path.GetFullPath(settings.SettingsFilePath))!, "setup-ok.json");
@@ -25,11 +27,13 @@ public sealed partial class SetupMemoService : ISetupMemoService
 
     public async Task<bool> IsValidAsync(CancellationToken ct = default)
     {
+        if (_settings.Settings?.DeveloperModeEnabled == true) return false;
         var acquired = false;
         try
         {
             await _ioGate.WaitAsync(ct);
             acquired = true;
+            if (_settings.Settings?.DeveloperModeEnabled == true) return false;
             if (!File.Exists(FilePath)) return false;
             var json = await File.ReadAllTextAsync(FilePath, ct);
             var entry = JsonSerializer.Deserialize(json, SetupMemoJsonContext.Default.SetupMemoEntry);
@@ -50,11 +54,13 @@ public sealed partial class SetupMemoService : ISetupMemoService
 
     public async Task SaveAsync(string? version, CancellationToken ct = default)
     {
+        if (_settings.Settings?.DeveloperModeEnabled == true) return;
         var acquired = false;
         try
         {
             await _ioGate.WaitAsync(ct);
             acquired = true;
+            if (_settings.Settings?.DeveloperModeEnabled == true) return;
             var entry = new SetupMemoEntry { CliVersion = version, CheckedAtUtc = _clock.GetUtcNow() };
             var json = JsonSerializer.Serialize(entry, SetupMemoJsonContext.Default.SetupMemoEntry);
             Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(FilePath))!);
@@ -68,11 +74,13 @@ public sealed partial class SetupMemoService : ISetupMemoService
 
     public async Task InvalidateAsync(CancellationToken ct = default)
     {
+        if (_settings.Settings?.DeveloperModeEnabled == true) return;
         var acquired = false;
         try
         {
             await _ioGate.WaitAsync(ct);
             acquired = true;
+            if (_settings.Settings?.DeveloperModeEnabled == true) return;
             File.Delete(FilePath);
         }
         catch (Exception ex) { _logger.LogDebug(ex, "Successful setup memo could not be invalidated"); }

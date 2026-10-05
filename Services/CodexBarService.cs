@@ -14,6 +14,7 @@ public class CodexBarService : ICodexBarService
     private readonly ISettingsService _settingsService;
     private readonly ISampleDataLoader _sampleDataLoader;
     private readonly ILogger<CodexBarService> _logger;
+    private readonly IActivityLog? _activityLog;
     private readonly TimeProvider _timeProvider;
     private readonly Func<string> _userProfile;
     private readonly Func<string, bool> _directoryExists;
@@ -30,13 +31,15 @@ public class CodexBarService : ICodexBarService
         ILogger<CodexBarService> logger,
         TimeProvider? timeProvider = null,
         Func<string>? userProfile = null,
-        Func<string, bool>? directoryExists = null)
+        Func<string, bool>? directoryExists = null,
+        IActivityLog? activityLog = null)
     {
         _wslService = wslService;
         _cacheService = cacheService;
         _settingsService = settingsService;
         _sampleDataLoader = sampleDataLoader;
         _logger = logger;
+        _activityLog = activityLog;
         _timeProvider = timeProvider ?? TimeProvider.System;
         _userProfile = userProfile ?? (() => Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
         _directoryExists = directoryExists ?? Directory.Exists;
@@ -132,6 +135,7 @@ public class CodexBarService : ICodexBarService
                 TimeSpan.FromSeconds(Math.Max(60, _settingsService.Settings.Timeouts.CliProviderFirstFetchTimeoutSeconds)))).ToArray();
             var completed = new bool[due.Count];
             var retry = new bool[due.Count];
+            var batchFailed = false;
             void Complete(int index, WslResult result)
             {
                 ct.ThrowIfCancellationRequested();
@@ -143,6 +147,7 @@ public class CodexBarService : ICodexBarService
             }
             async Task ScanIndividuallyAsync(int index)
             {
+                if (retry[index] && !batchFailed) RecordBatchFallback(due[index], "Command failed (exit code 127)");
                 using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
                 deadline.CancelAfter(commands[index].Timeout);
                 try
@@ -185,6 +190,8 @@ public class CodexBarService : ICodexBarService
             {
                 ct.ThrowIfCancellationRequested();
                 _logger.LogDebug(ex, "WSL cost batch unavailable; retrying unfinished providers individually");
+                batchFailed = true;
+                RecordBatchFallback("wsl", ex.Message);
                 for (var i = 0; i < due.Count; i++) retry[i] = !completed[i];
             }
             // Retain the gate and the original attempts so fallbacks bypass backoff without deadlocking.
@@ -368,7 +375,10 @@ public class CodexBarService : ICodexBarService
             async Task RetryProviderAsync(int index)
             {
                 if (retryInIndividualShell[index])
+                {
                     _logger.LogInformation("WSL batch command not found for {Provider}; retrying individually", providers[index]);
+                    RecordBatchFallback(providers[index], "Command failed (exit code 127)");
+                }
                 Complete(index, await FetchProviderAsync(providers[index], commands[index], ct));
             }
             try
@@ -406,6 +416,7 @@ public class CodexBarService : ICodexBarService
             {
                 ct.ThrowIfCancellationRequested();
                 _logger.LogWarning(ex, "WSL batch unavailable; retrying unfinished providers individually");
+                RecordBatchFallback("wsl", ex.Message);
                 await Task.WhenAll(Enumerable.Range(0, providers.Count).Where(i => results[i] == null)
                     .Select(RetryProviderAsync));
             }
@@ -414,6 +425,12 @@ public class CodexBarService : ICodexBarService
         Interlocked.Exchange(ref _isFirstFetch, 0);
         return results.Select(r => r!).ToArray();
     }
+
+    private void RecordBatchFallback(string provider, string message) => _activityLog?.RecordRefresh(new DashboardRefreshEntry
+    {
+        TimestampUtc = _timeProvider.GetUtcNow().UtcDateTime, ProviderId = provider, Success = false,
+        Message = "WSL batch fallback: " + message
+    });
 
     private UsageData LoadSample(string provider)
     {

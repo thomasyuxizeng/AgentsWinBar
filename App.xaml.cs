@@ -94,6 +94,12 @@ public partial class App : Application
             var settingsService = Services.GetRequiredService<ISettingsService>();
             await settingsService.LoadAsync();
 
+            if (settingsService.Settings.DeveloperModeEnabled)
+            {
+                StartMainWindow();
+                return;
+            }
+
             // Load cache
             var cacheService = Services.GetRequiredService<ICacheService>();
             await cacheService.LoadAsync();

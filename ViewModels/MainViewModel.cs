@@ -43,7 +43,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private bool _refreshPending;
     private bool _stopped;
     private bool _exiting;
+    private int _stopVersion;
     private TaskCompletionSource? _refreshCompletion;
+    private TaskCompletionSource? _costRefreshCompletion;
+    private bool _forceCostRefreshPending;
 
     [ObservableProperty]
     private DateTime? _nextRefreshUtc;
@@ -108,8 +111,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
         if (_exiting) return;
         var activeRefresh = _refreshCompletion?.Task;
         Stop();
+        var stopVersion = _stopVersion;
         if (activeRefresh != null) await activeRefresh;
-        if (_disposed || _exiting) return;
+        if (_disposed || _exiting || stopVersion != _stopVersion) return;
         _stopped = false;
         ResetAdaptiveRefresh();
         if (TryRestoreFreshCache()) return;
@@ -124,27 +128,36 @@ public partial class MainViewModel : ObservableObject, IDisposable
         var interval = TimeSpan.FromSeconds(_settingsService.Settings.RefreshIntervalSeconds);
         var now = DateTime.UtcNow;
         var cached = enabled.Select(p => _cacheService.Get(p.Id)).ToList();
-        if (cached.Any(data => data == null || data.HasError || data.FetchedAt.ToUniversalTime() > now ||
-            now - data.FetchedAt.ToUniversalTime() >= interval))
+        if (cached.Any(data => data == null || data.HasError || CacheTimestampUtc(data.FetchedAt) > now ||
+            now - CacheTimestampUtc(data.FetchedAt) >= interval))
             return false;
-        var oldest = cached.Min(data => data!.FetchedAt.ToUniversalTime());
+        var oldest = cached.Min(data => CacheTimestampUtc(data!.FetchedAt));
         Providers = new(cached.Select(data => data! with
         {
             IsLoading = false,
             Cost = _settingsService.Settings.ShowCostTotals ? data!.Cost : null
         }));
+        ErrorMessage = null;
         _usageFingerprint = UsageFingerprint.Create(Providers);
         LastUpdated = oldest.ToLocalTime();
         UpdateLastUpdatedText();
         RecreateTimer(interval - (now - oldest));
+        RefreshDemandedCostsAsync().SafeFireAndForget(
+            onError: ex => _logger.LogError(ex, "Cached usage cost refresh failed"));
         return true;
     }
+
+    // Cache files written before DateTime kinds were preserved contain UTC values without a suffix.
+    private static DateTime CacheTimestampUtc(DateTime timestamp) => timestamp.Kind == DateTimeKind.Unspecified
+        ? DateTime.SpecifyKind(timestamp, DateTimeKind.Utc)
+        : timestamp.ToUniversalTime();
 
     /// <summary>
     /// Stops the periodic refresh.
     /// </summary>
     public void Stop()
     {
+        _stopVersion++;
         _stopped = true;
         _refreshPending = false;
         _refreshCts?.Cancel();
@@ -171,8 +184,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         var baseInterval = TimeSpan.FromSeconds(_settingsService.Settings.RefreshIntervalSeconds);
         if (maxAge < baseInterval) maxAge = baseInterval;
+        var age = DateTime.Now - LastUpdated;
         if (_disposed || _stopped || _exiting ||
-            (LastUpdated != default && DateTime.Now - LastUpdated <= maxAge)) return Task.CompletedTask;
+            (LastUpdated != default && age >= TimeSpan.Zero && age <= maxAge)) return Task.CompletedTask;
         ResetAdaptiveRefresh();
         if (IsLoading) return _refreshCompletion?.Task ?? Task.CompletedTask;
         return RefreshCoreAsync();
@@ -288,22 +302,24 @@ public partial class MainViewModel : ObservableObject, IDisposable
         ResetAdaptiveRefresh();
         if (_stopped || _exiting) return;
         // Cancel even a fresh-data timer: its monotonic delay may have paused throughout sleep.
-        RecreateTimer();
+        if (!IsLoading) RecreateTimer();
         await RefreshIfStaleAsync(TimeSpan.FromSeconds(_settingsService.Settings.RefreshIntervalSeconds));
-        if (!_disposed && !_stopped && !_exiting) RecreateTimer();
+        if (!_disposed && !_stopped && !_exiting && !IsLoading) RecreateTimer();
     }
 
     private async Task RefreshDemandedCostsAsync()
     {
         if (_disposed || _stopped || _exiting || !_settingsService.Settings.ShowCostTotals ||
             _settingsService.Settings.DeveloperModeEnabled ||
-            Volatile.Read(ref _costDemand) == 0 || _costRefreshCts != null) return;
+            Volatile.Read(ref _costDemand) == 0 || _costRefreshCts != null || _forceCostRefreshPending) return;
         var enabled = _settingsService.Settings.Providers.Where(p => p.IsEnabled)
             .Select(p => p.Id).Where(provider => Providers.FirstOrDefault(p =>
                 p.Provider.Equals(provider, StringComparison.OrdinalIgnoreCase))?.Cost == null).ToList();
         if (enabled.Count == 0) return;
         using var scanCts = new CancellationTokenSource();
         _costRefreshCts = scanCts;
+        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _costRefreshCompletion = completion;
         try
         {
             await RefreshCostsAsync(enabled, false, scanCts.Token);
@@ -315,6 +331,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
         finally
         {
             if (ReferenceEquals(_costRefreshCts, scanCts)) _costRefreshCts = null;
+            if (ReferenceEquals(_costRefreshCompletion, completion)) _costRefreshCompletion = null;
+            completion.TrySetResult();
             ScheduleWorkingSetTrim();
             // Reopening, restarting or changing settings can restore demand before cancellation settles.
             // Retry only canceled passes; a completed empty scan remains subject to the service cache.
@@ -393,6 +411,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         _refreshCompletion = completion;
         var developerMode = _settingsService.Settings.DeveloperModeEnabled;
+        _forceCostRefreshPending = forceCostRefresh;
         var refreshStarted = Stopwatch.GetTimestamp();
 
         try
@@ -459,11 +478,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
                         Cost = _settingsService.Settings.ShowCostTotals ? previous.Cost : null
                     };
                 }
-                else if (isFirstLoad)
-                {
-                    // Provider not in list yet (shouldn't happen normally)
-                    Providers.Add(data);
-                }
             }
 
             // Usage appears as soon as it arrives. The heavier log scans run afterwards, at a slow cadence.
@@ -478,7 +492,20 @@ public partial class MainViewModel : ObservableObject, IDisposable
             }
             // Demand-start scans run separately so usage never waits behind a slow scan.
             if (forceCostRefresh)
+            {
+                // A manual refresh supersedes a demand scan: cancel it and give it a moment to wind down so a late
+                // demand result cannot overwrite forced totals. The wait is bounded, so a scan that ignores
+                // cancellation can never block a manual refresh.
+                var activeCostRefresh = _costRefreshCompletion?.Task;
+                _costRefreshCts?.Cancel();
+                if (activeCostRefresh != null)
+                {
+                    try { await activeCostRefresh.WaitAsync(TimeSpan.FromSeconds(2), ct); }
+                    catch (TimeoutException) { _logger.LogDebug("Demand cost scan did not stop in time; continuing with the forced scan"); }
+                }
+                ct.ThrowIfCancellationRequested();
                 await RefreshCostsAsync(Providers.Select(p => p.Provider).ToList(), true, ct);
+            }
             else if (Volatile.Read(ref _costDemand) > 0 && _costRefreshCts == null)
             {
                 using var scanCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -541,6 +568,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         finally
         {
             _refreshCts = null;
+            _forceCostRefreshPending = false;
             for (var i = 0; i < Providers.Count; i++)
                 if (Providers[i].IsLoading) Providers[i] = Providers[i] with { IsLoading = false };
             IsLoading = false;
@@ -630,7 +658,17 @@ public partial class MainViewModel : ObservableObject, IDisposable
         };
     }
 
-    private async void OnSettingsChanged(object? sender, EventArgs e)
+    private void OnSettingsChanged(object? sender, EventArgs e)
+    {
+        try
+        {
+            OnUiThread(() => HandleSettingsChangeAsync().SafeFireAndForget(
+                onError: ex => _logger.LogError(ex, "Failed to handle settings change")));
+        }
+        catch (Exception ex) { _logger.LogError(ex, "Failed to dispatch settings change"); }
+    }
+
+    private async Task HandleSettingsChangeAsync()
     {
         try
         {
@@ -638,7 +676,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
             _logger.LogDebug("Settings changed, recreating timer and refreshing data");
             ResetAdaptiveRefresh();
             _costRefreshCts?.Cancel();
-            RecreateTimer();
             if (!_settingsService.Settings.ShowCostTotals)
                 for (var i = 0; i < Providers.Count; i++) Providers[i] = Providers[i] with { Cost = null };
             if (IsLoading) { _refreshPending = true; _refreshCts?.Cancel(); return; }
