@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.9] - 2026-10-06
+
 ### Changed
 - Lock state is also read directly from Windows, detecting locked sessions without lock events (for example when the app starts while locked).
 - Refreshes slow down while Windows is locked, using `lockedRefreshIntervalMinutes` (30 minutes by default; 0 disables it), and check for stale usage after unlock or resume. Resume also restarts the refresh timer.
@@ -14,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Cost scans share one WSL call and remain cached for 30 minutes. Opening the flyout or dashboard scans only providers without a cost value; existing estimates update during the next refresh.
 
 ### Fixed
+- A locked session is polled every 30 seconds for an unlock, because Windows unlock events never reached the app: unlocking now restores the normal refresh interval (and refreshes stale data) within seconds instead of waiting out the 30-minute locked interval.
 - The single-process WSL batch could fail and silently fall back to one WSL call per provider: the shell script now runs with `wsl --exec` (so Windows' default shell no longer expands `$VARIABLES` and `$(...)` in it) and never contains carriage returns, whatever line endings the source file was checked out with.
 - A corrupt entry in the saved usage cache no longer discards the valid providers beside it, and developer mode never reads or writes the real usage cache or setup memo.
 - When the single-process batch has to fall back to one WSL call per provider, the fallback is recorded in the dashboard's refresh log instead of only a log file.
@@ -99,7 +102,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Window slide-in animation from system tray
 - Setup wizard for first-time configuration
 
-[Unreleased]: https://github.com/Wave-OCE/CodexBarWin/compare/v0.9.8...HEAD
+[Unreleased]: https://github.com/Wave-OCE/CodexBarWin/compare/v0.9.9...HEAD
+[0.9.9]: https://github.com/Wave-OCE/CodexBarWin/compare/v0.9.8...v0.9.9
 [0.9.8]: https://github.com/Wave-OCE/CodexBarWin/compare/v0.9.7...v0.9.8
 [0.9.7]: https://github.com/Wave-OCE/CodexBarWin/compare/v0.9.6...v0.9.7
 [0.9.6]: https://github.com/Wave-OCE/CodexBarWin/releases/tag/v0.9.6

@@ -704,6 +704,31 @@ public partial class MainViewModel : ObservableObject, IDisposable
         NextRefreshUtc = DateTime.UtcNow + EffectiveRefreshInterval;
         RunPeriodicRefreshAsync(EffectiveRefreshInterval, _timerCts.Token).SafeFireAndForget(
             onError: ex => _logger.LogError(ex, "Periodic refresh task failed"));
+        // Unlock events are not reliable (they never reached the app in testing), and a locked session sleeps for up
+        // to LockedRefreshIntervalMinutes: while locked, poll cheaply so an unlock is noticed within seconds.
+        if (_sessionLocked || QuerySessionLocked())
+            WatchForUnlockAsync(_timerCts.Token).SafeFireAndForget(
+                onError: ex => _logger.LogError(ex, "Unlock watcher failed"));
+    }
+
+    /// <summary>How often a locked session is checked for having been unlocked (the lock-state query is a cheap call).</summary>
+    public TimeSpan UnlockPollInterval { get; set; } = TimeSpan.FromSeconds(30);
+
+    private async Task WatchForUnlockAsync(CancellationToken ct)
+    {
+        try
+        {
+            while (true)
+            {
+                await Task.Delay(UnlockPollInterval, ct);
+                if (_disposed || _stopped || _exiting) return;
+                if (QuerySessionLocked()) continue;
+                OnUiThread(() => HandleSessionActivationAsync().SafeFireAndForget(
+                    onError: ex => _logger.LogError(ex, "Failed to handle detected unlock")));
+                return;
+            }
+        }
+        catch (OperationCanceledException) { }
     }
 
     public void Dispose()

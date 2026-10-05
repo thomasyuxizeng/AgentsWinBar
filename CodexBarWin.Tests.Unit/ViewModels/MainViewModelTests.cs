@@ -126,6 +126,24 @@ public class MainViewModelTests
     }
 
     [TestMethod]
+    public async Task LockedSession_UnlockedWithoutEvent_RefreshesStaleDataAndRestoresNormalDelay()
+    {
+        _values.RefreshIntervalSeconds = 300;
+        _values.AdaptiveRefreshEnabled = false;
+        _session.QueryLocked = true;
+        _viewModel.UnlockPollInterval = TimeSpan.FromMilliseconds(30);
+        SetupImmediateUsage();
+        await _viewModel.StartAsync();
+        _viewModel.EffectiveRefreshInterval.Should().Be(TimeSpan.FromMinutes(30));
+        _viewModel.LastUpdated = DateTime.Now.AddMinutes(-10);
+        _session.QueryLocked = false; // no Unlocked event is raised
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+        while (_viewModel.EffectiveRefreshInterval != TimeSpan.FromMinutes(5) && DateTime.UtcNow < deadline) await Task.Delay(20);
+        _viewModel.EffectiveRefreshInterval.Should().Be(TimeSpan.FromMinutes(5));
+        _usage.Verify(s => s.GetAllUsageStreamAsync(It.IsAny<CancellationToken>()), Times.AtLeast(2));
+    }
+
+    [TestMethod]
     public async Task PeriodicTimer_MissedUnlockEvent_ReturnsToNormalDelayAndClearsFlag()
     {
         _values.RefreshIntervalSeconds = 300;
