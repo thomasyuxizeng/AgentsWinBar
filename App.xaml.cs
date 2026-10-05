@@ -78,39 +78,55 @@ public partial class App : Application
     /// </summary>
     protected override async void OnLaunched(LaunchActivatedEventArgs args)
     {
-        // Single instance check
-        _mutex = new Mutex(true, MutexName, out bool createdNew);
-
-        if (!createdNew)
+        try
         {
-            // Another instance is already running
+            // Single instance check
+            _mutex = new Mutex(true, MutexName, out bool createdNew);
+
+            if (!createdNew)
+            {
+                // Another instance is already running
+                Exit();
+                return;
+            }
+
+            // Load settings
+            var settingsService = Services.GetRequiredService<ISettingsService>();
+            await settingsService.LoadAsync();
+
+            // Load cache
+            var cacheService = Services.GetRequiredService<ICacheService>();
+            await cacheService.LoadAsync();
+
+            await Services.GetRequiredService<UsageHistoryPersistence>().LoadAsync();
+
+            // A recent successful setup avoids waking WSL solely for launch validation.
+            if (await Services.GetRequiredService<ISetupMemoService>().IsValidAsync())
+            {
+                StartMainWindow();
+                return;
+            }
+
+            // Check setup status
+            var setupChecker = Services.GetRequiredService<ISetupChecker>();
+            var status = await setupChecker.CheckAsync();
+
+            if (status.IsReady)
+            {
+                // Normal startup - show main window
+                StartMainWindow();
+            }
+            else
+            {
+                // Setup required - show setup window
+                ShowSetupWindow();
+            }
+        }
+        catch (Exception ex)
+        {
+            Services.GetRequiredService<ILogger<App>>().LogError(ex, "Application launch failed");
+            ReleaseMutex();
             Exit();
-            return;
-        }
-
-        // Load settings
-        var settingsService = Services.GetRequiredService<ISettingsService>();
-        await settingsService.LoadAsync();
-
-        // Load cache
-        var cacheService = Services.GetRequiredService<ICacheService>();
-        await cacheService.LoadAsync();
-
-        await Services.GetRequiredService<UsageHistoryPersistence>().LoadAsync();
-
-        // Check setup status
-        var setupChecker = Services.GetRequiredService<ISetupChecker>();
-        var status = await setupChecker.CheckAsync();
-
-        if (status.IsReady)
-        {
-            // Normal startup - show main window
-            StartMainWindow();
-        }
-        else
-        {
-            // Setup required - show setup window
-            ShowSetupWindow();
         }
     }
 
@@ -231,6 +247,8 @@ public partial class App : Application
         services.AddSingleton<ICodexBarService, CodexBarService>();
         services.AddSingleton<ISettingsService, SettingsService>();
         services.AddSingleton<ISetupChecker, SetupChecker>();
+        services.AddSingleton<ISetupMemoService, SetupMemoService>();
+        services.AddSingleton<ISessionStateSource, SessionStateSource>();
         services.AddSingleton<ISampleDataLoader, SampleDataLoader>();
         services.AddSingleton<UsageAlertEvaluator>();
         services.AddSingleton<UsageHistoryStore>();

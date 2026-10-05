@@ -282,7 +282,7 @@ public class CodexBarServiceTests
     }
 
     [TestMethod]
-    public async Task GetCostAsync_WhenRepeated_UsesCacheUntilFifteenMinutesAndManualRefreshBypassesIt()
+    public async Task GetCostAsync_WhenRepeated_UsesCacheUntilThirtyMinutesAndManualRefreshBypassesIt()
     {
         var clock = new CostClock();
         var service = CostService(clock);
@@ -290,7 +290,7 @@ public class CodexBarServiceTests
         var first = await service.GetCostAsync("claude");
         first!.TodayCostUSD.Should().Be(1.5m);
         (await service.GetCostAsync("claude")).Should().BeSameAs(first);
-        clock.Now += TimeSpan.FromMinutes(14);
+        clock.Now += TimeSpan.FromMinutes(29);
         await service.GetCostAsync("claude");
         _mockWslService.ExecutedCommands.Should().ContainSingle();
         clock.Now += TimeSpan.FromMinutes(1);
@@ -323,7 +323,7 @@ public class CodexBarServiceTests
         (await service.GetCostAsync("claude")).Should().BeNull();
         (await service.GetCostAsync("claude")).Should().BeNull();
         _mockWslService.ExecutedCommands.Should().ContainSingle();
-        clock.Now += TimeSpan.FromMinutes(15); SetCostResponse();
+        clock.Now += TimeSpan.FromMinutes(30); SetCostResponse();
         (await service.GetCostAsync("claude")).Should().NotBeNull();
     }
 
@@ -361,6 +361,224 @@ public class CodexBarServiceTests
     {
         SetCostResponse(json: """{"provider":"claude","last30DaysTokens":10}""");
         (await CostService().GetCostAsync("claude"))!.Last30DaysTokens.Should().Be(10);
+    }
+
+    private static WslResult CostResult(string provider, long tokens = 10) => new()
+    {
+        Success = true,
+        Output = $$$"""{"provider":"{{{(provider == "gemini" ? "antigravity" : provider)}}}","last30DaysTokens":{{{tokens}}}}"""
+    };
+
+    private static async Task<List<(string Provider, CostData? Cost)>> CollectCostsAsync(CodexBarService service,
+        IReadOnlyList<string> providers, bool forceRefresh = false, CancellationToken ct = default)
+    {
+        var results = new List<(string Provider, CostData? Cost)>();
+        await foreach (var result in service.GetCostsAsync(providers, forceRefresh, ct)) results.Add(result);
+        return results;
+    }
+
+    [TestMethod]
+    public async Task GetCostsAsync_ThreeProviders_RunsOneBatchAndYieldsInCompletionOrder()
+    {
+        _mockSettingsService.Settings.Timeouts.CliProviderFirstFetchTimeoutSeconds = 75;
+        _mockWslService.BatchHandler = (commands, completed, _) =>
+        {
+            commands.Should().HaveCount(3);
+            commands.Should().OnlyContain(command => command.Timeout == TimeSpan.FromSeconds(75));
+            commands[2].Command.Should().Be("codexbar cost --provider antigravity --format json --refresh");
+            IReadOnlyList<WslResult> batch = [CostResult("claude"), CostResult("codex"), CostResult("gemini")];
+            completed!(2, batch[2]); completed(0, batch[0]); completed(1, batch[1]);
+            return Task.FromResult(batch);
+        };
+
+        var results = await CollectCostsAsync(CostService(), ["claude", "codex", "gemini"]);
+
+        results.Select(result => result.Provider).Should().Equal("gemini", "claude", "codex");
+        results.Should().OnlyContain(result => result.Cost != null && result.Cost.Provider == result.Provider);
+        _mockWslService.ExecutedBatches.Should().ContainSingle();
+        _mockWslService.ExecutedCommands.Should().BeEmpty();
+    }
+
+    [TestMethod]
+    public async Task GetCostsAsync_ProviderCompletesBeforeBatch_YieldsWithoutWaitingForOtherProviders()
+    {
+        var pending = new TaskCompletionSource<IReadOnlyList<WslResult>>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _mockWslService.BatchHandler = (_, completed, _) =>
+        {
+            completed!(1, CostResult("codex"));
+            return pending.Task;
+        };
+        await using var stream = CostService().GetCostsAsync(["claude", "codex"]).GetAsyncEnumerator();
+        (await stream.MoveNextAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5))).Should().BeTrue();
+        stream.Current.Provider.Should().Be("codex");
+        pending.Task.IsCompleted.Should().BeFalse();
+        pending.SetResult([CostResult("claude"), CostResult("codex")]);
+        (await stream.MoveNextAsync()).Should().BeTrue();
+        stream.Current.Provider.Should().Be("claude");
+        (await stream.MoveNextAsync()).Should().BeFalse();
+    }
+
+    [TestMethod]
+    public async Task GetCostsAsync_FreshCacheSkipsBatchUntilThirtyMinuteBoundaryAndForceBypassesIt()
+    {
+        var clock = new CostClock();
+        var service = CostService(clock);
+        _mockWslService.BatchHandler = (_, _, _) => Task.FromResult<IReadOnlyList<WslResult>>([CostResult("claude")]);
+        var initial = (await CollectCostsAsync(service, ["claude"])).Single().Cost;
+        clock.Now += TimeSpan.FromMinutes(30) - TimeSpan.FromTicks(1);
+        (await CollectCostsAsync(service, ["claude"])).Single().Cost.Should().BeSameAs(initial);
+        _mockWslService.ExecutedBatches.Should().ContainSingle();
+        clock.Now += TimeSpan.FromTicks(1);
+        await CollectCostsAsync(service, ["claude"]);
+        await CollectCostsAsync(service, ["claude"], forceRefresh: true);
+        _mockWslService.ExecutedBatches.Should().HaveCount(3);
+        _mockWslService.ExecutedCommands.Should().BeEmpty();
+    }
+
+    [TestMethod]
+    public async Task GetCostsAsync_PartialCache_BatchesOnlyDueProviders()
+    {
+        var clock = new CostClock(); var service = CostService(clock);
+        SetCostResponse("claude"); await service.GetCostAsync("claude");
+        _mockWslService.BatchHandler = (commands, _, _) =>
+        {
+            commands.Should().ContainSingle().Which.Command.Should().Contain("--provider codex");
+            return Task.FromResult<IReadOnlyList<WslResult>>([CostResult("codex")]);
+        };
+        var results = await CollectCostsAsync(service, ["claude", "codex"]);
+        results.Select(result => result.Provider).Should().Equal("claude", "codex");
+        _mockWslService.ExecutedBatches.Should().ContainSingle();
+        _mockWslService.ExecutedCommands.Should().ContainSingle();
+    }
+
+    [TestMethod]
+    [DataRow(true)]
+    [DataRow(false)]
+    public async Task GetCostsAsync_CommandNotFound_RetriesOnlyMissingProviderInSingleShell(bool notifyCompletion)
+    {
+        _mockWslService.BatchHandler = (_, completed, _) =>
+        {
+            IReadOnlyList<WslResult> batch = [CostResult("claude"), new() { ExitCode = 127 }];
+            if (notifyCompletion) { completed!(0, batch[0]); completed(1, batch[1]); }
+            return Task.FromResult(batch);
+        };
+        _mockWslService.CommandHandler = (command, token) =>
+        {
+            token.CanBeCanceled.Should().BeTrue();
+            command.Should().Be("codexbar cost --provider antigravity --format json --refresh");
+            return Task.FromResult(CostResult("gemini"));
+        };
+        var service = CostService();
+        var results = await CollectCostsAsync(service, ["claude", "gemini"]);
+        results.Should().HaveCount(2).And.OnlyContain(result => result.Cost != null);
+        _mockWslService.ExecutedBatches.Should().ContainSingle();
+        _mockWslService.ExecutedCommands.Should().ContainSingle();
+        (await service.GetCostAsync("gemini")).Should().BeSameAs(results.Single(r => r.Provider == "gemini").Cost);
+        _mockWslService.ExecutedCommands.Should().ContainSingle();
+    }
+
+    [TestMethod]
+    public async Task GetCostsAsync_BrokenFraming_RetriesOnlyUnfinishedProviders()
+    {
+        _mockWslService.BatchHandler = (_, completed, _) =>
+        {
+            completed!(0, CostResult("claude"));
+            return Task.FromException<IReadOnlyList<WslResult>>(new InvalidDataException("Missing frame"));
+        };
+        _mockWslService.CommandHandler = (_, _) => Task.FromResult(CostResult("codex"));
+        var results = await CollectCostsAsync(CostService(), ["claude", "codex"]);
+        results.Should().HaveCount(2).And.OnlyContain(result => result.Cost != null);
+        _mockWslService.ExecutedCommands.Should().ContainSingle().Which.Should().Contain("--provider codex");
+    }
+
+    [TestMethod]
+    public async Task GetCostsAsync_BackoffAfterInvalidResult_SkipsBatchForThirtyMinutes()
+    {
+        var clock = new CostClock(); var service = CostService(clock);
+        _mockWslService.BatchHandler = (_, _, _) => Task.FromResult<IReadOnlyList<WslResult>>([new() { Success = true, Output = "bad json" }]);
+        (await CollectCostsAsync(service, ["claude"])).Single().Cost.Should().BeNull();
+        clock.Now += TimeSpan.FromMinutes(29);
+        (await CollectCostsAsync(service, ["claude"])).Single().Cost.Should().BeNull();
+        _mockWslService.ExecutedBatches.Should().ContainSingle();
+        clock.Now += TimeSpan.FromMinutes(1);
+        await CollectCostsAsync(service, ["claude"]);
+        _mockWslService.ExecutedBatches.Should().HaveCount(2);
+    }
+
+    [TestMethod]
+    public async Task GetCostsAsync_CancelledButBackendReturns_RestoresCacheAndReleasesGate()
+    {
+        var clock = new CostClock(); var service = CostService(clock);
+        SetCostResponse(); var initial = await service.GetCostAsync("claude");
+        var initialInfo = service.GetCostCacheInfo().Single();
+        var scan = new TaskCompletionSource<IReadOnlyList<WslResult>>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _mockWslService.BatchHandler = (_, _, _) => scan.Task;
+        clock.Now += TimeSpan.FromMinutes(1);
+        using var cts = new CancellationTokenSource();
+        var pending = CollectCostsAsync(service, ["claude", "codex"], forceRefresh: true, ct: cts.Token);
+        cts.Cancel(); scan.SetResult([CostResult("claude", 20), CostResult("codex")]);
+        Func<Task> complete = async () => await pending.WaitAsync(TimeSpan.FromSeconds(5));
+        await complete.Should().ThrowAsync<OperationCanceledException>();
+        service.GetCostCacheInfo().Should().ContainSingle().Which.Should().BeEquivalentTo(initialInfo);
+        (await service.GetCostAsync("claude")).Should().BeSameAs(initial);
+        SetCostResponse("codex");
+        (await service.GetCostAsync("codex")).Should().NotBeNull();
+    }
+
+    [TestMethod]
+    public async Task GetCostsAsync_DisposedBeforeCompletion_CancelsBackendAndAllowsImmediateRetry()
+    {
+        var service = CostService();
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _mockWslService.BatchHandler = async (_, completed, token) =>
+        {
+            completed!(0, CostResult("claude")); started.SetResult();
+            await Task.Delay(Timeout.Infinite, token);
+            return [];
+        };
+        var stream = service.GetCostsAsync(["claude", "codex"]).GetAsyncEnumerator();
+        (await stream.MoveNextAsync()).Should().BeTrue();
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await stream.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+        service.GetCostCacheInfo().Should().BeEmpty();
+        SetCostResponse(); (await service.GetCostAsync("claude")).Should().NotBeNull();
+    }
+
+    [TestMethod]
+    public async Task GetCostsAsync_DisabledDuringBatch_DoesNotPublishTotalsOrBackOff()
+    {
+        var service = CostService();
+        _mockWslService.BatchHandler = (_, completed, _) =>
+        {
+            _mockSettingsService.Settings.ShowCostTotals = false;
+            var result = CostResult("claude"); completed!(0, result);
+            return Task.FromResult<IReadOnlyList<WslResult>>([result]);
+        };
+        (await CollectCostsAsync(service, ["claude"])).Single().Cost.Should().BeNull();
+        service.GetCostCacheInfo().Should().BeEmpty();
+        _mockSettingsService.Settings.ShowCostTotals = true;
+        SetCostResponse(); (await service.GetCostAsync("claude")).Should().NotBeNull();
+    }
+
+    [TestMethod]
+    [DataRow(false, false)]
+    [DataRow(true, true)]
+    public async Task GetCostsAsync_DisabledOrDeveloperMode_DoesNotRunBatch(bool enabled, bool developer)
+    {
+        _mockSettingsService.Settings.ShowCostTotals = enabled;
+        _mockSettingsService.Settings.DeveloperModeEnabled = developer;
+        (await CollectCostsAsync(CostService(), ["claude", "codex", "gemini"])).Should().BeEmpty();
+        _mockWslService.ExecutedBatches.Should().BeEmpty();
+        _mockWslService.ExecutedCommands.Should().BeEmpty();
+    }
+
+    [TestMethod]
+    public async Task GetAllUsageAsync_CommandNotFoundAfterIndividualRetry_ReportsCommandNotFound()
+    {
+        _mockSettingsService.SetProviders([new() { Id = "claude" }]);
+        _mockWslService.BatchHandler = (_, _, _) => Task.FromResult<IReadOnlyList<WslResult>>([new() { ExitCode = 127 }]);
+        _mockWslService.CommandHandler = (_, _) => Task.FromResult(new WslResult { ExitCode = 127 });
+        (await _service.GetAllUsageAsync()).Single().CommandNotFound.Should().BeTrue();
     }
 
     [TestMethod]

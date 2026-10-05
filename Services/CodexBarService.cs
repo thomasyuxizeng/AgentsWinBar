@@ -19,6 +19,7 @@ public class CodexBarService : ICodexBarService
     private readonly Func<string, bool> _directoryExists;
     private readonly SemaphoreSlim _costGate = new(1, 1);
     private readonly Dictionary<string, (DateTimeOffset AttemptedAt, CostData? Data)> _costCache = [];
+    private static readonly TimeSpan CostCacheTtl = TimeSpan.FromMinutes(30);
 
 
     public CodexBarService(
@@ -43,68 +44,194 @@ public class CodexBarService : ICodexBarService
 
     public async Task<CostData?> GetCostAsync(string provider, bool forceRefresh = false, CancellationToken ct = default)
     {
-        var acquired = false;
-        string? attemptedProvider = null;
-        (DateTimeOffset AttemptedAt, CostData? Data)? previousAttempt = null;
+        CostData? data = null;
         try
         {
-            var normalized = ProviderConstants.ValidateAndNormalize(provider);
-            if (!_settingsService.Settings.ShowCostTotals || _settingsService.Settings.DeveloperModeEnabled) return null;
-            await _costGate.WaitAsync(ct);
-            acquired = true;
-            if (!_settingsService.Settings.ShowCostTotals || _settingsService.Settings.DeveloperModeEnabled) return null;
-            var now = _timeProvider.GetUtcNow();
-            lock (_costCache)
-            {
-                if (!forceRefresh && _costCache.TryGetValue(normalized, out var cached) &&
-                    now - cached.AttemptedAt < TimeSpan.FromMinutes(15)) return cached.Data;
+            await FetchCostsAsync([provider], forceRefresh, useBatch: false, (_, cost) => data = cost, ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Cost scan unavailable for {Provider}", provider);
+        }
+        return data;
+    }
 
-                previousAttempt = _costCache.TryGetValue(normalized, out var prior) ? prior : null;
-                attemptedProvider = normalized;
-                _costCache[normalized] = (now, null); // Back off on errors too.
+    public async IAsyncEnumerable<(string Provider, CostData? Cost)> GetCostsAsync(IReadOnlyList<string> providers,
+        bool forceRefresh = false,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+    {
+        var channel = System.Threading.Channels.Channel.CreateUnbounded<(string Provider, CostData? Cost)>(new()
+        {
+            SingleReader = true, SingleWriter = false, AllowSynchronousContinuations = false
+        });
+        using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        var producer = ProduceAsync();
+        try
+        {
+            await foreach (var result in channel.Reader.ReadAllAsync(ct))
+            {
+                ct.ThrowIfCancellationRequested();
+                yield return result;
             }
-            var command = Helpers.CostCommandBuilder.Build(normalized, _userProfile(), _directoryExists);
-            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            cts.CancelAfter(TimeSpan.FromSeconds(Math.Max(60, _settingsService.Settings.Timeouts.CliProviderFirstFetchTimeoutSeconds)));
-            var result = await _wslService.ExecuteAsync(command, cts.Token);
+            await producer;
+        }
+        finally
+        {
+            lifetime.Cancel();
+            await producer;
+        }
+
+        async Task ProduceAsync()
+        {
+            try
+            {
+                await FetchCostsAsync(providers, forceRefresh, useBatch: true,
+                    (provider, cost) => channel.Writer.TryWrite((provider, cost)), lifetime.Token);
+                channel.Writer.TryComplete();
+            }
+            catch (Exception ex) { channel.Writer.TryComplete(ex); }
+        }
+    }
+
+    private bool CostsEnabled => _settingsService.Settings.ShowCostTotals && !_settingsService.Settings.DeveloperModeEnabled;
+
+    private async Task FetchCostsAsync(IReadOnlyList<string> providers, bool forceRefresh, bool useBatch,
+        Action<string, CostData?> onCompleted, CancellationToken ct)
+    {
+        var normalized = providers.Select(ProviderConstants.ValidateAndNormalize).Distinct(StringComparer.Ordinal).ToArray();
+        ct.ThrowIfCancellationRequested();
+        if (normalized.Length == 0 || !CostsEnabled) return;
+        await _costGate.WaitAsync(ct);
+        var previousAttempts = new Dictionary<string, (DateTimeOffset AttemptedAt, CostData? Data)?>();
+        try
+        {
+            if (!CostsEnabled) return;
+            var now = _timeProvider.GetUtcNow();
+            var due = new List<string>();
+            foreach (var provider in normalized)
+            {
+                ct.ThrowIfCancellationRequested();
+                CostData? cachedData;
+                lock (_costCache)
+                {
+                    if (!forceRefresh && _costCache.TryGetValue(provider, out var cached) && now - cached.AttemptedAt < CostCacheTtl)
+                        cachedData = cached.Data;
+                    else
+                    {
+                        previousAttempts[provider] = _costCache.TryGetValue(provider, out var prior) ? prior : null;
+                        _costCache[provider] = (now, null); // Back off on errors too.
+                        due.Add(provider);
+                        continue;
+                    }
+                }
+                onCompleted(provider, cachedData);
+            }
+            if (due.Count == 0) return;
+            var commands = due.Select(provider => new WslBatchCommand(
+                Helpers.CostCommandBuilder.Build(provider, _userProfile(), _directoryExists),
+                TimeSpan.FromSeconds(Math.Max(60, _settingsService.Settings.Timeouts.CliProviderFirstFetchTimeoutSeconds)))).ToArray();
+            var completed = new bool[due.Count];
+            var retry = new bool[due.Count];
+            void Complete(int index, WslResult result)
+            {
+                ct.ThrowIfCancellationRequested();
+                if (index < 0 || index >= due.Count) throw new InvalidDataException("WSL batch returned an invalid command index");
+                if (completed[index]) return;
+                completed[index] = true;
+                var data = CostsEnabled ? InterpretCostResult(due[index], result, now) : null;
+                onCompleted(due[index], data);
+            }
+            async Task ScanIndividuallyAsync(int index)
+            {
+                using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                deadline.CancelAfter(commands[index].Timeout);
+                try
+                {
+                    var result = await _wslService.ExecuteAsync(commands[index].Command, deadline.Token);
+                    ct.ThrowIfCancellationRequested();
+                    Complete(index, result);
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+                catch (Exception ex)
+                {
+                    _logger.LogDebug(ex, "Cost scan unavailable for {Provider}", due[index]);
+                    Complete(index, new WslResult());
+                }
+            }
+            if (!useBatch)
+            {
+                await ScanIndividuallyAsync(0);
+                return;
+            }
+            try
+            {
+                var batch = await _wslService.ExecuteBatchAsync(commands, (index, result) =>
+                {
+                    ct.ThrowIfCancellationRequested();
+                    if (index < 0 || index >= due.Count) throw new InvalidDataException("WSL batch returned an invalid command index");
+                    if (result.ExitCode == 127) retry[index] = true;
+                    else Complete(index, result);
+                }, ct);
+                ct.ThrowIfCancellationRequested();
+                if (batch == null || batch.Count != due.Count) throw new InvalidDataException("WSL batch returned an incomplete result list");
+                for (var i = 0; i < batch.Count; i++)
+                {
+                    if (batch[i].ExitCode == 127) retry[i] = true;
+                    else Complete(i, batch[i]);
+                }
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch (Exception ex)
+            {
+                ct.ThrowIfCancellationRequested();
+                _logger.LogDebug(ex, "WSL cost batch unavailable; retrying unfinished providers individually");
+                for (var i = 0; i < due.Count; i++) retry[i] = !completed[i];
+            }
+            // Retain the gate and the original attempts so fallbacks bypass backoff without deadlocking.
+            await Task.WhenAll(Enumerable.Range(0, due.Count).Where(i => retry[i] && !completed[i]).Select(ScanIndividuallyAsync));
             ct.ThrowIfCancellationRequested();
-            if (!_settingsService.Settings.ShowCostTotals || _settingsService.Settings.DeveloperModeEnabled) return null;
+        }
+        finally
+        {
+            // Obsolete scans are not failures: retain the last good cache or allow an immediate retry.
+            if (ct.IsCancellationRequested || !CostsEnabled)
+            {
+                lock (_costCache)
+                {
+                    foreach (var (provider, previous) in previousAttempts)
+                    {
+                        if (previous is { } prior) _costCache[provider] = prior;
+                        else _costCache.Remove(provider);
+                    }
+                }
+            }
+            _costGate.Release();
+        }
+    }
+
+    private CostData? InterpretCostResult(string provider, WslResult result, DateTimeOffset attemptedAt)
+    {
+        try
+        {
             if (!result.Success || string.IsNullOrWhiteSpace(result.Output))
             {
-                _logger.LogDebug("Cost scan returned no data for {Provider} (exit {ExitCode})", normalized, result.ExitCode);
+                _logger.LogDebug("Cost scan returned no data for {Provider} (exit {ExitCode})", provider, result.ExitCode);
                 return null;
             }
             var json = result.Output.Trim();
             var dto = json.StartsWith('[')
                 ? JsonSerializer.Deserialize(json, AppJsonSerializerContext.Default.ListCostDataDto)?.FirstOrDefault()
                 : JsonSerializer.Deserialize(json, AppJsonSerializerContext.Default.CostDataDto);
-            if (dto == null || !string.Equals(dto.Provider, normalized == "gemini" ? "antigravity" : normalized,
+            if (dto == null || !string.Equals(dto.Provider, provider == "gemini" ? "antigravity" : provider,
                 StringComparison.OrdinalIgnoreCase)) return null;
-            var data = dto.ToCostData(normalized, now.UtcDateTime);
-            lock (_costCache) _costCache[normalized] = (now, data.HasData ? data : null);
+            var data = dto.ToCostData(provider, attemptedAt.UtcDateTime);
+            lock (_costCache) _costCache[provider] = (attemptedAt, data.HasData ? data : null);
             return data.HasData ? data : null;
         }
         catch (Exception ex)
         {
             _logger.LogDebug(ex, "Cost scan unavailable for {Provider}", provider);
             return null;
-        }
-        finally
-        {
-            if (acquired)
-            {
-                // Obsolete scans are not failures: retain the last good cache or allow an immediate retry.
-                if (attemptedProvider != null && (ct.IsCancellationRequested ||
-                    !_settingsService.Settings.ShowCostTotals || _settingsService.Settings.DeveloperModeEnabled))
-                {
-                    lock (_costCache)
-                    {
-                        if (previousAttempt is { } previous) _costCache[attemptedProvider] = previous;
-                        else _costCache.Remove(attemptedProvider);
-                    }
-                }
-                _costGate.Release();
-            }
         }
     }
 
@@ -354,7 +481,10 @@ public class CodexBarService : ICodexBarService
         }
         _logger.LogDebug("{Provider} failed: {Error}", provider, result.Error);
         return ProviderError(provider, string.IsNullOrWhiteSpace(result.Error)
-            ? $"Command failed (exit code {result.ExitCode})" : result.Error.Trim());
+            ? $"Command failed (exit code {result.ExitCode})" : result.Error.Trim()) with
+        {
+            CommandNotFound = result.ExitCode == 127
+        };
     }
 
     private static UsageData ProviderError(string provider, string error) => new()

@@ -10,8 +10,12 @@ public interface ICodexBarService
     /// <summary>Cached cost scan attempts; never starts or waits for a WSL scan.</summary>
     IReadOnlyList<DashboardCostCacheEntry> GetCostCacheInfo();
 
-    /// <summary>Scans local logs at most every 15 minutes, unless manually refreshed.</summary>
+    /// <summary>Scans local logs at most every 30 minutes, unless manually refreshed.</summary>
     Task<CostData?> GetCostAsync(string provider, bool forceRefresh = false, CancellationToken ct = default);
+
+    /// <summary>Scans due providers in one WSL batch, yielding each cached or completed result.</summary>
+    IAsyncEnumerable<(string Provider, CostData? Cost)> GetCostsAsync(IReadOnlyList<string> providers,
+        bool forceRefresh = false, CancellationToken ct = default);
 
     /// <summary>
     /// Gets usage data for a specific provider.

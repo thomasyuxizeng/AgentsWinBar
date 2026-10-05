@@ -21,6 +21,7 @@
     </PackageReference>
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.*" />
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.*" />
+    <PackageReference Include="Microsoft.Win32.SystemEvents" Version="10.0.0" />
   </ItemGroup>
 
   <!-- Link source files from main project (no Windows App SDK dependency) -->
@@ -64,6 +65,10 @@
     <Compile Include="..\Services\ISettingsService.cs" Link="Linked\ISettingsService.cs" />
     <Compile Include="..\Services\ICacheService.cs" Link="Linked\ICacheService.cs" />
     <Compile Include="..\Services\ISetupChecker.cs" Link="Linked\ISetupChecker.cs" />
+    <Compile Include="..\Services\ISetupMemoService.cs" Link="Linked\ISetupMemoService.cs" />
+    <Compile Include="..\Services\SetupMemoService.cs" Link="Linked\SetupMemoService.cs" />
+    <Compile Include="..\Services\ISessionStateSource.cs" Link="Linked\ISessionStateSource.cs" />
+    <Compile Include="..\Services\SessionStateSource.cs" Link="Linked\SessionStateSource.cs" />
     <Compile Include="..\Services\ISampleDataLoader.cs" Link="Linked\ISampleDataLoader.cs" />
     <Compile Include="..\Services\WslService.cs" Link="Linked\WslService.cs" />
     <Compile Include="..\Services\WslBatchProtocol.cs" Link="Linked\WslBatchProtocol.cs" />

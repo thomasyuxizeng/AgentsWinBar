@@ -19,6 +19,9 @@ public class MainViewModelTests
     private readonly ActivityLog _activity = new();
     private readonly Mock<IToastNotifier> _toast = new();
     private readonly Mock<TimeProvider> _clock = new();
+    private readonly Mock<ICacheService> _cache = new();
+    private readonly Mock<ISetupMemoService> _memo = new();
+    private readonly FakeSessionStateSource _session = new();
     private AppSettings _values = null!;
     private UsageHistoryPersistence _persistence = null!;
     private MainViewModel _viewModel = null!;
@@ -36,8 +39,10 @@ public class MainViewModelTests
         _settings.SetupGet(s => s.SettingsFilePath).Returns(Path.Combine(_directory, "settings.json"));
         _clock.Setup(c => c.GetUtcNow()).Returns(() => DateTimeOffset.UtcNow);
         _persistence = new(_history, _settings.Object, NullLogger<UsageHistoryPersistence>.Instance, _clock.Object);
+        _usage.Setup(s => s.GetCostsAsync(It.IsAny<IReadOnlyList<string>>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()))
+            .Returns((IReadOnlyList<string> providers, bool force, CancellationToken ct) => CostResults(providers, force, ct));
         _viewModel = new(_usage.Object, _settings.Object, new UsageAlertEvaluator(), _toast.Object,
-            NullLogger<MainViewModel>.Instance, _history, _persistence, _activity);
+            NullLogger<MainViewModel>.Instance, _history, _persistence, _activity, _session, _cache.Object, _memo.Object);
     }
 
     [TestCleanup]
@@ -48,6 +53,22 @@ public class MainViewModelTests
     }
 
     private static TaskCompletionSource Signal() => new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private async IAsyncEnumerable<(string Provider, CostData? Cost)> CostResults(IReadOnlyList<string> providers,
+        bool force, [EnumeratorCancellation] CancellationToken ct)
+    {
+        foreach (var provider in providers)
+            yield return (provider, await _usage.Object.GetCostAsync(provider, force, ct));
+    }
+
+    private sealed class FakeSessionStateSource : ISessionStateSource
+    {
+        public event EventHandler? Locked;
+        public event EventHandler? Unlocked;
+        public event EventHandler? Resumed;
+        public void Lock() => Locked?.Invoke(this, EventArgs.Empty);
+        public void Unlock() => Unlocked?.Invoke(this, EventArgs.Empty);
+        public void Resume() => Resumed?.Invoke(this, EventArgs.Empty);
+    }
     private static UsageData Data(double percent) => new() { Provider = "claude", FetchedAt = DateTime.UtcNow,
         Session = new UsageWindow { ReportedPercent = percent, WindowMinutes = 300, ResetAt = DateTime.UtcNow.AddHours(2) } };
 
@@ -68,6 +89,205 @@ public class MainViewModelTests
     private Task PeriodicRefreshAsync() => (Task)typeof(MainViewModel)
         .GetMethod("RefreshCoreAsync", BindingFlags.Instance | BindingFlags.NonPublic)!
         .Invoke(_viewModel, [false])!;
+
+    private void SetupImmediateUsage() => _usage.Setup(s => s.GetAllUsageStreamAsync(It.IsAny<CancellationToken>()))
+        .Returns((CancellationToken ct) => Stream(Task.CompletedTask, Data(20), ct));
+
+    [TestMethod]
+    [DataRow(30, 30)]
+    [DataRow(0, 5)]
+    public async Task SessionLocked_RefreshDelay_UsesConfiguredMinimum(int lockedMinutes, int expectedMinutes)
+    {
+        _values.RefreshIntervalSeconds = 300;
+        _values.LockedRefreshIntervalMinutes = lockedMinutes;
+        SetupImmediateUsage();
+        await _viewModel.StartAsync();
+        _session.Lock();
+        _viewModel.EffectiveRefreshInterval.Should().Be(TimeSpan.FromMinutes(expectedMinutes));
+        _viewModel.NextRefreshUtc.Should().BeCloseTo(DateTime.UtcNow.AddMinutes(expectedMinutes), TimeSpan.FromSeconds(2));
+        await PeriodicRefreshAsync();
+        _viewModel.EffectiveRefreshInterval.Should().Be(TimeSpan.FromMinutes(expectedMinutes));
+    }
+
+    [TestMethod]
+    public async Task SessionLocked_RefreshInProgress_PreservesFetchAndSchedulesLockedDelay()
+    {
+        _values.RefreshIntervalSeconds = 300;
+        var gate = Signal();
+        CancellationToken token = default;
+        _usage.Setup(s => s.GetAllUsageStreamAsync(It.IsAny<CancellationToken>())).Returns((CancellationToken ct) =>
+        { token = ct; return Stream(gate.Task, Data(20), ct); });
+        var start = _viewModel.StartAsync();
+        _session.Lock();
+        token.IsCancellationRequested.Should().BeFalse();
+        gate.SetResult();
+        await start;
+        _viewModel.EffectiveRefreshInterval.Should().Be(TimeSpan.FromMinutes(30));
+    }
+
+    [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task SessionUnlocked_FreshOrStaleData_RefreshesOnlyStale(bool stale)
+    {
+        _values.RefreshIntervalSeconds = 300;
+        SetupImmediateUsage();
+        await _viewModel.StartAsync();
+        await PeriodicRefreshAsync();
+        await PeriodicRefreshAsync();
+        _session.Lock();
+        if (stale) _viewModel.LastUpdated = DateTime.Now.AddMinutes(-6);
+        _session.Unlock();
+        await WaitForRefreshAsync();
+        _usage.Verify(s => s.GetAllUsageStreamAsync(It.IsAny<CancellationToken>()), Times.Exactly(stale ? 4 : 3));
+        _viewModel.EffectiveRefreshInterval.Should().Be(TimeSpan.FromMinutes(5));
+    }
+
+    [TestMethod]
+    public async Task SessionResumed_FreshData_CancelsAndRearmsPendingTimer()
+    {
+        _values.RefreshIntervalSeconds = 300;
+        SetupImmediateUsage();
+        await _viewModel.StartAsync();
+        _session.Lock();
+        var oldToken = ((CancellationTokenSource)typeof(MainViewModel).GetField("_timerCts",
+            BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(_viewModel)!).Token;
+        _session.Resume();
+        oldToken.IsCancellationRequested.Should().BeTrue();
+        _viewModel.NextRefreshUtc.Should().BeCloseTo(DateTime.UtcNow.AddMinutes(5), TimeSpan.FromSeconds(2));
+        _usage.Verify(s => s.GetAllUsageStreamAsync(It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    private sealed class QueuedContext : SynchronizationContext
+    {
+        private readonly System.Collections.Concurrent.ConcurrentQueue<Action> _actions = new();
+        public override void Post(SendOrPostCallback d, object? state) => _actions.Enqueue(() => d(state));
+        public void Drain()
+        {
+            var previous = Current;
+            SetSynchronizationContext(this);
+            try { while (_actions.TryDequeue(out var action)) action(); }
+            finally { SetSynchronizationContext(previous); }
+        }
+    }
+
+    [TestMethod]
+    public async Task SessionEvents_BackgroundThread_ApplyOnlyOnCapturedUiContext()
+    {
+        _viewModel.Dispose();
+        var context = new QueuedContext();
+        var previous = SynchronizationContext.Current;
+        SynchronizationContext.SetSynchronizationContext(context);
+        try
+        {
+            _viewModel = new(_usage.Object, _settings.Object, new UsageAlertEvaluator(), _toast.Object,
+                NullLogger<MainViewModel>.Instance, _history, _persistence, _activity, _session, _cache.Object, _memo.Object);
+        }
+        finally { SynchronizationContext.SetSynchronizationContext(previous); }
+        _values.RefreshIntervalSeconds = 300;
+        SetupImmediateUsage();
+        await _viewModel.StartAsync();
+        await Task.Run(_session.Lock);
+        _viewModel.EffectiveRefreshInterval.Should().Be(TimeSpan.FromMinutes(5));
+        context.Drain();
+        _viewModel.EffectiveRefreshInterval.Should().Be(TimeSpan.FromMinutes(30));
+        await Task.Run(_session.Unlock);
+        _viewModel.EffectiveRefreshInterval.Should().Be(TimeSpan.FromMinutes(30));
+        context.Drain();
+        _viewModel.EffectiveRefreshInterval.Should().Be(TimeSpan.FromMinutes(5));
+        var oldNext = _viewModel.NextRefreshUtc;
+        await Task.Run(_session.Resume);
+        _viewModel.NextRefreshUtc.Should().Be(oldNext);
+        context.Drain();
+        _viewModel.NextRefreshUtc.Should().BeOnOrAfter(oldNext!.Value);
+        _viewModel.Dispose();
+        await Task.Run(_session.Lock);
+        context.Drain();
+        _viewModel.NextRefreshUtc.Should().BeNull();
+    }
+
+    [TestMethod]
+    public async Task StartAsync_AllEnabledCachesFresh_HydratesAndSchedulesOldestRemainingDelay()
+    {
+        _values.RefreshIntervalSeconds = 300;
+        _values.Providers = [new() { Id = "claude", Order = 1 }, new() { Id = "codex", Order = 0 }];
+        var oldest = DateTime.UtcNow.AddMinutes(-2);
+        _cache.Setup(c => c.Get("claude")).Returns(Data(20) with { FetchedAt = oldest });
+        _cache.Setup(c => c.Get("codex")).Returns(new UsageData { Provider = "codex", FetchedAt = DateTime.UtcNow.AddMinutes(-1) });
+        SetupImmediateUsage();
+        await _viewModel.StartAsync();
+        _viewModel.Providers.Select(p => p.Provider).Should().Equal("codex", "claude");
+        _viewModel.LastUpdated.Should().Be(oldest.ToLocalTime());
+        _viewModel.EffectiveRefreshInterval.Should().BeCloseTo(TimeSpan.FromMinutes(3), TimeSpan.FromSeconds(2));
+        _viewModel.NextRefreshUtc.Should().BeCloseTo(oldest.AddMinutes(5), TimeSpan.FromSeconds(2));
+        _usage.Verify(s => s.GetAllUsageStreamAsync(It.IsAny<CancellationToken>()), Times.Never);
+        await _viewModel.RefreshCommand.ExecuteAsync(null);
+        _usage.Verify(s => s.GetAllUsageStreamAsync(It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [TestMethod]
+    [DataRow("partial")]
+    [DataRow("old")]
+    [DataRow("developer")]
+    [DataRow("future")]
+    public async Task StartAsync_CacheIncompleteOldOrDeveloper_FetchesImmediately(string mode)
+    {
+        _values.RefreshIntervalSeconds = 300;
+        _values.Providers = [new() { Id = "claude" }, new() { Id = "codex" }];
+        _values.DeveloperModeEnabled = mode == "developer";
+        _cache.Setup(c => c.Get("claude")).Returns(Data(20));
+        if (mode != "partial") _cache.Setup(c => c.Get("codex")).Returns(new UsageData
+        { Provider = "codex", FetchedAt = DateTime.UtcNow.AddMinutes(mode == "old" ? -5 : mode == "future" ? 1 : -1) });
+        SetupImmediateUsage();
+        await _viewModel.StartAsync();
+        _usage.Verify(s => s.GetAllUsageStreamAsync(It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [TestMethod]
+    public async Task RefreshCoreAsync_CacheSaveFails_StillCompletesRefresh()
+    {
+        SetupImmediateUsage();
+        _cache.Setup(c => c.SaveAsync()).ThrowsAsync(new IOException("cache unavailable"));
+        await _viewModel.StartAsync();
+        _cache.Verify(c => c.SaveAsync(), Times.Once);
+        _viewModel.ErrorMessage.Should().BeNull();
+        _viewModel.LastUpdated.Should().NotBe(default);
+    }
+
+    [TestMethod]
+    public async Task RefreshCoreAsync_ProviderCommandNotFound_InvalidatesSetupMemo()
+    {
+        _usage.Setup(s => s.GetAllUsageStreamAsync(It.IsAny<CancellationToken>()))
+            .Returns((CancellationToken ct) => Stream(Task.CompletedTask,
+                Data(20) with { Error = "command not found", CommandNotFound = true }, ct));
+        await _viewModel.StartAsync();
+        _memo.Verify(m => m.InvalidateAsync(It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [TestMethod]
+    public async Task AcquireCostDemand_ExpiredCostAlreadyPresent_WaitsForUsageRefresh()
+    {
+        SetupImmediateUsage();
+        await _viewModel.StartAsync();
+        _viewModel.Providers[0] = _viewModel.Providers[0] with
+        { Cost = new CostData { Provider = "claude", FetchedAt = DateTime.UtcNow.AddHours(-2) } };
+        using var demand = _viewModel.AcquireCostDemand();
+        _usage.Verify(s => s.GetCostsAsync(It.IsAny<IReadOnlyList<string>>(), false, It.IsAny<CancellationToken>()), Times.Never);
+        await PeriodicRefreshAsync();
+        _usage.Verify(s => s.GetCostsAsync(It.IsAny<IReadOnlyList<string>>(), false, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [TestMethod]
+    public async Task AcquireCostDemand_MixedCosts_ScansOnlyProviderWithNoCost()
+    {
+        _values.Providers = [new() { Id = "claude" }, new() { Id = "codex" }];
+        SetupImmediateUsage();
+        await _viewModel.StartAsync();
+        _viewModel.Providers[0] = _viewModel.Providers[0] with { Cost = new CostData { Provider = "claude" } };
+        using var demand = _viewModel.AcquireCostDemand();
+        _usage.Verify(s => s.GetCostsAsync(It.Is<IReadOnlyList<string>>(p => p.Count == 1 && p[0] == "codex"),
+            false, It.IsAny<CancellationToken>()), Times.Once);
+    }
 
     [TestMethod]
     public async Task StartAsync_WithoutCostDemand_SkipsCostLoop()
@@ -91,6 +311,7 @@ public class MainViewModelTests
         using var demand = _viewModel.AcquireCostDemand();
         await PeriodicRefreshAsync();
         _usage.Verify(s => s.GetCostAsync("claude", false, It.IsAny<CancellationToken>()), Times.Exactly(2));
+        _usage.Verify(s => s.GetCostsAsync(It.IsAny<IReadOnlyList<string>>(), false, It.IsAny<CancellationToken>()), Times.Exactly(2));
         _viewModel.Providers.Single().Cost.Should().Be(cost);
     }
 
@@ -364,7 +585,6 @@ public class MainViewModelTests
         var firstScan = new TaskCompletionSource<CostData?>(TaskCreationOptions.RunContinuationsAsynchronously);
         var retry = Signal();
         var calls = 0;
-        var previous = new CostData { Provider = "claude", Last30DaysCostUSD = 5, FetchedAt = DateTime.UtcNow.AddHours(-1) };
         var current = new CostData { Provider = "claude", Last30DaysCostUSD = 10 };
         CancellationToken firstToken = default;
         _usage.Setup(s => s.GetAllUsageStreamAsync(It.IsAny<CancellationToken>()))
@@ -373,12 +593,11 @@ public class MainViewModelTests
             .Returns((string provider, bool force, CancellationToken ct) =>
             {
                 if (++calls == 1) { firstToken = ct; return firstScan.Task; }
-                _viewModel.Providers.Single().Cost.Should().Be(previous);
+                _viewModel.Providers.Single().Cost.Should().BeNull();
                 retry.TrySetResult();
                 return Task.FromResult<CostData?>(current);
             });
         await _viewModel.StartAsync();
-        _viewModel.Providers[0] = _viewModel.Providers[0] with { Cost = previous };
         var firstDemand = _viewModel.AcquireCostDemand();
         firstDemand.Dispose();
         firstDemand.Dispose();
@@ -440,7 +659,7 @@ public class MainViewModelTests
         log.Setup(l => l.RecordAlert(It.IsAny<DashboardAlertEntry>())).Throws(new InvalidOperationException("log failed"));
         _viewModel.Dispose();
         _viewModel = new(_usage.Object, _settings.Object, new UsageAlertEvaluator(), _toast.Object,
-            NullLogger<MainViewModel>.Instance, _history, _persistence, log.Object);
+            NullLogger<MainViewModel>.Instance, _history, _persistence, log.Object, _session, _cache.Object, _memo.Object);
         _values.AlertsEnabled = true;
         _usage.Setup(s => s.GetAllUsageStreamAsync(It.IsAny<CancellationToken>()))
             .Returns((CancellationToken ct) => Stream(Task.CompletedTask, Data(100) with { Weekly = new() { ReportedPercent = 100 } }, ct));

@@ -43,6 +43,7 @@ public class AppSettings
     public List<ProviderConfig> Providers { get; set; } = [];
     public int RefreshIntervalSeconds { get; set; } = 120;
     public bool AdaptiveRefreshEnabled { get; set; } = true;
+    public int LockedRefreshIntervalMinutes { get; set; } = 30;
     public bool StartWithWindows { get; set; } = false;
     public bool StartMinimized { get; set; } = false;
     public AppTheme Theme { get; set; } = AppTheme.System;
@@ -89,6 +90,8 @@ public class AppSettings
             .ToList();
         if (!Enum.IsDefined(Theme)) Theme = AppTheme.System;
         RefreshIntervalSeconds = ValidRange(RefreshIntervalSeconds, 86400, 120);
+        if (LockedRefreshIntervalMinutes < 0 || LockedRefreshIntervalMinutes > 1440)
+            LockedRefreshIntervalMinutes = 30;
         CacheExpiryMinutes = ValidRange(CacheExpiryMinutes, 1440, 5);
         Timeouts ??= new();
         Timeouts.WslCommandTimeoutSeconds = ValidRange(Timeouts.WslCommandTimeoutSeconds, 3600, 30);
@@ -118,6 +121,7 @@ public class AppSettings
         Providers = ProviderConfig.GetDefaults().ToList(),
         RefreshIntervalSeconds = 120,
         AdaptiveRefreshEnabled = true,
+        LockedRefreshIntervalMinutes = 30,
         StartWithWindows = false,
         StartMinimized = true,
         Theme = AppTheme.System,

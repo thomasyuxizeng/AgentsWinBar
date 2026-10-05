@@ -10,22 +10,33 @@ namespace CodexBarWin.Services;
 public partial class SetupChecker : ISetupChecker
 {
     private readonly IWslService _wslService;
-    private readonly ICodexBarService _codexBarService;
     private readonly ILogger<SetupChecker> _logger;
+    private readonly ISetupMemoService? _memo;
 
     public static readonly Version MinCodexBarVersion = new("0.17.0");
 
     public SetupChecker(
         IWslService wslService,
-        ICodexBarService codexBarService,
-        ILogger<SetupChecker> logger)
+        ILogger<SetupChecker> logger,
+        ISetupMemoService? memo = null)
     {
         _wslService = wslService;
-        _codexBarService = codexBarService;
         _logger = logger;
+        _memo = memo;
     }
 
     public async Task<SetupStatus> CheckAsync(CancellationToken ct = default)
+    {
+        var status = await CheckCoreAsync(ct);
+        if (_memo != null)
+        {
+            if (status.IsReady) await _memo.SaveAsync(status.CodexBarVersion, ct);
+            else await _memo.InvalidateAsync(ct);
+        }
+        return status;
+    }
+
+    private async Task<SetupStatus> CheckCoreAsync(CancellationToken ct)
     {
         _logger.LogInformation("Checking setup status...");
 
@@ -67,9 +78,21 @@ public partial class SetupChecker : ISetupChecker
 
         _logger.LogInformation("Found WSL distros: {Distros}", string.Join(", ", distros));
 
-        // 3. Check codexbar
-        var codexBarAvailable = await _codexBarService.IsAvailableAsync(ct);
-        if (!codexBarAvailable)
+        // Detect installation and retrieve the version with one interactive shell.
+        WslResult versionResult;
+        try
+        {
+            versionResult = await _wslService.ExecuteAsync("codexbar --version", ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogError(ex, "Failed to check codexbar installation");
+            versionResult = new WslResult { ExitCode = 127 };
+        }
+
+        if (versionResult.ExitCode == 127
+            || versionResult.Output.Contains("command not found", StringComparison.OrdinalIgnoreCase)
+            || versionResult.Error.Contains("command not found", StringComparison.OrdinalIgnoreCase))
         {
             _logger.LogWarning("codexbar is not installed in WSL");
             return new SetupStatus
@@ -81,8 +104,7 @@ public partial class SetupChecker : ISetupChecker
             };
         }
 
-        // 4. Get codexbar version
-        var version = await _codexBarService.GetVersionAsync(ct);
+        var version = versionResult.Success ? versionResult.Output.Trim() : null;
         _logger.LogInformation("codexbar version: {Version}", version);
 
         var isCompatible = IsCompatibleVersion(version);

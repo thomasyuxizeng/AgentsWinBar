@@ -11,7 +11,6 @@ namespace CodexBarWin.Tests.Unit.Services;
 public class SetupCheckerTests
 {
     private MockWslService _mockWslService = null!;
-    private MockCodexBarService _mockCodexBarService = null!;
     private Mock<ILogger<SetupChecker>> _mockLogger = null!;
     private SetupChecker _setupChecker = null!;
 
@@ -19,12 +18,10 @@ public class SetupCheckerTests
     public void Setup()
     {
         _mockWslService = new MockWslService();
-        _mockCodexBarService = new MockCodexBarService();
         _mockLogger = new Mock<ILogger<SetupChecker>>();
 
         _setupChecker = new SetupChecker(
             _mockWslService,
-            _mockCodexBarService,
             _mockLogger.Object);
     }
 
@@ -99,7 +96,7 @@ public class SetupCheckerTests
             IsRunning = true
         });
         _mockWslService.SetDistros(["Ubuntu"]);
-        _mockCodexBarService.SetAvailable(false);
+        _mockWslService.SetCommandResult("codexbar --version", new WslResult { ExitCode = 127 });
 
         // Act
         var result = await _setupChecker.CheckAsync();
@@ -122,8 +119,7 @@ public class SetupCheckerTests
             IsRunning = true
         });
         _mockWslService.SetDistros(["Ubuntu"]);
-        _mockCodexBarService.SetAvailable(true);
-        _mockCodexBarService.SetVersion("0.16.0"); // Older than minimum 0.17.0
+        _mockWslService.SetCommandResult("codexbar --version", new WslResult { Success = true, Output = "0.16.0" }); // Older than minimum 0.17.0
 
         // Act
         var result = await _setupChecker.CheckAsync();
@@ -134,6 +130,7 @@ public class SetupCheckerTests
         result.CodexBarInstalled.Should().BeTrue();
         result.CodexBarVersion.Should().Be("0.16.0");
         result.IsReady.Should().BeFalse();
+        _mockWslService.ExecutedCommands.Should().Equal("codexbar --version");
     }
 
     [TestMethod]
@@ -146,8 +143,7 @@ public class SetupCheckerTests
             IsRunning = true
         });
         _mockWslService.SetDistros(["Ubuntu"]);
-        _mockCodexBarService.SetAvailable(true);
-        _mockCodexBarService.SetVersion("0.17.0");
+        _mockWslService.SetCommandResult("codexbar --version", new WslResult { Success = true, Output = "0.17.0" });
 
         // Act
         var result = await _setupChecker.CheckAsync();
@@ -159,6 +155,7 @@ public class SetupCheckerTests
         result.CodexBarInstalled.Should().BeTrue();
         result.CodexBarVersion.Should().Be("0.17.0");
         result.IsReady.Should().BeTrue();
+        _mockWslService.ExecutedCommands.Should().Equal("codexbar --version");
     }
 
     [TestMethod]
@@ -171,8 +168,7 @@ public class SetupCheckerTests
             IsRunning = true
         });
         _mockWslService.SetDistros(["Ubuntu"]);
-        _mockCodexBarService.SetAvailable(true);
-        _mockCodexBarService.SetVersion("1.0.0");
+        _mockWslService.SetCommandResult("codexbar --version", new WslResult { Success = true, Output = "1.0.0" });
 
         // Act
         var result = await _setupChecker.CheckAsync();
@@ -182,7 +178,9 @@ public class SetupCheckerTests
     }
 
     [TestMethod]
-    public async Task CheckAsync_UnknownVersion_TreatedAsCompatible()
+    [DataRow("unknown")]
+    [DataRow("custom development build")]
+    public async Task CheckAsync_UnknownOrUnparseableVersion_TreatedAsCompatible(string version)
     {
         // Arrange
         _mockWslService.SetStatusResult(new WslStatusResult
@@ -191,8 +189,7 @@ public class SetupCheckerTests
             IsRunning = true
         });
         _mockWslService.SetDistros(["Ubuntu"]);
-        _mockCodexBarService.SetAvailable(true);
-        _mockCodexBarService.SetVersion("unknown");
+        _mockWslService.SetCommandResult("codexbar --version", new WslResult { Success = true, Output = version });
 
         // Act
         var result = await _setupChecker.CheckAsync();
@@ -211,8 +208,7 @@ public class SetupCheckerTests
             IsRunning = true
         });
         _mockWslService.SetDistros(["Ubuntu", "Debian", "Alpine"]);
-        _mockCodexBarService.SetAvailable(true);
-        _mockCodexBarService.SetVersion("0.17.0");
+        _mockWslService.SetCommandResult("codexbar --version", new WslResult { Success = true, Output = "0.17.0" });
 
         // Act
         var result = await _setupChecker.CheckAsync();
@@ -261,8 +257,7 @@ public class SetupCheckerTests
             IsRunning = true
         });
         _mockWslService.SetDistros(["Ubuntu"]);
-        _mockCodexBarService.SetAvailable(true);
-        _mockCodexBarService.SetVersion(version);
+        _mockWslService.SetCommandResult("codexbar --version", new WslResult { Success = true, Output = version ?? string.Empty });
 
         // Act
         var result = await _setupChecker.CheckAsync();
@@ -281,8 +276,7 @@ public class SetupCheckerTests
             IsRunning = true
         });
         _mockWslService.SetDistros(["Ubuntu"]);
-        _mockCodexBarService.SetAvailable(true);
-        _mockCodexBarService.SetVersion("codexbar 0.17.0");
+        _mockWslService.SetCommandResult("codexbar --version", new WslResult { Success = true, Output = "codexbar 0.17.0" });
 
         // Act
         var result = await _setupChecker.CheckAsync();
@@ -301,8 +295,7 @@ public class SetupCheckerTests
             IsRunning = true
         });
         _mockWslService.SetDistros(["Ubuntu"]);
-        _mockCodexBarService.SetAvailable(true);
-        _mockCodexBarService.SetVersion(null);
+        _mockWslService.SetCommandResult("codexbar --version", new WslResult { Success = false, ExitCode = 1 });
 
         // Act
         var result = await _setupChecker.CheckAsync();
@@ -322,8 +315,7 @@ public class SetupCheckerTests
             IsRunning = true
         });
         _mockWslService.SetDistros(["Ubuntu"]);
-        _mockCodexBarService.SetAvailable(true);
-        _mockCodexBarService.SetVersion("");
+        _mockWslService.SetCommandResult("codexbar --version", new WslResult { Success = true, Output = "" });
 
         // Act
         var result = await _setupChecker.CheckAsync();
@@ -331,6 +323,59 @@ public class SetupCheckerTests
         // Assert
         result.CodexBarInstalled.Should().BeTrue();
         result.IsReady.Should().BeFalse();
+    }
+
+    [TestMethod]
+    [DataRow(127, "", "")]
+    [DataRow(1, "bash: codexbar: command not found", "")]
+    [DataRow(1, "", "CODEXBAR: COMMAND NOT FOUND")]
+    public async Task CheckAsync_CommandNotFound_ReturnsNotInstalledUsingOneShell(
+        int exitCode, string output, string error)
+    {
+        _mockWslService.SetCommandResult("codexbar --version", new WslResult
+        {
+            ExitCode = exitCode, Output = output, Error = error
+        });
+
+        var result = await _setupChecker.CheckAsync();
+
+        result.CodexBarInstalled.Should().BeFalse();
+        result.IsReady.Should().BeFalse();
+        _mockWslService.ExecutedCommands.Should().Equal("codexbar --version");
+    }
+
+    [TestMethod]
+    public async Task CheckAsync_SuccessfulVersion_PersistsMemo()
+    {
+        var memo = new Mock<ISetupMemoService>();
+        var checker = new SetupChecker(_mockWslService, _mockLogger.Object, memo.Object);
+        _mockWslService.SetCommandResult("codexbar --version", new WslResult
+        {
+            Success = true, Output = "codexbar 0.17.0\n"
+        });
+
+        (await checker.CheckAsync()).IsReady.Should().BeTrue();
+
+        memo.Verify(m => m.SaveAsync("codexbar 0.17.0", It.IsAny<CancellationToken>()), Times.Once);
+        memo.Verify(m => m.InvalidateAsync(It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [TestMethod]
+    [DataRow(true)]
+    [DataRow(false)]
+    public async Task CheckAsync_NotReady_InvalidatesMemo(bool commandMissing)
+    {
+        var memo = new Mock<ISetupMemoService>();
+        var checker = new SetupChecker(_mockWslService, _mockLogger.Object, memo.Object);
+        if (commandMissing)
+            _mockWslService.SetCommandResult("codexbar --version", new WslResult { ExitCode = 127 });
+        else
+            _mockWslService.SetStatusResult(new WslStatusResult { IsInstalled = false });
+
+        (await checker.CheckAsync()).IsReady.Should().BeFalse();
+
+        memo.Verify(m => m.InvalidateAsync(It.IsAny<CancellationToken>()), Times.Once);
+        memo.Verify(m => m.SaveAsync(It.IsAny<string?>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [TestMethod]

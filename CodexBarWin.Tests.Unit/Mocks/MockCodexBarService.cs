@@ -11,6 +11,15 @@ public class MockCodexBarService : ICodexBarService
     public IReadOnlyList<DashboardCostCacheEntry> GetCostCacheInfo() => [];
     public Task<CostData?> GetCostAsync(string provider, bool forceRefresh = false, CancellationToken ct = default) =>
         Task.FromResult<CostData?>(null);
+    public async IAsyncEnumerable<(string Provider, CostData? Cost)> GetCostsAsync(IReadOnlyList<string> providers,
+        bool forceRefresh = false, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+    {
+        foreach (var provider in providers)
+        {
+            ct.ThrowIfCancellationRequested();
+            yield return (provider, await GetCostAsync(provider, forceRefresh, ct));
+        }
+    }
     private readonly Dictionary<string, UsageData?> _usageData = new();
     private string? _version = "1.0.0";
     private bool _isAvailable = true;

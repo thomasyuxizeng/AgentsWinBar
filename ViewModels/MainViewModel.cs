@@ -22,6 +22,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private readonly UsageHistoryStore _history;
     private readonly UsageHistoryPersistence _historyPersistence;
     private readonly IActivityLog _activityLog;
+    private readonly ISessionStateSource _sessionState;
+    private readonly ICacheService _cacheService;
+    private readonly ISetupMemoService _setupMemo;
+    private bool _sessionLocked;
     private CancellationTokenSource? _refreshCts;
     private CancellationTokenSource? _timerCts;
     private CancellationTokenSource? _costRefreshCts;
@@ -72,7 +76,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
         ILogger<MainViewModel> logger,
         UsageHistoryStore history,
         UsageHistoryPersistence historyPersistence,
-        IActivityLog activityLog)
+        IActivityLog activityLog,
+        ISessionStateSource sessionState,
+        ICacheService cacheService,
+        ISetupMemoService setupMemo)
     {
         _codexBarService = codexBarService;
         _settingsService = settingsService;
@@ -82,8 +89,14 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _history = history;
         _historyPersistence = historyPersistence;
         _activityLog = activityLog;
+        _sessionState = sessionState;
+        _cacheService = cacheService;
+        _setupMemo = setupMemo;
 
         _settingsService.SettingsChanged += OnSettingsChanged;
+        _sessionState.Locked += OnSessionLocked;
+        _sessionState.Unlocked += OnSessionActivated;
+        _sessionState.Resumed += OnSessionActivated;
     }
 
     /// <summary>
@@ -99,7 +112,32 @@ public partial class MainViewModel : ObservableObject, IDisposable
         if (_disposed || _exiting) return;
         _stopped = false;
         ResetAdaptiveRefresh();
+        if (TryRestoreFreshCache()) return;
         await RefreshCoreAsync();
+    }
+
+    private bool TryRestoreFreshCache()
+    {
+        if (_settingsService.Settings.DeveloperModeEnabled) return false;
+        var enabled = _settingsService.Settings.Providers.Where(p => p.IsEnabled).OrderBy(p => p.Order).ToList();
+        if (enabled.Count == 0) return false;
+        var interval = TimeSpan.FromSeconds(_settingsService.Settings.RefreshIntervalSeconds);
+        var now = DateTime.UtcNow;
+        var cached = enabled.Select(p => _cacheService.Get(p.Id)).ToList();
+        if (cached.Any(data => data == null || data.HasError || data.FetchedAt.ToUniversalTime() > now ||
+            now - data.FetchedAt.ToUniversalTime() >= interval))
+            return false;
+        var oldest = cached.Min(data => data!.FetchedAt.ToUniversalTime());
+        Providers = new(cached.Select(data => data! with
+        {
+            IsLoading = false,
+            Cost = _settingsService.Settings.ShowCostTotals ? data!.Cost : null
+        }));
+        _usageFingerprint = UsageFingerprint.Create(Providers);
+        LastUpdated = oldest.ToLocalTime();
+        UpdateLastUpdatedText();
+        RecreateTimer(interval - (now - oldest));
+        return true;
     }
 
     /// <summary>
@@ -192,9 +230,57 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _unchangedRefreshes = 0;
         _adaptiveResetVersion++;
         _adaptiveResetPending = true;
-        EffectiveRefreshInterval = AdaptiveRefreshPolicy.GetDelay(
-            TimeSpan.FromSeconds(_settingsService.Settings.RefreshIntervalSeconds), 0,
+        EffectiveRefreshInterval = GetScheduledDelay();
+    }
+
+    private TimeSpan GetScheduledDelay()
+    {
+        var delay = AdaptiveRefreshPolicy.GetDelay(
+            TimeSpan.FromSeconds(_settingsService.Settings.RefreshIntervalSeconds), _unchangedRefreshes,
             _settingsService.Settings.AdaptiveRefreshEnabled);
+        var lockedInterval = TimeSpan.FromMinutes(_settingsService.Settings.LockedRefreshIntervalMinutes);
+        return _sessionLocked && lockedInterval > delay ? lockedInterval : delay;
+    }
+
+    private void OnSessionLocked(object? sender, EventArgs e)
+    {
+        try
+        {
+            OnUiThread(() =>
+            {
+                try
+                {
+                    if (_disposed) return;
+                    _sessionLocked = true;
+                    EffectiveRefreshInterval = GetScheduledDelay();
+                    if (!_stopped && !_exiting && !IsLoading) RecreateTimer();
+                }
+                catch (Exception ex) { _logger.LogError(ex, "Failed to apply session lock"); }
+            });
+        }
+        catch (Exception ex) { _logger.LogError(ex, "Failed to handle session lock"); }
+    }
+
+    private void OnSessionActivated(object? sender, EventArgs e)
+    {
+        try
+        {
+            OnUiThread(() => HandleSessionActivationAsync().SafeFireAndForget(
+                onError: ex => _logger.LogError(ex, "Failed to handle session activation")));
+        }
+        catch (Exception ex) { _logger.LogError(ex, "Failed to dispatch session activation"); }
+    }
+
+    private async Task HandleSessionActivationAsync()
+    {
+        if (_disposed) return;
+        _sessionLocked = false;
+        ResetAdaptiveRefresh();
+        if (_stopped || _exiting) return;
+        // Cancel even a fresh-data timer: its monotonic delay may have paused throughout sleep.
+        RecreateTimer();
+        await RefreshIfStaleAsync(TimeSpan.FromSeconds(_settingsService.Settings.RefreshIntervalSeconds));
+        if (!_disposed && !_stopped && !_exiting) RecreateTimer();
     }
 
     private async Task RefreshDemandedCostsAsync()
@@ -202,14 +288,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
         if (_disposed || _stopped || _exiting || !_settingsService.Settings.ShowCostTotals ||
             _settingsService.Settings.DeveloperModeEnabled ||
             Volatile.Read(ref _costDemand) == 0 || _costRefreshCts != null) return;
-        var enabled = _settingsService.Settings.Providers.Where(p => p.IsEnabled).Select(p => p.Id).ToList();
-        var cache = _codexBarService.GetCostCacheInfo();
-        if (!enabled.Any(provider =>
-        {
-            var cost = Providers.FirstOrDefault(p => p.Provider.Equals(provider, StringComparison.OrdinalIgnoreCase))?.Cost;
-            var attempt = cache?.FirstOrDefault(c => c.ProviderId.Equals(provider, StringComparison.OrdinalIgnoreCase))?.LastAttemptUtc;
-            return cost == null || DateTime.UtcNow - (attempt ?? cost.FetchedAt.ToUniversalTime()) >= TimeSpan.FromMinutes(15);
-        })) return;
+        var enabled = _settingsService.Settings.Providers.Where(p => p.IsEnabled)
+            .Select(p => p.Id).Where(provider => Providers.FirstOrDefault(p =>
+                p.Provider.Equals(provider, StringComparison.OrdinalIgnoreCase))?.Cost == null).ToList();
+        if (enabled.Count == 0) return;
         using var scanCts = new CancellationTokenSource();
         _costRefreshCts = scanCts;
         try
@@ -232,14 +314,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
     }
 
-    private async Task RefreshCostsAsync(IEnumerable<string> providers, bool forceRefresh, CancellationToken ct)
+    private async Task RefreshCostsAsync(IReadOnlyList<string> providers, bool forceRefresh, CancellationToken ct)
     {
-        foreach (var provider in providers)
+        if (!_settingsService.Settings.ShowCostTotals || _settingsService.Settings.DeveloperModeEnabled) return;
+        await foreach (var (provider, cost) in _codexBarService.GetCostsAsync(providers, forceRefresh, ct))
         {
             ct.ThrowIfCancellationRequested();
             if (!forceRefresh && Volatile.Read(ref _costDemand) == 0) return;
-            var cost = await _codexBarService.GetCostAsync(provider, forceRefresh, ct);
-            ct.ThrowIfCancellationRequested();
             var index = Providers.ToList().FindIndex(p => p.Provider.Equals(provider, StringComparison.OrdinalIgnoreCase));
             if (index >= 0) Providers[index] = Providers[index] with
             {
@@ -336,6 +417,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             {
                 // Services may finish despite cancellation; obsolete results must never reach UI or history.
                 ct.ThrowIfCancellationRequested();
+                if (data.CommandNotFound) await _setupMemo.InvalidateAsync(ct);
                 try
                 {
                     _activityLog.RecordRefresh(new DashboardRefreshEntry
@@ -377,6 +459,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
             // Usage appears as soon as it arrives. The heavier log scans run afterwards, at a slow cadence.
             ct.ThrowIfCancellationRequested();
             await _historyPersistence.SaveAsync(ct: ct);
+            if (!developerMode && Providers.All(p => !p.HasError))
+            {
+                // Serialize and persist away from the UI context; cache failures cannot fail a refresh.
+                try { await Task.Run(() => _cacheService.SaveAsync(), ct); }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+                catch (Exception ex) { _logger.LogWarning(ex, "Usage cache could not be saved"); }
+            }
             // Demand-start scans run separately so usage never waits behind a slow scan.
             if (forceCostRefresh)
                 await RefreshCostsAsync(Providers.Select(p => p.Provider).ToList(), true, ct);
@@ -552,11 +641,14 @@ public partial class MainViewModel : ObservableObject, IDisposable
     /// <summary>
     /// Recreates the periodic timer with the current refresh interval from settings.
     /// </summary>
-    private void RecreateTimer()
+    private void RecreateTimer(TimeSpan? firstDelay = null)
     {
-        EffectiveRefreshInterval = AdaptiveRefreshPolicy.GetDelay(
-            TimeSpan.FromSeconds(_settingsService.Settings.RefreshIntervalSeconds), _unchangedRefreshes,
-            _settingsService.Settings.AdaptiveRefreshEnabled);
+        EffectiveRefreshInterval = firstDelay ?? GetScheduledDelay();
+        if (_sessionLocked)
+        {
+            var lockedInterval = TimeSpan.FromMinutes(_settingsService.Settings.LockedRefreshIntervalMinutes);
+            if (lockedInterval > EffectiveRefreshInterval) EffectiveRefreshInterval = lockedInterval;
+        }
         _timerCts?.Cancel();
         _timerCts?.Dispose();
         _timerCts = new CancellationTokenSource();
@@ -582,6 +674,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
         {
             Stop();
             _settingsService.SettingsChanged -= OnSettingsChanged;
+            _sessionState.Locked -= OnSessionLocked;
+            _sessionState.Unlocked -= OnSessionActivated;
+            _sessionState.Resumed -= OnSessionActivated;
         }
 
         _disposed = true;

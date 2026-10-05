@@ -147,7 +147,7 @@ The packaged app keeps its settings across updates.
 | Always-on overlay | The floating readout. Drag to move, right-click for options. |
 | Taskbar display | The strip on the taskbar, bottom-left corner. |
 | Usage alerts | Windows notifications. "Send test notification" checks they reach you. |
-| Show cost and token totals | Local log estimates on cards and detail pages. Scans run while the flyout or dashboard is open (at most every 15 minutes) and when you click Refresh. |
+| Show cost and token totals | Local log estimates on cards and detail pages. Scans run while the flyout or dashboard is open (at most every 30 minutes) and when you click Refresh. |
 | Run at startup | Start with Windows. |
 
 Both compact displays hide themselves while a fullscreen game, video or presentation is running.
@@ -212,7 +212,7 @@ Compared with upstream, this fork adds:
 - **Extra windows**: Claude's Fable limit, and Antigravity's External (Claude and GPT) quota under Gemini, on the flyout cards and detail page, in provider colours.
 - **Relevance-based bar selection** on the compact displays.
 - **A working Gemini.** Google shut down the Gemini CLI login for individual accounts, so Gemini is read from Antigravity and shown as 5-hour and weekly windows.
-- **Reliable Claude.** The OAuth usage endpoint is rate limited by Anthropic ("Command failed (exit code 3)"), and the CLI route became slow. The shim now uses OAuth first with a cooldown, falls back to the CLI, caches for 5 minutes and shows the last good result on failure.
+- **Reliable Claude.** The OAuth usage endpoint is rate limited by Anthropic ("Command failed (exit code 3)"), and the CLI route became slow. The shim now uses OAuth first with a cooldown, falls back to the CLI, caches for 10 minutes and shows the last good result on failure.
 - **No more hidden 30-second cap** on WSL commands, which was the cause of "Command timed out after 30 seconds".
 - **Providers apply immediately** when enabled, disabled or reordered in Settings.
 - **Safer settings and refreshes.** Settings saves replace a complete file atomically, failed saves show a visible error and restore uncommitted values, and malformed values recover to defaults. Canceled refreshes cannot put old results back on screen. Quit flushes history before exiting.
@@ -296,11 +296,12 @@ only the current window; old-window samples remain on disk until the 14-day rete
 ### Keeping WSL light
 
 Each refresh starts the WSL VM, which by default can claim up to half your RAM and gives memory back slowly.
-A `%USERPROFILE%\.wslconfig` keeps it small (apply with `wsl --shutdown`):
+A `%USERPROFILE%\.wslconfig` keeps it small and shuts it down 10 seconds after the last command instead of a minute (apply with `wsl --shutdown`):
 
 ```ini
 [wsl2]
 memory=4GB
+vmIdleTimeout=10000
 
 [experimental]
 autoMemoryReclaim=gradual

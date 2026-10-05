@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Refreshes slow down while Windows is locked, using `lockedRefreshIntervalMinutes` (30 minutes by default; 0 disables it), and check for stale usage after unlock or resume. Resume also restarts the refresh timer.
+- Startup skips WSL checks when setup succeeded within the last 24 hours and restores a fresh usage cache until the next refresh is due.
+- Cost scans share one WSL call and remain cached for 30 minutes. Opening the flyout or dashboard scans only providers without a cost value; existing estimates update during the next refresh.
+
 ## [0.9.8] - 2026-10-05
 
 ### Changed

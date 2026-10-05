@@ -6,7 +6,7 @@
 #   * gemini  -> the Gemini CLI login was shut down for individual Google accounts, so Gemini quota is
 #                served from Antigravity (`agy`) and presented as the Gemini provider (5-hour + weekly).
 #   * claude  -> the OAuth usage endpoint is rate limited by Anthropic (exit code 3), so use the Claude CLI
-#                route, cache results for 5 minutes, and fall back to the last good result on failure.
+#                route, cache results for 10 minutes, and fall back to the last good result on failure.
 #   * others  -> passed straight through to the real CLI.
 REAL=/opt/codexbar/CodexBarCLI
 
@@ -70,7 +70,7 @@ print(json.dumps(d))
   fi
 fi
 
-# Claude: cache for 5 minutes and always answer quickly. Routes, in order:
+# Claude: cache for 10 minutes and always answer quickly. Routes, in order:
 #   1. OAuth usage endpoint: ~1 second, but Anthropic rate limits it (exit code 3), so after a failure it is
 #      left alone for 10 minutes.
 #   2. Claude CLI: ~18 seconds, and currently returns "a subscription notice without session quota data"
@@ -83,7 +83,7 @@ case " $* " in *" --provider claude "*)
   CLI_BROKEN=/var/tmp/codexbar-claude-cli-broken
   age() { echo $(( $(date +%s) - $(stat -c %Y "$1") )); }
 
-  if [ -s "$C" ] && [ "$(age "$C")" -lt 300 ]; then cat "$C"; exit 0; fi
+  if [ -s "$C" ] && [ "$(age "$C")" -lt 600 ]; then cat "$C"; exit 0; fi
 
   oauth=(); cli=()
   for a in "${out[@]}"; do

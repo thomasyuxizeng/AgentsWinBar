@@ -7,6 +7,31 @@ namespace CodexBarWin.Tests.Unit.Models;
 public class AppSettingsTests
 {
     [TestMethod]
+    [DataRow(-1, 30)]
+    [DataRow(1441, 30)]
+    [DataRow(0, 0)]
+    [DataRow(1440, 1440)]
+    [DataRow(60, 60)]
+    public void Normalize_LockedRefreshInterval_ValidatesIncludingDisabled(int value, int expected)
+    {
+        var settings = AppSettings.GetDefaults();
+        settings.LockedRefreshIntervalMinutes = value;
+        settings.Normalize();
+        settings.LockedRefreshIntervalMinutes.Should().Be(expected);
+        var json = System.Text.Json.JsonSerializer.Serialize(settings, AppJsonSerializerContext.Default.AppSettings);
+        System.Text.Json.JsonSerializer.Deserialize(json, AppJsonSerializerContext.Default.AppSettings)!
+            .LockedRefreshIntervalMinutes.Should().Be(expected);
+    }
+
+    [TestMethod]
+    public void Deserialize_LockedRefreshIntervalMissing_DefaultsToThirtyMinutes()
+    {
+        new AppSettings().LockedRefreshIntervalMinutes.Should().Be(30);
+        AppSettings.GetDefaults().LockedRefreshIntervalMinutes.Should().Be(30);
+        System.Text.Json.JsonSerializer.Deserialize("{}", AppJsonSerializerContext.Default.AppSettings)!
+            .LockedRefreshIntervalMinutes.Should().Be(30);
+    }
+    [TestMethod]
     public void GetDefaults_AdaptiveRefreshEnabled_DefaultsToTrue()
     {
         AppSettings.GetDefaults().AdaptiveRefreshEnabled.Should().BeTrue();
