@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Runtime.InteropServices;
 using AwesomeAssertions;
 using CodexBarWin.Services;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -10,6 +11,41 @@ namespace CodexBarWin.Tests.Unit.Services;
 [System.Runtime.Versioning.SupportedOSPlatform("windows")]
 public class SessionStateSourceTests
 {
+    [TestMethod]
+    [DataRow(1, 0, true)]
+    [DataRow(1, 1, false)]
+    [DataRow(1, -1, false)]
+    [DataRow(1, 2, false)]
+    [DataRow(0, 0, false)]
+    [DataRow(2, 0, false)]
+    public void ReadIsLocked_LevelAndSessionFlags_ReportsOnlyKnownLock(int level, int flags, bool expected)
+    {
+        var buffer = Marshal.AllocHGlobal(20);
+        try
+        {
+            Marshal.WriteInt32(buffer, 0, level);
+            Marshal.WriteInt32(buffer, 8, 42); // SessionId
+            Marshal.WriteInt32(buffer, 12, 0); // SessionState is not the lock flag.
+            Marshal.WriteInt32(buffer, 16, flags);
+            SessionStateNative.ReadIsLocked(buffer, 20).Should().Be(expected);
+        }
+        finally { Marshal.FreeHGlobal(buffer); }
+    }
+
+    [TestMethod]
+    public void ReadIsLocked_NullOrTruncatedBuffer_DoesNotReportLock()
+    {
+        SessionStateNative.ReadIsLocked(IntPtr.Zero, 20).Should().BeFalse();
+        var buffer = Marshal.AllocHGlobal(20);
+        try
+        {
+            Marshal.WriteInt32(buffer, 0, 1);
+            Marshal.WriteInt32(buffer, 16, 0);
+            SessionStateNative.ReadIsLocked(buffer, 19).Should().BeFalse();
+        }
+        finally { Marshal.FreeHGlobal(buffer); }
+    }
+
     [TestMethod]
     [DataRow(SessionSwitchReason.SessionLock, true)]
     [DataRow(SessionSwitchReason.RemoteDisconnect, true)]

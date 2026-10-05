@@ -69,6 +69,7 @@
     <Compile Include="..\Services\SetupMemoService.cs" Link="Linked\SetupMemoService.cs" />
     <Compile Include="..\Services\ISessionStateSource.cs" Link="Linked\ISessionStateSource.cs" />
     <Compile Include="..\Services\SessionStateSource.cs" Link="Linked\SessionStateSource.cs" />
+    <Compile Include="..\Services\SessionStateNative.cs" Link="Linked\SessionStateNative.cs" />
     <Compile Include="..\Services\ISampleDataLoader.cs" Link="Linked\ISampleDataLoader.cs" />
     <Compile Include="..\Services\WslService.cs" Link="Linked\WslService.cs" />
     <Compile Include="..\Services\WslBatchProtocol.cs" Link="Linked\WslBatchProtocol.cs" />

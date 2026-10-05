@@ -239,7 +239,17 @@ public partial class MainViewModel : ObservableObject, IDisposable
             TimeSpan.FromSeconds(_settingsService.Settings.RefreshIntervalSeconds), _unchangedRefreshes,
             _settingsService.Settings.AdaptiveRefreshEnabled);
         var lockedInterval = TimeSpan.FromMinutes(_settingsService.Settings.LockedRefreshIntervalMinutes);
-        return _sessionLocked && lockedInterval > delay ? lockedInterval : delay;
+        return (_sessionLocked || QuerySessionLocked()) && lockedInterval > delay ? lockedInterval : delay;
+    }
+
+    private bool QuerySessionLocked()
+    {
+        try { return _sessionState.IsLocked; }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Failed to query session lock state");
+            return false;
+        }
     }
 
     private void OnSessionLocked(object? sender, EventArgs e)
@@ -597,6 +607,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
         {
             await Task.Delay(delay, ct);
             ct.ThrowIfCancellationRequested();
+            // Recover from a missed unlock event before scheduling the next refresh.
+            if (_sessionLocked && !QuerySessionLocked()) _sessionLocked = false;
             await RefreshCoreAsync();
         }
         catch (OperationCanceledException)
@@ -644,7 +656,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private void RecreateTimer(TimeSpan? firstDelay = null)
     {
         EffectiveRefreshInterval = firstDelay ?? GetScheduledDelay();
-        if (_sessionLocked)
+        if (_sessionLocked || QuerySessionLocked())
         {
             var lockedInterval = TimeSpan.FromMinutes(_settingsService.Settings.LockedRefreshIntervalMinutes);
             if (lockedInterval > EffectiveRefreshInterval) EffectiveRefreshInterval = lockedInterval;

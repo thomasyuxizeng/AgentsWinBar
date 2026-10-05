@@ -127,6 +127,14 @@ public class WslBatchProtocolTests
     }
 
     [TestMethod]
+    public void BuildScript_AnySourceLineEndings_ProducesNoCarriageReturns()
+    {
+        var script = WslBatchProtocol.BuildScript(
+            [new("echo hi", TimeSpan.FromSeconds(5)), new("echo 'a'", TimeSpan.FromSeconds(5))], WslBatchProtocol.CreateMarker());
+        script.Should().NotContain("\r");
+    }
+
+    [TestMethod]
     public void BuildScript_BackgroundTimeout_CapturesSupervisorPidAndKillsGroupBeforeRemovingPidFile()
     {
         var script = WslBatchProtocol.BuildScript([new("true", TimeSpan.FromSeconds(10))], WslBatchProtocol.CreateMarker());

@@ -10,6 +10,8 @@ public sealed class SessionStateSource : ISessionStateSource, IDisposable
     private readonly ILogger<SessionStateSource> _logger;
     private bool _disposed;
 
+    public bool IsLocked => SessionStateNative.IsCurrentSessionLocked();
+
     public event EventHandler? Locked;
     public event EventHandler? Unlocked;
     public event EventHandler? Resumed;

@@ -145,7 +145,9 @@ public class WslService : IWslService
             StandardOutputEncoding = Encoding.UTF8, StandardErrorEncoding = Encoding.UTF8
         };
         if (_distro != null) { psi.ArgumentList.Add("-d"); psi.ArgumentList.Add(_distro); }
-        psi.ArgumentList.Add("--");
+        // --exec: without it wsl.exe hands the line to the default shell, which expands $VAR, $(...) and $((...))
+        // in the script before the inner bash ever sees them.
+        psi.ArgumentList.Add("--exec");
         psi.ArgumentList.Add("bash");
         psi.ArgumentList.Add("-ic");
         psi.ArgumentList.Add(script);

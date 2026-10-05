@@ -62,12 +62,15 @@ public class MainViewModelTests
 
     private sealed class FakeSessionStateSource : ISessionStateSource
     {
+        public bool QueryLocked { get; set; }
+        public bool ThrowOnQuery { get; set; }
+        public bool IsLocked => ThrowOnQuery ? throw new InvalidOperationException("Query failed") : QueryLocked;
         public event EventHandler? Locked;
         public event EventHandler? Unlocked;
         public event EventHandler? Resumed;
-        public void Lock() => Locked?.Invoke(this, EventArgs.Empty);
-        public void Unlock() => Unlocked?.Invoke(this, EventArgs.Empty);
-        public void Resume() => Resumed?.Invoke(this, EventArgs.Empty);
+        public void Lock() { QueryLocked = true; Locked?.Invoke(this, EventArgs.Empty); }
+        public void Unlock() { QueryLocked = false; Unlocked?.Invoke(this, EventArgs.Empty); }
+        public void Resume() { QueryLocked = false; Resumed?.Invoke(this, EventArgs.Empty); }
     }
     private static UsageData Data(double percent) => new() { Provider = "claude", FetchedAt = DateTime.UtcNow,
         Session = new UsageWindow { ReportedPercent = percent, WindowMinutes = 300, ResetAt = DateTime.UtcNow.AddHours(2) } };
@@ -92,6 +95,71 @@ public class MainViewModelTests
 
     private void SetupImmediateUsage() => _usage.Setup(s => s.GetAllUsageStreamAsync(It.IsAny<CancellationToken>()))
         .Returns((CancellationToken ct) => Stream(Task.CompletedTask, Data(20), ct));
+
+    [TestMethod]
+    [DataRow(30, 30)]
+    [DataRow(0, 5)]
+    public async Task IsLocked_WithoutLockEvent_UsesConfiguredMinimum(int lockedMinutes, int expectedMinutes)
+    {
+        _values.RefreshIntervalSeconds = 300;
+        _values.AdaptiveRefreshEnabled = false;
+        _values.LockedRefreshIntervalMinutes = lockedMinutes;
+        _session.QueryLocked = true;
+        SetupImmediateUsage();
+        await _viewModel.StartAsync();
+        _viewModel.EffectiveRefreshInterval.Should().Be(TimeSpan.FromMinutes(expectedMinutes));
+        _viewModel.NextRefreshUtc.Should().BeCloseTo(DateTime.UtcNow.AddMinutes(expectedMinutes), TimeSpan.FromSeconds(2));
+        await PeriodicRefreshAsync();
+        _viewModel.EffectiveRefreshInterval.Should().Be(TimeSpan.FromMinutes(expectedMinutes));
+    }
+
+    [TestMethod]
+    public async Task RecreateTimer_FirstDelayWhileQueryLocked_StretchesDelayWithoutLockEvent()
+    {
+        _values.RefreshIntervalSeconds = 300;
+        _session.QueryLocked = true;
+        SetupImmediateUsage();
+        await _viewModel.StartAsync();
+        typeof(MainViewModel).GetMethod("RecreateTimer", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .Invoke(_viewModel, [TimeSpan.FromMinutes(2)]);
+        _viewModel.EffectiveRefreshInterval.Should().Be(TimeSpan.FromMinutes(30));
+    }
+
+    [TestMethod]
+    public async Task PeriodicTimer_MissedUnlockEvent_ReturnsToNormalDelayAndClearsFlag()
+    {
+        _values.RefreshIntervalSeconds = 300;
+        _values.AdaptiveRefreshEnabled = false;
+        SetupImmediateUsage();
+        await _viewModel.StartAsync();
+        _session.QueryLocked = true;
+        _session.Lock();
+        _viewModel.EffectiveRefreshInterval.Should().Be(TimeSpan.FromMinutes(30));
+        _session.QueryLocked = false; // Windows unlocked, but no Unlocked event arrived.
+        await (Task)typeof(MainViewModel).GetMethod("RunPeriodicRefreshAsync", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .Invoke(_viewModel, [TimeSpan.Zero, CancellationToken.None])!;
+        _viewModel.EffectiveRefreshInterval.Should().Be(TimeSpan.FromMinutes(5));
+        typeof(MainViewModel).GetField("_sessionLocked", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .GetValue(_viewModel).Should().Be(false);
+        _usage.Verify(s => s.GetAllUsageStreamAsync(It.IsAny<CancellationToken>()), Times.Exactly(2));
+    }
+
+    [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task IsLocked_UnknownOrThrowingQuery_DoesNotStretch(bool throws)
+    {
+        _values.RefreshIntervalSeconds = 300;
+        _values.AdaptiveRefreshEnabled = false;
+        _session.ThrowOnQuery = throws;
+        // ISessionStateSource represents unknown native flags as false.
+        _session.QueryLocked = false;
+        SetupImmediateUsage();
+        await _viewModel.StartAsync();
+        _viewModel.EffectiveRefreshInterval.Should().Be(TimeSpan.FromMinutes(5));
+        await PeriodicRefreshAsync();
+        _viewModel.EffectiveRefreshInterval.Should().Be(TimeSpan.FromMinutes(5));
+    }
 
     [TestMethod]
     [DataRow(30, 30)]

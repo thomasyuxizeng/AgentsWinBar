@@ -68,7 +68,8 @@ internal static class WslBatchProtocol
                 .Append(" ) 9>\"$cbw_dir/lock\"\n) &\ncbw_pids+=($!)\n");
         }
         script.Append("cbw_failed=0\nfor cbw_pid in \"${cbw_pids[@]}\"; do wait \"$cbw_pid\" || cbw_failed=1; done\ncbw_pids=()\nexit \"$cbw_failed\"\n");
-        return script.ToString();
+        // The raw-string template takes the source file's line endings; bash must never see a carriage return.
+        return script.ToString().Replace("\r\n", "\n");
     }
 
     internal static bool TryParseLine(string line, string marker, int count, out int index, out WslResult? result)
