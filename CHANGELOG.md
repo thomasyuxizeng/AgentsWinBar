@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- `install.ps1` refused every first-time install: before the certificate is trusted, Windows reports the release package's signature as `UnknownError` (untrusted root), which the signer check didn't accept. It now accepts that status only when an untrusted self-signed root is the certificate chain's sole problem.
+- `install.ps1` could fail to install the app with `0x80073CF0` ("Package could not be opened"), because Windows' deployment service couldn't open packages in a new folder directly under `%LOCALAPPDATA%` on some machines. The verified package is now installed from a fresh copy in `%TEMP%`.
+
 ## [1.0.0] - 2026-10-08
 
 ### Added

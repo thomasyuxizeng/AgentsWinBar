@@ -455,7 +455,18 @@ try {
             $package = Read-Package $msix
             $signature = Get-AuthenticodeSignature -LiteralPath $msix
             $signer = $signature.SignerCertificate
-            if (-not $signer -or $signer.Subject -cne 'CN=CodexBarWin OSS' -or $signature.Status -notin @('Valid', 'NotTrusted')) { throw "MSIX signature is absent, damaged, or unverified (status $($signature.Status)), or has an unexpected subject." }
+            # Before the self-signed certificate is trusted, Windows reports UnknownError ("terminated in a root
+            # certificate which is not trusted"). Accept that only when an untrusted root is the chain's sole problem;
+            # tampering still fails here (HashMismatch) and against the release checksum above.
+            $untrustedRootOnly = $false
+            if ($signer -and $signature.Status -eq 'UnknownError') {
+                $chain = New-Object Security.Cryptography.X509Certificates.X509Chain
+                $chain.ChainPolicy.RevocationMode = [Security.Cryptography.X509Certificates.X509RevocationMode]::NoCheck
+                [void]$chain.Build($signer)
+                $chainProblems = @($chain.ChainStatus | ForEach-Object { [string]$_.Status })
+                $untrustedRootOnly = $chainProblems.Count -gt 0 -and @($chainProblems | Where-Object { $_ -ne 'UntrustedRoot' }).Count -eq 0
+            }
+            if (-not $signer -or $signer.Subject -cne 'CN=CodexBarWin OSS' -or -not ($signature.Status -in @('Valid', 'NotTrusted') -or $untrustedRootOnly)) { throw "MSIX signature is absent, damaged, or unverified (status $($signature.Status)), or has an unexpected subject." }
             $signerThumbprint = $signer.Thumbprint
             $certificatePath = Join-Path $downloads 'msix-signer.cer'
             [IO.File]::WriteAllBytes($certificatePath, $signer.Export([Security.Cryptography.X509Certificates.X509ContentType]::Cert))
@@ -726,7 +737,19 @@ chmod 600 "$t"; mv "$t" "$p"
             if (-not $SkipApp) {
                 if ((Get-AuthenticodeSignature -LiteralPath $msix).Status -ne 'Valid') { throw 'Verified MSIX signature remains untrusted after the certificate phase.' }
                 if (-not (Runtime-Installed)) { throw 'Windows App Runtime 1.8 remains unavailable to the original user after installation.' }
-                if (-not $installed.Count -or [version]$installed[0].Version -lt $package.Version) { Add-AppxPackage -Path $msix -ForceApplicationShutdown }
+                if (-not $installed.Count -or [version]$installed[0].Version -lt $package.Version) {
+                    # The deployment service can fail to open packages in new folders directly under %LOCALAPPDATA%
+                    # (0x80073CF0 / 0x80070003, seen where Codex's Windows sandbox has changed that folder's ACLs),
+                    # while %TEMP% works. Install from a fresh %TEMP% copy and re-check its hash after copying.
+                    $deployDirectory = Join-Path ([IO.Path]::GetTempPath()) ('CodexBarWin-deploy-' + [Guid]::NewGuid().ToString('N'))
+                    New-Item -ItemType Directory -Path $deployDirectory -Force | Out-Null
+                    try {
+                        $deployMsix = Join-Path $deployDirectory (Split-Path $msix -Leaf)
+                        Copy-Item -LiteralPath $msix -Destination $deployMsix -Force
+                        if ((Get-FileHash -LiteralPath $deployMsix -Algorithm SHA256).Hash -ine (Get-FileHash -LiteralPath $msix -Algorithm SHA256).Hash) { throw 'MSIX copy for deployment does not match the verified package.' }
+                        Add-AppxPackage -Path $deployMsix -ForceApplicationShutdown
+                    } finally { Remove-Item -LiteralPath $deployDirectory -Recurse -Force -ErrorAction SilentlyContinue }
+                }
                 $installed = @(Get-AppxPackage -Name CodexBarWin | Sort-Object Version -Descending | Select-Object -First 1)
                 if (-not $installed.Count) { throw 'CodexBarWin app registration could not be verified.' }
                 # Full-trust packaged apps have LocalAppData redirected to LocalCache\Local.
