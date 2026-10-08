@@ -106,7 +106,9 @@ internal static class DashboardFormat
 
     public static string Freshness(DashboardProvider? provider) => provider == null ? string.Empty
         : provider.IsLoading ? "Refreshing…"
-        : $"Fetched {Local(provider.FetchedAtUtc)} · {Ago(provider.FetchedAtUtc)}";
+        : provider.OldReadingUtc is { } reading
+            ? $"Data from {Local(reading)} · {Ago(reading)} · fetched {Ago(provider.FetchedAtUtc)}"
+            : $"Fetched {Local(provider.FetchedAtUtc)} · {Ago(provider.FetchedAtUtc)}";
 
     /// <summary>A short note for a provider card's header: what needs attention, or nothing.</summary>
     public static string CardNote(DashboardProvider? provider) => provider == null ? string.Empty

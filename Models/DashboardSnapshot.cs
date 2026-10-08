@@ -78,6 +78,8 @@ public sealed record DashboardProvider
     public bool IsStale { get; init; }
     public string? Error { get; init; }
     public DateTime FetchedAtUtc { get; init; }
+    /// <summary>The reading's own time when it is much older than the fetch (a cached result); otherwise null.</summary>
+    public DateTime? OldReadingUtc { get; init; }
     public CreditsInfo? Credits { get; init; }
 
     /// <summary>Session, weekly, tertiary, then every extra window, in that order.</summary>

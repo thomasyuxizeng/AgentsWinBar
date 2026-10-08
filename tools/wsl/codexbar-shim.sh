@@ -108,12 +108,14 @@ print(json.dumps(d))
 fi
 
 # Claude: cache for 10 minutes and always answer quickly. Routes, in order:
-#   1. OAuth usage endpoint: ~1 second, but Anthropic rate limits it (exit code 3), so after a failure it is
-#      left alone for 10 minutes.
-#   2. Claude CLI: ~18 seconds, and currently returns "a subscription notice without session quota data"
-#      for some plans. Only tried as a fallback, and a failure is remembered for 6 hours so the slow
-#      attempt isn't repeated on every refresh (which used to push a refresh past the app's timeout).
-#   3. The last good result, however old.
+#   1. OAuth usage endpoint: ~1 second, but Anthropic rate limits it, so after a rate-limit answer it is
+#      left alone for 10 minutes. Other failures (notably "OAuth token expired": CodexBar never refreshes the
+#      token itself) set no cooldown and go straight to route 2.
+#   2. Claude CLI: ~18 seconds. Running `claude` also refreshes an expired OAuth token, so route 1 recovers
+#      on the next refresh. Some plans get "a subscription notice without session quota data" here, so a
+#      failure is remembered for 30 minutes to keep the slow attempt off every refresh.
+#   3. The last good result, however old. Its own usage.updatedAt is kept, so the app can show its age.
+#      With no cached result, the real error is returned rather than a generic one.
 case " $* " in *" --provider claude "*)
   uid=$(id -u)
   key=$(printf '%s' "$*" | md5sum | cut -c1-8)
@@ -144,16 +146,26 @@ case " $* " in *" --provider claude "*)
   done
 
   o='[{"provider":"claude","source":"oauth","error":{"kind":"provider","code":3,"message":"Claude usage is rate limited right now; retrying shortly."}}]'
-  rc=3
+  rc=3; oauth_tried=0
 
   if [ -z "$cooldown_read" ] || [ "$(age "$cooldown_read")" -ge 600 ]; then
-    r=$("$REAL" "${oauth[@]}"); rc=$?
-    if [ $rc -eq 0 ]; then o=$r; owned "$COOLDOWN" && rm -f "$COOLDOWN"; else o=$r; write_state "$COOLDOWN" ''; fi
+    r=$("$REAL" "${oauth[@]}"); rc=$?; oauth_tried=1; o=$r
+    if [ $rc -eq 0 ]; then
+      owned "$COOLDOWN" && rm -f "$COOLDOWN"
+    elif printf '%s' "$r" | grep -Eqi 'rate.?limit|too many requests|429'; then
+      write_state "$COOLDOWN" ''
+    fi
   fi
 
-  if [ $rc -ne 0 ] && { [ -z "$broken_read" ] || [ "$(age "$broken_read")" -ge 21600 ]; }; then
+  if [ $rc -ne 0 ] && { [ -z "$broken_read" ] || [ "$(age "$broken_read")" -ge 1800 ]; }; then
     r=$("$REAL" "${cli[@]}"); rc2=$?
-    if [ $rc2 -eq 0 ]; then o=$r; rc=0; owned "$CLI_BROKEN" && rm -f "$CLI_BROKEN"; else write_state "$CLI_BROKEN" ''; fi
+    if [ $rc2 -eq 0 ]; then
+      o=$r; rc=0; owned "$CLI_BROKEN" && rm -f "$CLI_BROKEN"
+    else
+      write_state "$CLI_BROKEN" ''
+      # With OAuth in its rate-limit cooldown, the CLI's error is the most current explanation.
+      [ $oauth_tried -eq 0 ] && [ -n "$r" ] && o=$r
+    fi
   fi
 
   if [ $rc -eq 0 ]; then write_state "$C" "$o"; printf '%s\n' "$o"; exit 0; fi

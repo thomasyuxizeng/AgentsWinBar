@@ -78,13 +78,15 @@ public static class DashboardSnapshotBuilder
             foreach (var extra in extras)
                 Add(UsageHistoryStore.ExtraWindowKey(extra), DashboardWindowKind.Extra, extra.Title, extra.Window);
             var cost = data.Cost is { } raw ? raw with { Daily = (raw.Daily ?? []).OfType<DailyCost>().ToArray() } : null;
+            var oldReading = DataAge.OldReadingUtc(Utc(data.FetchedAt), data.DataUpdatedAt);
             return new DashboardProvider
             {
                 Id = id, DisplayName = id.ToLowerInvariant() switch
                 { "claude" => "Claude", "codex" => "Codex", "gemini" => "Gemini", _ => id },
                 Plan = data.Plan, Source = data.Status, ServiceStatus = data.ServiceStatus,
-                IsLoading = data.IsLoading, IsStale = now - Utc(data.FetchedAt) > TimeSpan.FromMinutes(5),
-                Error = data.Error, FetchedAtUtc = Utc(data.FetchedAt), Credits = data.Credits,
+                IsLoading = data.IsLoading,
+                IsStale = now - Utc(data.FetchedAt) > TimeSpan.FromMinutes(5) || oldReading != null,
+                Error = data.Error, FetchedAtUtc = Utc(data.FetchedAt), OldReadingUtc = oldReading, Credits = data.Credits,
                 Windows = windows, Cost = settings.ShowCostTotals && cost?.HasData == true ? BuildCost(cost, today) : null,
                 HistorySampleCount = history.Length, HistoryOldestUtc = Oldest(history)
             };

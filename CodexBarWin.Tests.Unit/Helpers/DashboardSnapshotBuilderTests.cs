@@ -37,6 +37,24 @@ public class DashboardSnapshotBuilderTests
     }
 
     [TestMethod]
+    public void Build_FreshFetchOfOldCachedReading_MarksProviderStaleWithReadingTime()
+    {
+        var reading = Now.AddHours(-12);
+        var snapshot = DashboardSnapshotBuilder.Build(Inputs(
+            Provider() with { Session = Window(9), DataUpdatedAt = reading },
+            Provider("codex") with { Session = Window(50), DataUpdatedAt = Now.AddMinutes(-2) }));
+
+        var claude = snapshot.Providers.Single(p => p.Id == "claude");
+        claude.IsStale.Should().BeTrue();
+        claude.OldReadingUtc.Should().Be(reading);
+        var codex = snapshot.Providers.Single(p => p.Id == "codex");
+        codex.IsStale.Should().BeFalse();
+        codex.OldReadingUtc.Should().BeNull();
+        snapshot.Summary.HealthyProviderCount.Should().Be(1);
+        snapshot.Summary.StaleProviderCount.Should().Be(1);
+    }
+
+    [TestMethod]
     public void Build_AdaptiveSchedule_UsesActualNextRefreshAndEffectiveInterval()
     {
         var next = Now.AddMinutes(8);

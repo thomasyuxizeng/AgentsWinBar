@@ -18,6 +18,9 @@ public record UsageData
 
     public CreditsInfo? Credits { get; init; }
     public DateTime FetchedAt { get; init; } = DateTime.UtcNow;
+    /// <summary>When the provider's numbers were read (the CLI's usage.updatedAt, UTC). Can be much older than
+    /// <see cref="FetchedAt"/> when the shim serves a cached result.</summary>
+    public DateTime? DataUpdatedAt { get; init; }
     public bool IsStale => DateTime.UtcNow - FetchedAt > TimeSpan.FromMinutes(5);
     public string? Status { get; init; }
     public ProviderStatus? ServiceStatus { get; init; }

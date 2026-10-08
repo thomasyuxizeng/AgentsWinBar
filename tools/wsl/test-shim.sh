@@ -69,6 +69,67 @@ output=$(FAKE_EXIT=7 bash "$TMP/cache-shim" usage --provider claude --source oau
 [[ "$output" = legacy-owned-cache ]]
 rm "$TMP/cache/codexbar-claude-$key.json"
 FAKE_EXIT=7 bash "$TMP/cache-shim" usage --provider claude --source oauth >/dev/null && { echo 'Expected CLI failure' >&2; exit 1; }
-[[ -f "$TMP/cache/codexbar-claude-$uid-oauth-cooldown" ]]
+# A failure that isn't a rate limit sets no OAuth cooldown; the failed CLI route is remembered.
+[[ ! -e "$TMP/cache/codexbar-claude-$uid-oauth-cooldown" ]]
 [[ -f "$TMP/cache/codexbar-claude-$uid-cli-broken" ]]
+
+# Claude routes with a fake CLI that answers per --source and logs each call.
+cat > "$TMP/claude-real" <<'CLI'
+#!/usr/bin/env bash
+src=''; prev=''
+for a in "$@"; do [ "$prev" = --source ] && src=$a; prev=$a; done
+printf '%s\n' "$src" >> "$CALLS"
+if [ "$src" = oauth ]; then printf '%s\n' "$OAUTH_OUT"; exit "$OAUTH_EXIT"; fi
+printf '%s\n' "$CLI_OUT"; exit "$CLI_EXIT"
+CLI
+chmod +x "$TMP/claude-real"
+mkdir "$TMP/claude-cache"
+sed -e "s|^REAL=.*|REAL=$TMP/claude-real|" -e "s|/var/tmp/|$TMP/claude-cache/|g" "$ROOT/codexbar-shim.sh" > "$TMP/claude-shim"
+export CALLS="$TMP/calls"
+claude_run() { : > "$CALLS"; rm -f "$TMP"/claude-cache/*; bash "$TMP/claude-shim" usage --provider claude --format json --source cli; }
+expired='[{"provider":"claude","source":"oauth","error":{"kind":"provider","code":3,"message":"Claude OAuth token expired. CodexBar CLI does not launch Claude to refresh credentials. Run `claude login`, then retry."}}]'
+limited='[{"provider":"claude","source":"oauth","error":{"kind":"provider","code":3,"message":"Claude usage API rate limited (429)"}}]'
+good='[{"provider":"claude","source":"claude","usage":{"primary":{"usedPercent":30}}}]'
+
+# Expired token: no cooldown, straight to the CLI, which answers (and in real life refreshes the token).
+output=$(OAUTH_OUT=$expired OAUTH_EXIT=3 CLI_OUT=$good CLI_EXIT=0 claude_run)
+[[ "$output" = "$good" ]]
+[[ "$(cat "$CALLS")" = $'oauth\ncli' ]]
+[[ ! -e "$TMP/claude-cache/codexbar-claude-$uid-oauth-cooldown" ]]
+
+# Expired token and a failing CLI, nothing cached: the real OAuth error is returned, not "rate limited".
+set +e
+output=$(OAUTH_OUT=$expired OAUTH_EXIT=3 CLI_OUT='[{"provider":"claude","error":{"message":"cli broke"}}]' CLI_EXIT=1 claude_run); rc=$?
+set -e
+[[ "$rc" -eq 3 ]]
+check "$output" 'token expired'
+[[ "$output" != *'rate limited right now'* ]]
+
+# A genuine rate limit starts the 10-minute OAuth cooldown.
+set +e
+OAUTH_OUT=$limited OAUTH_EXIT=3 CLI_OUT='[]' CLI_EXIT=1 claude_run >/dev/null
+set -e
+[[ -f "$TMP/claude-cache/codexbar-claude-$uid-oauth-cooldown" ]]
+
+# A failed CLI route is skipped for 30 minutes, then retried.
+: > "$CALLS"; rm -f "$TMP"/claude-cache/*
+touch "$TMP/claude-cache/codexbar-claude-$uid-cli-broken"
+set +e
+OAUTH_OUT=$expired OAUTH_EXIT=3 CLI_OUT=$good CLI_EXIT=0 bash "$TMP/claude-shim" usage --provider claude --format json --source cli >/dev/null
+set -e
+[[ "$(cat "$CALLS")" = oauth ]]
+: > "$CALLS"
+touch -d '31 minutes ago' "$TMP/claude-cache/codexbar-claude-$uid-cli-broken"
+output=$(OAUTH_OUT=$expired OAUTH_EXIT=3 CLI_OUT=$good CLI_EXIT=0 bash "$TMP/claude-shim" usage --provider claude --format json --source cli)
+[[ "$output" = "$good" ]]
+[[ ! -e "$TMP/claude-cache/codexbar-claude-$uid-cli-broken" ]]
+
+# In the rate-limit cooldown, a failing CLI's own error is the most current explanation.
+: > "$CALLS"; rm -f "$TMP"/claude-cache/*
+touch "$TMP/claude-cache/codexbar-claude-$uid-oauth-cooldown"
+set +e
+output=$(OAUTH_OUT=$good OAUTH_EXIT=0 CLI_OUT='[{"provider":"claude","error":{"message":"cli says sign in"}}]' CLI_EXIT=1 bash "$TMP/claude-shim" usage --provider claude --format json --source cli)
+set -e
+[[ "$(cat "$CALLS")" = cli ]]
+check "$output" 'cli says sign in'
 echo 'Shim fake-CLI tests passed.'

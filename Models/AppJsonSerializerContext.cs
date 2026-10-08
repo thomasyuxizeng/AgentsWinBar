@@ -63,7 +63,8 @@ public record UsageDataDto
         Status = Source,
         ServiceStatus = Status?.ToProviderStatus(),
         Error = Error,
-        FetchedAt = DateTime.UtcNow
+        FetchedAt = DateTime.UtcNow,
+        DataUpdatedAt = Usage?.UpdatedAt is { } updated ? Helpers.DataAge.ToUtc(updated) : null
     };
 }
 
