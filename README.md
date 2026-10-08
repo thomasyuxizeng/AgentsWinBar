@@ -322,7 +322,7 @@ autoMemoryReclaim=gradual
 
 ```powershell
 dotnet restore CodexBarWin.sln
-dotnet build -c Release -p:Platform=x64
+dotnet build CodexBarWin.csproj -c Release -p:Platform=x64 -p:PublishReadyToRun=false
 dotnet test CodexBarWin.Tests.Unit -c Debug -p:Platform=x64
 ```
 

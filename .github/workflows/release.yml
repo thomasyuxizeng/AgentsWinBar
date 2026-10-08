@@ -29,45 +29,30 @@ permissions:
 jobs:
   cert:
     runs-on: windows-latest
-    outputs:
-      mode: ${{ steps.signing.outputs.mode }}
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Prepare shared signing certificate
-        id: signing
+      - name: Prepare signing certificate
         shell: pwsh
         env:
           SIGNING_PFX_BASE64: ${{ secrets.SIGNING_PFX_BASE64 }}
           SIGNING_PFX_PASSWORD: ${{ secrets.SIGNING_PFX_PASSWORD }}
         run: |
-          New-Item -ItemType Directory -Path signing | Out-Null
-          if ($env:SIGNING_PFX_BASE64 -and $env:SIGNING_PFX_PASSWORD) {
-            "mode=stable" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-            [IO.File]::WriteAllBytes("$PWD\signing\CodexBarWin.pfx", [Convert]::FromBase64String($env:SIGNING_PFX_BASE64))
-            $password = ConvertTo-SecureString -String $env:SIGNING_PFX_PASSWORD -Force -AsPlainText
-            $cert = Import-PfxCertificate -FilePath signing/CodexBarWin.pfx -Password $password -CertStoreLocation "Cert:\CurrentUser\My" |
-              Where-Object { $_.HasPrivateKey }
-            if (@($cert).Count -ne 1) { throw "Signing PFX must contain exactly one certificate with a private key." }
-          } else {
-            "mode=ephemeral" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-            $generatedPassword = [Convert]::ToBase64String([Security.Cryptography.RandomNumberGenerator]::GetBytes(32))
-            Write-Output "::add-mask::$generatedPassword"
-            $password = ConvertTo-SecureString -String $generatedPassword -Force -AsPlainText
-            $cert = New-SelfSignedCertificate `
-              -Type CodeSigningCert `
-              -Subject "CN=CodexBarWin OSS" `
-              -KeyUsage DigitalSignature `
-              -NotAfter (Get-Date).AddYears(10) `
-              -FriendlyName "CodexBarWin Code Signing Certificate" `
-              -CertStoreLocation "Cert:\CurrentUser\My" `
-              -TextExtension @("2.5.29.37={text}1.3.6.1.5.5.7.3.3", "2.5.29.19={text}")
-            Export-PfxCertificate -Cert $cert -FilePath signing/CodexBarWin.pfx -Password $password | Out-Null
-            # The fallback password travels only in the short-lived signing artifact, never job outputs or release assets.
-            [IO.File]::WriteAllText("$PWD\signing\password.txt", $generatedPassword)
+          # Every release is signed with the one stable certificate users have already trusted. There is no
+          # throwaway fallback: a new certificate would need a new admin prompt on every machine, and sharing its
+          # private key between jobs would expose it.
+          if (-not ($env:SIGNING_PFX_BASE64 -and $env:SIGNING_PFX_PASSWORD)) {
+            throw "Repository secrets SIGNING_PFX_BASE64 and SIGNING_PFX_PASSWORD are required to sign a release (see the comment at the top of this workflow)."
           }
+          New-Item -ItemType Directory -Path signing | Out-Null
+          [IO.File]::WriteAllBytes("$PWD\signing\CodexBarWin.pfx", [Convert]::FromBase64String($env:SIGNING_PFX_BASE64))
+          $password = ConvertTo-SecureString -String $env:SIGNING_PFX_PASSWORD -Force -AsPlainText
+          $cert = Import-PfxCertificate -FilePath signing/CodexBarWin.pfx -Password $password -CertStoreLocation "Cert:\CurrentUser\My" |
+            Where-Object { $_.HasPrivateKey }
+          Remove-Item signing/CodexBarWin.pfx
+          if (@($cert).Count -ne 1) { throw "Signing PFX must contain exactly one certificate with a private key." }
 
           [xml]$manifest = Get-Content Package.appxmanifest -Raw
           if ($cert.Subject -ne $manifest.Package.Identity.Publisher) {
@@ -75,17 +60,6 @@ jobs:
           }
           Export-Certificate -Cert $cert -FilePath "signing/CodexBarWin-${{ github.ref_name }}-Certificate.cer" | Out-Null
           Copy-Item "signing/CodexBarWin-${{ github.ref_name }}-Certificate.cer" signing/CodexBarWin-Certificate.cer
-
-      - name: Upload shared signing material
-        if: steps.signing.outputs.mode == 'ephemeral'
-        uses: actions/upload-artifact@v4
-        with:
-          name: signing-material
-          path: |
-            signing/CodexBarWin.pfx
-            signing/password.txt
-          retention-days: 1
-          if-no-files-found: error
 
       - name: Upload public certificates
         uses: actions/upload-artifact@v4
@@ -133,13 +107,6 @@ jobs:
       - name: Restore dependencies
         run: dotnet restore CodexBarWin.csproj -p:Platform=${{ matrix.platform }}
 
-      - name: Download shared signing material
-        if: needs.cert.outputs.mode == 'ephemeral'
-        uses: actions/download-artifact@v4
-        with:
-          name: signing-material
-          path: signing
-
       - name: Download public certificates
         uses: actions/download-artifact@v4
         with:
@@ -185,15 +152,10 @@ jobs:
             Where-Object { $_.FullName -match "x64" } |
             Sort-Object { [version]($_.Directory.Parent.Name -replace '\.0$', '') } -Descending |
             Select-Object -First 1
-          if ($env:SIGNING_PFX_BASE64 -and $env:SIGNING_PFX_PASSWORD) {
-            # Decode the stable private key directly from secrets; it never travels through artifacts.
-            [IO.File]::WriteAllBytes("$PWD\signing\CodexBarWin.pfx", [Convert]::FromBase64String($env:SIGNING_PFX_BASE64))
-            $signingPassword = $env:SIGNING_PFX_PASSWORD
-          } else {
-            $signingPassword = [IO.File]::ReadAllText("$PWD\signing\password.txt")
-            Write-Output "::add-mask::$signingPassword"
-          }
-          if (-not $signingPassword) { throw "Missing signing password." }
+          if (-not ($env:SIGNING_PFX_BASE64 -and $env:SIGNING_PFX_PASSWORD)) { throw "Signing secrets are missing." }
+          # Decode the stable private key directly from secrets; it never travels through artifacts.
+          [IO.File]::WriteAllBytes("$PWD\signing\CodexBarWin.pfx", [Convert]::FromBase64String($env:SIGNING_PFX_BASE64))
+          $signingPassword = $env:SIGNING_PFX_PASSWORD
           # Handle native failures explicitly so transient timestamp failures can be retried.
           $PSNativeCommandUseErrorActionPreference = $false
           for ($attempt = 1; $attempt -le 3; $attempt++) {
@@ -332,24 +294,3 @@ jobs:
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  cleanup:
-    needs: [cert, build, release]
-    if: ${{ always() }}
-    runs-on: ubuntu-latest
-    permissions:
-      actions: write
-
-    steps:
-      - name: Delete throwaway signing material
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          artifact_ids=$(gh api --paginate "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts" \
-            --jq '.artifacts[] | select(.name == "signing-material") | .id')
-          while IFS= read -r artifact_id; do
-            if [ -n "$artifact_id" ]; then
-              gh api --method DELETE "repos/${{ github.repository }}/actions/artifacts/$artifact_id"
-            fi
-          done <<< "$artifact_ids"

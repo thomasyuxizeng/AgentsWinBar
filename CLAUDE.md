@@ -11,7 +11,7 @@ Windows 11 WinUI 3 app for AI coding tool usage monitoring. Frontend for [CodexB
 ## Commands
 
 ```bash
-dotnet build -c Release -p:Platform=x64                          # Build
+dotnet build CodexBarWin.csproj -c Release -p:Platform=x64 -p:PublishReadyToRun=false   # Build
 dotnet test CodexBarWin.Tests.Unit -c Debug -p:Platform=x64      # Test
 dotnet restore CodexBarWin.sln                                   # Restore
 ```
