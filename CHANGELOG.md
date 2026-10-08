@@ -7,7 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-10-08
+
 ### Fixed
+- Cost totals that finished before a scan was cancelled (for example by closing the dashboard) are now saved too, and kept totals older than 7 days are no longer shown.
+- `install.ps1` no longer mistakes WSL's own error messages for shell noise, and a rerun before the reboot that enabling WSL needs no longer asks for admin rights again.
 - Claude usage could stay hours out of date while the dashboard said "Fetched 2m ago". An expired WSL sign-in token was treated as a rate limit, and the route that refreshes it was skipped for 6 hours after one failure. Expired tokens now go straight to that route, it is retried after 30 minutes, the real error is shown instead of "rate limited", and the dashboard shows "Data from <time>" and marks the provider stale when a reading is more than 15 minutes older than its fetch.
 - `install.ps1` could report success without the Claude sign-in on a fresh install (its first check left the shim answering "rate limited"); it now checks `claude auth status` and clears the shim's cooldown before each check.
 - `install.ps1` reported a needed reboot as an admin failure on PCs without WSL, treated a missing ("Absent") Windows feature as a pending reboot, and accepted command output that the app can't parse (for example text printed by `~/.bashrc` before the JSON). The admin step now also reports its actual error.

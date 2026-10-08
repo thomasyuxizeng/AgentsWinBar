@@ -238,7 +238,9 @@ public class CodexBarService : ICodexBarService
                     }
                 }
             }
-            else await SaveCostStoreAsync();
+            // Results that completed before a cancellation (e.g. the dashboard closed mid-scan) are complete and
+            // worth keeping; the snapshot only ever holds complete results.
+            await SaveCostStoreAsync();
             _costGate.Release();
         }
     }
@@ -251,6 +253,8 @@ public class CodexBarService : ICodexBarService
         var fetchedUtc = data.FetchedAt.Kind == DateTimeKind.Local
             ? data.FetchedAt.ToUniversalTime()
             : DateTime.SpecifyKind(data.FetchedAt, DateTimeKind.Utc);
+        // The same limit as on disk: week-old totals are no longer a useful stand-in.
+        if (now.UtcDateTime - fetchedUtc > CostCacheStore.MaxAge) return null;
         if (TimeZoneInfo.ConvertTimeFromUtc(fetchedUtc, zone).Date == TimeZoneInfo.ConvertTime(now, zone).Date) return data;
         return data with { TodayCostUSD = 0, TodayTokens = 0 };
     }

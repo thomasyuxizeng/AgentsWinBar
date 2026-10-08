@@ -475,6 +475,39 @@ public class CodexBarServiceTests
     }
 
     [TestMethod]
+    public async Task GetCostsAsync_CanceledAfterOneProviderCompleted_StillSavesThatResult()
+    {
+        var store = new MemoryCostStore();
+        _mockWslService.BatchHandler = async (_, completed, ct) =>
+        {
+            completed!(0, CostResult("codex", tokens: 500));
+            await Task.Delay(Timeout.Infinite, ct); // Claude is still scanning when the dashboard closes.
+            return [];
+        };
+        var service = StoredCostService(store, new CostClock());
+
+        await foreach (var (provider, cost) in service.GetCostsAsync(["codex", "claude"]))
+        {
+            provider.Should().Be("codex");
+            cost!.Last30DaysTokens.Should().Be(500);
+            break; // Disposing the stream cancels the scan, as closing the dashboard does.
+        }
+
+        store.Saves.Should().ContainSingle().Which.Keys.Should().Equal("codex");
+    }
+
+    [TestMethod]
+    public async Task GetCostAsync_LastGoodOlderThanSevenDays_IsNoLongerServed()
+    {
+        var clock = new CostClock(); var service = CostService(clock);
+        SetCostResponse();
+        await service.GetCostAsync("claude");
+        clock.Now += TimeSpan.FromDays(8);
+        SetCostResponse(success: false, json: "Command timed out");
+        (await service.GetCostAsync("claude")).Should().BeNull();
+    }
+
+    [TestMethod]
     public async Task GetCostsAsync_DeveloperModeOrDisabled_NeitherLoadsNorSavesStore()
     {
         var store = new MemoryCostStore();

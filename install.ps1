@@ -153,8 +153,11 @@ function Test-Usage([string] $Provider) {
     $result = Wsl $command -Interactive -Timeout 180
     # The app deserializes stdout from its first character, so a .bashrc echo or Ubuntu's sudo banner in
     # front of valid JSON still leaves the app with no data.
+    # wsl.exe prints its own errors (e.g. WSL_E_DISTRO_NOT_FOUND) on stdout with a failing exit code; those are
+    # not shell noise, so only a successful run or JSON that starts later in the output counts.
     $trimmed = $result.Output.TrimStart()
-    if ($trimmed -and -not ($trimmed.StartsWith('[') -or $trimmed.StartsWith('{'))) { return 'noise' }
+    if ($trimmed -and -not ($trimmed.StartsWith('[') -or $trimmed.StartsWith('{')) -and
+        ($result.Code -eq 0 -or $trimmed.IndexOf('[') -gt 0)) { return 'noise' }
     $status = 'none'
     $rateLimitPattern = '(?i)rate[\s_-]*limit|too many requests|\b429\b'
     $authPattern = '(?i)"kind"\s*:\s*"(?:auth|authentication)"|\b(?:401|403|unauthorized|forbidden)\b|(?:log[\s_-]*in|sign[\s_-]*in|authentication)\s+(?:is\s+)?required|(?:expired|invalid)\s+(?:credentials?|tokens?)|(?:credentials?|tokens?)\s+(?:have\s+|has\s+|is\s+)?(?:expired|invalid)'
@@ -329,9 +332,10 @@ try {
     $features = @(Get-CimInstance Win32_OptionalFeature -ErrorAction SilentlyContinue -ErrorVariable +featureErrors | Where-Object { $_.Name -in @('Microsoft-Windows-Subsystem-Linux', 'VirtualMachinePlatform') })
     # Win32_OptionalFeature.InstallState: 1 Enabled, 2 Disabled, 3 Absent (payload removed), 4 Unknown.
     # A feature enabled but not yet active shows as 1 while Windows has a reboot pending.
-    $enableWsl = (-not $SkipWsl) -and (($wslStatus.Code -ne 0 -and -not $distros.Count) -or @($features | Where-Object { $_.InstallState -in @(2, 3) }).Count -gt 0)
     $rebootPending = (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending') -or (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired')
     $featurePending = $rebootPending -and $wslStatus.Code -ne 0 -and @($features | Where-Object { $_.InstallState -eq 1 }).Count -gt 0
+    # A rerun before the reboot that WSL's enablement needs goes straight to the reboot verdict, without a second UAC.
+    $enableWsl = (-not $SkipWsl) -and -not $featurePending -and (($wslStatus.Code -ne 0 -and -not $distros.Count) -or @($features | Where-Object { $_.InstallState -in @(2, 3) }).Count -gt 0)
     $wslRuns = $false
     $defaultRuns = $false
     if ($defaultName) { $defaultRuns = (Invoke-Native 'wsl.exe' @('-d', $defaultName, '--exec', 'true')).Code -eq 0; $wslRuns = $defaultRuns }
@@ -350,7 +354,7 @@ try {
     if ($wslProbeBlocked) { $wslDescription = "modern=$wslModern; distro state unverified: WSL returned E_ACCESSDENIED; registered/default distro queries may be hidden by the agent sandbox" }
     $runtimeDescription = "matching current-user package visible=$runtimePresent"
     if ($wslProbeBlocked -and -not $runtimePresent) { $runtimeDescription += ' (absence is inconclusive in this restricted process)' }
-    Phase 'Preflight' "Windows build $build; OS $arch; app $installedVersion; runtime 1.8 $runtimeDescription; WSL $wslDescription; Windows reboot pending=$rebootPending."
+    Phase 'Preflight' "Windows build $build; OS $arch; app $installedVersion; runtime $runtimeName $runtimeDescription; WSL $wslDescription; Windows reboot pending=$rebootPending."
     if ($wslProbeBlocked -and -not $SkipWsl -and -not $DryRun) { Fail 50 'WSL access was denied in this process. Run the same command in ordinary Windows PowerShell outside the agent sandbox; no installation state has been changed.' }
     # Select/probe an existing usable candidate before any administrator/system action,
     # including when Docker is the default and Ubuntu is registered beside it.
@@ -411,7 +415,7 @@ try {
             if ($signature.SignerCertificate) { $trustPlan = 'present=' + [string](Test-Path ('Cert:\LocalMachine\TrustedPeople\' + $signature.SignerCertificate.Thumbprint)) + ' (package will be checksum/signature verified before use)' }
         }
         Phase 'Download / signer' "Would download/verify SHA256 for $assetName using $checksumName (local MSIX overrides download). Signer trust: $trustPlan."
-        $enablePlan = [string]$enableWsl; $updatePlan = [string](-not $SkipWsl -and -not $wslModern)
+        $enablePlan = [string]$enableWsl; $updatePlan = [string](-not $SkipWsl -and -not $wslModern -and -not $enableWsl)
         if ($wslProbeBlocked) { $enablePlan = 'unverified'; $updatePlan = 'unverified' }
         Phase 'Elevation' "At most one UAC: certificate if untrusted; WSL enable=$enablePlan; WSL update=$updatePlan; runtime install only if absent (visible=$runtimePresent), first try verified redistributable unelevated. WinGet is used for download because its install command can open another UAC."
         Phase 'Reboot' "Needed only if WSL enablement requires it; no auto-resume. Existing pending reboot=$rebootPending."

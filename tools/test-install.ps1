@@ -103,6 +103,8 @@ function Check-Usage([string] $Name, [string] $Json, [string] $Expected, [int] $
 }
 Check-Usage 'sudo banner before JSON is noise' ("To run a command as administrator (user `"root`"), use `"sudo <command>`".`n" + '[{"provider":"codex","usage":{"primary":{"usedPercent":5}}}]') 'noise'
 Check-Usage 'leading whitespace is not noise' ("`n  " + '[{"provider":"codex","usage":{"primary":{"usedPercent":5}}}]') 'live'
+Check-Usage 'wsl.exe error on stdout is not noise' 'There is no distribution with the supplied name. Error code: Wsl/Service/WSL_E_DISTRO_NOT_FOUND' 'none' -1
+Check-Usage 'banner before JSON on a failing run is noise' ("Welcome!`n" + '[{"provider":"codex","usage":{"primary":{"usedPercent":5}}}]') 'noise' 1
 
 # Claude: the sign-in state comes from `claude auth status` first; probes clear the shim's cooldown markers.
 $script:mockAuthCode = 4
