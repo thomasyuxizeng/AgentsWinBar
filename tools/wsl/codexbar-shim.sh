@@ -103,7 +103,9 @@ for e in d:
             x["resetDescription"] = "Resets in " + (f"{dd}d {hh}h" if dd else f"{hh}h {mm}m")
 print(json.dumps(d))
 '
-    exit ${PIPESTATUS[0]}
+    pipeline_status=("${PIPESTATUS[@]}")
+    [ "${pipeline_status[0]}" -eq 0 ] || exit "${pipeline_status[0]}"
+    exit "${pipeline_status[1]}"
   fi
 fi
 
@@ -164,7 +166,7 @@ case " $* " in *" --provider claude "*)
     else
       write_state "$CLI_BROKEN" ''
       # With OAuth in its rate-limit cooldown, the CLI's error is the most current explanation.
-      [ $oauth_tried -eq 0 ] && [ -n "$r" ] && o=$r
+      if [ $oauth_tried -eq 0 ]; then o=$r; rc=$rc2; fi
     fi
   fi
 

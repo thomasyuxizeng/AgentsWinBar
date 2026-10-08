@@ -26,6 +26,20 @@ function Assert-Equal($Actual, $Expected, [string] $Name) {
     if ($Actual -cne $Expected) { throw "Failed: $Name" }
 }
 
+# A CRLF checkout must not hand bash carriage returns (bash rejects 'set -e\r' with exit 2).
+$realWsl = $ast.Find({
+    param($node)
+    $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Wsl'
+}, $true)
+if (-not $realWsl) { throw 'Installer Wsl helper was not found.' }
+& {
+    function Invoke-Native([string] $File, [string[]] $Arguments, [int] $Timeout) { $Arguments }
+    . ([scriptblock]::Create($realWsl.Extent.Text))
+    $passed = @(Wsl "set -e`r`necho ok`r`n" 'Ubuntu' -Root)
+    Assert-Equal $passed[-1] "set -e`necho ok`n" 'Wsl strips carriage returns from bash scripts'
+    Assert-Equal ($passed[0..($passed.Count - 2)] -join ' ') '-d Ubuntu -u root --exec bash -c' 'Wsl argument order'
+}
+
 $nativeCases = @(
     @{ Value = ''; Expected = '""' },
     @{ Value = 'hello world'; Expected = '"hello world"' },
@@ -103,6 +117,9 @@ function Check-Usage([string] $Name, [string] $Json, [string] $Expected, [int] $
 }
 Check-Usage 'sudo banner before JSON is noise' ("To run a command as administrator (user `"root`"), use `"sudo <command>`".`n" + '[{"provider":"codex","usage":{"primary":{"usedPercent":5}}}]') 'noise'
 Check-Usage 'leading whitespace is not noise' ("`n  " + '[{"provider":"codex","usage":{"primary":{"usedPercent":5}}}]') 'live'
+Check-Usage 'EXIT trap after JSON is noise' ('[{"provider":"codex","usage":{"primary":{"usedPercent":5}}}]' + "`nGoodbye!") 'noise'
+Check-Usage 'trailing whitespace is not noise' ('[{"provider":"codex","usage":{"primary":{"usedPercent":5}}}]' + " `r`n`t") 'live'
+Check-Usage 'trailing noise on a failing run is noise' ('[{"provider":"codex","usage":{"primary":{"usedPercent":5}}}]' + "`nGoodbye!") 'noise' 1
 Check-Usage 'wsl.exe error on stdout is not noise' 'There is no distribution with the supplied name. Error code: Wsl/Service/WSL_E_DISTRO_NOT_FOUND' 'none' -1
 Check-Usage 'banner before JSON on a failing run is noise' ("Welcome!`n" + '[{"provider":"codex","usage":{"primary":{"usedPercent":5}}}]') 'noise' 1
 
@@ -184,5 +201,129 @@ $packagePath = New-TestPackage 'Microsoft.WindowsAppRuntime.evil; rm'
 $rejected = $false
 try { [void](Read-Package $packagePath) } catch { $rejected = $true } finally { Remove-Item -LiteralPath $packagePath -Force }
 if (-not $rejected) { throw 'Failed: unexpected runtime dependency name was accepted' }
+# Evaluate isolated installer statements with mocks, never the installer body or elevation.
+$adminAssignment = $ast.Find({
+    param($node)
+    $node -is [System.Management.Automation.Language.AssignmentStatementAst] -and $node.Left.Extent.Text -eq '$adminScript'
+}, $true)
+$adminText = $adminAssignment.Right.Expression.Value
+$adminAst = [System.Management.Automation.Language.Parser]::ParseInput($adminText, [ref]$tokens, [ref]$parseErrors)
+if ($parseErrors.Count) { throw 'Embedded administrator helper has PowerShell syntax errors.' }
+# The final exit belongs to the real helper process; leave it out of these in-process mocks.
+$adminBody = $adminText.Substring(0, $adminAst.EndBlock.Statements[-1].Extent.StartOffset)
+$testStage = Join-Path ([IO.Path]::GetTempPath()) ('cbw-json-' + [Guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $testStage | Out-Null
+try {
+    # BOM-less UTF-8 reproduces files written by PowerShell 7 and read by Windows PowerShell 5.1.
+    $unicodePath = 'C:\Users\' + [char]0xD55C + [char]0xAE00 + '\runtime.exe'
+    $statePath = Join-Path $testStage 'state.json'
+    $resultPath = Join-Path $testStage 'admin-result.json'
+    $json = @{ parameters = @{ MsixPath = $unicodePath } } | ConvertTo-Json -Depth 4
+    [IO.File]::WriteAllText($statePath, $json, (New-Object Text.UTF8Encoding($false)))
+    [IO.File]::WriteAllText($resultPath, $json, (New-Object Text.UTF8Encoding($false)))
+    $jsonReads = @($ast.FindAll({
+        param($node)
+        $node -is [System.Management.Automation.Language.CommandAst] -and $node.GetCommandName() -eq 'Get-Content' -and
+        $node.Extent.Text -match '\$(statePath|resultPath)\b'
+    }, $true))
+    Assert-Equal $jsonReads.Count 3 'state and administrator result readers covered'
+    foreach ($reader in $jsonReads) {
+        $read = & ([scriptblock]::Create($reader.Extent.Text)) | ConvertFrom-Json
+        Assert-Equal $read.parameters.MsixPath $unicodePath 'BOM-less UTF-8 state/result path'
+    }
+    function Get-AuthenticodeSignature([string] $LiteralPath) {
+        Assert-Equal $LiteralPath $unicodePath 'administrator receives Unicode runtime path'
+        [pscustomobject]@{ Status = 'Valid'; SignerCertificate = [pscustomobject]@{ Subject = 'O=Microsoft Corporation' } }
+    }
+    function Start-Process([string] $FilePath, [string] $ArgumentList, [switch] $PassThru, [switch] $Wait) {
+        Assert-Equal $FilePath $unicodePath 'administrator starts Unicode runtime path'
+        [pscustomobject]@{ ExitCode = $script:mockRuntimeCode }
+    }
+    $Stage = $testStage
+    $planJson = @{ InstallRuntime = $true; Runtime = $unicodePath } | ConvertTo-Json
+    [IO.File]::WriteAllText((Join-Path $Stage 'admin-plan.json'), $planJson, (New-Object Text.UTF8Encoding($false)))
+    foreach ($code in @(0, 3010, 5)) {
+        $script:mockRuntimeCode = $code
+        . ([scriptblock]::Create($adminBody)) -Stage $testStage
+        $adminResult = Get-Content -Raw -Encoding UTF8 -LiteralPath $resultPath | ConvertFrom-Json
+        Assert-Equal $adminResult.Success ($code -in @(0, 3010)) "administrator runtime success $code"
+        Assert-Equal $adminResult.Reboot ($code -eq 3010) "administrator runtime reboot $code"
+    }
+} finally { Remove-Item -LiteralPath $testStage -Recurse -Force }
+
+# Both original-user runtime invocations must propagate 3010 to the common reboot decision.
+$runtimeChecks = @($ast.FindAll({
+    param($node)
+    $node -is [System.Management.Automation.Language.IfStatementAst] -and
+    $node.Clauses[0].Item1.Extent.Text -match '^\$(attempt|registerRuntime)\.Code -eq 3010$'
+}, $true))
+Assert-Equal $runtimeChecks.Count 2 'both unelevated runtime reboot checks covered'
+foreach ($check in $runtimeChecks) {
+    foreach ($code in @(0, 3010)) {
+        $attempt = $registerRuntime = [pscustomobject]@{ Code = $code }
+        $runtimeReboot = $false
+        . ([scriptblock]::Create($check.Extent.Text))
+        Assert-Equal $runtimeReboot ($code -eq 3010) "original-user runtime reboot $code"
+    }
+}
+$rebootDecision = $ast.Find({
+    param($node)
+    $node -is [System.Management.Automation.Language.IfStatementAst] -and
+    $node.Clauses[0].Item1.Extent.Text -like '$runtimeReboot -or *$enabledNeedsReboot*'
+}, $true)
+$runtimeReboot = $true; $adminResult = [pscustomobject]@{ Reboot = $false }
+$enabledNeedsReboot = $false; $featurePending = $false; $wslRuns = $true
+Assert-Equal (& ([scriptblock]::Create($rebootDecision.Clauses[0].Item1.Extent.Text))) $true 'original-user reboot reaches setup reboot decision'
+$registration = $ast.Find({
+    param($node)
+    $node -is [System.Management.Automation.Language.IfStatementAst] -and
+    $node.Clauses[0].Item1.Extent.Text -like '$runtimeAdmin -and *Runtime-Installed*'
+}, $true)
+function Runtime-Installed { $false }
+function Invoke-Native([string] $File, [string[]] $Arguments, [int] $Timeout, [switch] $NoElevation) {
+    Assert-Equal ([bool]$NoElevation) $true 'runtime registration stays unelevated'
+    $script:runtimeCalls++
+    [pscustomobject]@{ Code = 3010 }
+}
+$runtimeAdmin = $true; $runtimeInstaller = 'mock-runtime.exe'
+foreach ($reason in @('none', 'runtime', 'admin', 'wsl', 'features')) {
+    $runtimeReboot = $reason -eq 'runtime'
+    $adminResult = [pscustomobject]@{ Reboot = ($reason -eq 'admin') }
+    $enabledNeedsReboot = $reason -eq 'wsl'
+    $featurePending = $reason -eq 'features'; $wslRuns = $false
+    $script:runtimeCalls = 0
+    . ([scriptblock]::Create($registration.Extent.Text))
+    Assert-Equal $script:runtimeCalls ([int]($reason -eq 'none')) "registration skips known reboot: $reason"
+    Assert-Equal (& ([scriptblock]::Create($rebootDecision.Clauses[0].Item1.Extent.Text))) $true "runtime registration or existing reboot reaches setup: $reason"
+}
+
+# Exercise the actual pending filters and noise guards before and after the sign-in window.
+$pendingAssignments = @($ast.FindAll({
+    param($node)
+    $node -is [System.Management.Automation.Language.AssignmentStatementAst] -and $node.Left.Extent.Text -eq '$pending'
+}, $true))
+Assert-Equal $pendingAssignments.Count 2 'both provider readiness filters covered'
+$Providers = @('codex', 'claude', 'gemini')
+$usageStates = @{ codex = 'live'; claude = 'stale'; gemini = 'noise' }
+foreach ($assignment in $pendingAssignments) {
+    . ([scriptblock]::Create($assignment.Extent.Text))
+    Assert-Equal ($pending -join ',') 'gemini' 'only live and stale are ready'
+    $usageStates.gemini = 'none'
+    . ([scriptblock]::Create($assignment.Extent.Text))
+    Assert-Equal ($pending -join ',') 'gemini' 'missing usage stays pending'
+    $usageStates.gemini = 'noise'
+}
+$noiseGuards = @($ast.FindAll({
+    param($node)
+    $node -is [System.Management.Automation.Language.IfStatementAst] -and $node.Clauses[0].Item1.Extent.Text -eq '$noisy.Count'
+}, $true))
+Assert-Equal $noiseGuards.Count 2 'noise checked again after sign-in'
+function Fail([int] $Code, [string] $Message) { throw "setup-failure-${Code}: $Message" }
+$noisy = @('gemini')
+foreach ($guard in $noiseGuards) {
+    $rejected = $false
+    try { . ([scriptblock]::Create($guard.Extent.Text)) } catch { $rejected = $_.Exception.Message -like 'setup-failure-1: *gemini*' }
+    Assert-Equal $rejected $true 'shell noise fails setup before success reporting'
+}
 Write-Host 'Installer helper mock tests passed.'
 exit 0

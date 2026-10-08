@@ -103,6 +103,25 @@ public class CacheServiceTests
     }
 
     [TestMethod]
+    public async Task LoadAsync_ExtraWindowHasNullNestedWindow_SkipsCorruptProviderAndRestoresValidSibling()
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(_cachePath)!);
+        var now = DateTime.UtcNow.ToString("O");
+        await File.WriteAllTextAsync(_cachePath, $$$"""
+            {"timestamp":"{{{now}}}","items":{
+              "claude":{"provider":"claude","fetchedAt":"{{{now}}}","extraWindows":[{"key":"quota","title":"Quota","window":null}]},
+              "codex":{"provider":"codex","fetchedAt":"{{{now}}}","extraWindows":[{"key":"quota","title":"Quota","window":{"reportedPercent":12}}]}
+            }}
+            """);
+
+        await _cacheService.LoadAsync();
+
+        _cacheService.Get("claude").Should().BeNull();
+        _cacheService.GetAll().Should().ContainSingle().Which.Key.Should().Be("codex");
+        _cacheService.Get("codex")!.ExtraWindows.Single().Window.Percent.Should().Be(12);
+    }
+
+    [TestMethod]
     [DataRow("not json")]
     [DataRow("null")]
     [DataRow("{}")]

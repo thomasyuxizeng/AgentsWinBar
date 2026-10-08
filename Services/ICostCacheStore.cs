@@ -6,5 +6,5 @@ namespace CodexBarWin.Services;
 public interface ICostCacheStore
 {
     Task<IReadOnlyDictionary<string, CostData>> LoadAsync(CancellationToken ct = default);
-    Task SaveAsync(IReadOnlyDictionary<string, CostData> items, CancellationToken ct = default);
+    Task<bool> SaveAsync(IReadOnlyDictionary<string, CostData> items, CancellationToken ct = default);
 }

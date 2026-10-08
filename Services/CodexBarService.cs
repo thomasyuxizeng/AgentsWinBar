@@ -119,6 +119,7 @@ public class CodexBarService : ICodexBarService
         if (normalized.Length == 0 || !CostsEnabled) return;
         await _costGate.WaitAsync(ct);
         var previousAttempts = new Dictionary<string, (DateTimeOffset AttemptedAt, CostData? Data)?>();
+        var completedProviders = new HashSet<string>(StringComparer.Ordinal);
         try
         {
             if (!CostsEnabled) return;
@@ -139,7 +140,7 @@ public class CodexBarService : ICodexBarService
                 lock (_costCache)
                 {
                     if (!forceRefresh && _costCache.TryGetValue(provider, out var cached) && now - cached.AttemptedAt < CostCacheTtl)
-                        published = cached.Data ?? LastGoodCost(provider, now);
+                        published = cached.Data != null ? NormalizeTodayCost(cached.Data, now) : LastGoodCost(provider, now);
                     else
                     {
                         previousAttempts[provider] = _costCache.TryGetValue(provider, out var prior) ? prior : null;
@@ -166,9 +167,12 @@ public class CodexBarService : ICodexBarService
                 if (index < 0 || index >= due.Count) throw new InvalidDataException("WSL batch returned an invalid command index");
                 if (completed[index]) return;
                 completed[index] = true;
-                var data = CostsEnabled ? InterpretCostResult(due[index], result, now) : null;
-                if (data == null && CostsEnabled)
+                var costsEnabled = CostsEnabled;
+                var data = costsEnabled ? InterpretCostResult(due[index], result, now) : null;
+                if (data == null && costsEnabled)
                     lock (_costCache) data = LastGoodCost(due[index], now);
+                if (costsEnabled)
+                    lock (_costCache) completedProviders.Add(due[index]);
                 onCompleted(due[index], data);
             }
             async Task ScanIndividuallyAsync(int index)
@@ -178,7 +182,7 @@ public class CodexBarService : ICodexBarService
                 deadline.CancelAfter(commands[index].Timeout);
                 try
                 {
-                    var result = await _wslService.ExecuteAsync(commands[index].Command, deadline.Token);
+                    var result = await _wslService.ExecuteAsync(commands[index].Command, commands[index].Timeout, deadline.Token);
                     ct.ThrowIfCancellationRequested();
                     Complete(index, result);
                 }
@@ -233,6 +237,7 @@ public class CodexBarService : ICodexBarService
                 {
                     foreach (var (provider, previous) in previousAttempts)
                     {
+                        if (completedProviders.Contains(provider)) continue;
                         if (previous is { } prior) _costCache[provider] = prior;
                         else _costCache.Remove(provider);
                     }
@@ -249,12 +254,20 @@ public class CodexBarService : ICodexBarService
     private CostData? LastGoodCost(string provider, DateTimeOffset now)
     {
         if (!_lastGoodCost.TryGetValue(provider, out var data)) return null;
-        var zone = _timeProvider.LocalTimeZone;
         var fetchedUtc = data.FetchedAt.Kind == DateTimeKind.Local
             ? data.FetchedAt.ToUniversalTime()
             : DateTime.SpecifyKind(data.FetchedAt, DateTimeKind.Utc);
         // The same limit as on disk: week-old totals are no longer a useful stand-in.
         if (now.UtcDateTime - fetchedUtc > CostCacheStore.MaxAge) return null;
+        return NormalizeTodayCost(data, now);
+    }
+
+    private CostData NormalizeTodayCost(CostData data, DateTimeOffset now)
+    {
+        var zone = _timeProvider.LocalTimeZone;
+        var fetchedUtc = data.FetchedAt.Kind == DateTimeKind.Local
+            ? data.FetchedAt.ToUniversalTime()
+            : DateTime.SpecifyKind(data.FetchedAt, DateTimeKind.Utc);
         if (TimeZoneInfo.ConvertTimeFromUtc(fetchedUtc, zone).Date == TimeZoneInfo.ConvertTime(now, zone).Date) return data;
         return data with { TodayCostUSD = 0, TodayTokens = 0 };
     }
@@ -269,8 +282,16 @@ public class CodexBarService : ICodexBarService
             snapshot = new Dictionary<string, CostData>(_lastGoodCost, StringComparer.Ordinal);
             _costStoreDirty = false;
         }
-        try { await _costStore.SaveAsync(snapshot); }
-        catch (Exception ex) { _logger.LogDebug(ex, "Cost cache could not be saved"); }
+        try
+        {
+            if (!await _costStore.SaveAsync(snapshot))
+                lock (_costCache) _costStoreDirty = true;
+        }
+        catch (Exception ex)
+        {
+            lock (_costCache) _costStoreDirty = true;
+            _logger.LogDebug(ex, "Cost cache could not be saved");
+        }
     }
 
     private CostData? InterpretCostResult(string provider, WslResult result, DateTimeOffset attemptedAt)
@@ -332,7 +353,8 @@ public class CodexBarService : ICodexBarService
                 return _cacheService.Get(provider);
             }
 
-            var data = ParseUsageJson(result.Output, provider);
+            var data = ParseUsageJsonArray(result.Output).FirstOrDefault(data =>
+                string.Equals(data.Provider, normalizedProvider, StringComparison.OrdinalIgnoreCase));
 
             if (data != null)
             {
@@ -598,25 +620,6 @@ public class CodexBarService : ICodexBarService
         catch
         {
             return false;
-        }
-    }
-
-    private UsageData? ParseUsageJson(string json, string provider)
-    {
-        try
-        {
-            if (string.IsNullOrWhiteSpace(json))
-            {
-                return null;
-            }
-
-            var dto = JsonSerializer.Deserialize(json, AppJsonSerializerContext.Default.UsageDataDto);
-            return dto?.ToUsageData() ?? new UsageData { Provider = provider };
-        }
-        catch (JsonException ex)
-        {
-            _logger.LogError(ex, "Failed to parse usage JSON for {Provider}", provider);
-            return null;
         }
     }
 

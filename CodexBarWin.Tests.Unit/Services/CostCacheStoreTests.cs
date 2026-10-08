@@ -44,7 +44,8 @@ public class CostCacheStoreTests
     public async Task SaveAsync_ThenLoadAsync_RoundTripsFullResult()
     {
         var store = Store();
-        await store.SaveAsync(new Dictionary<string, CostData> { ["claude"] = Cost("claude", 790_206_937, Now.AddMinutes(-5)) });
+        (await store.SaveAsync(new Dictionary<string, CostData> { ["claude"] = Cost("claude", 790_206_937, Now.AddMinutes(-5)) }))
+            .Should().BeTrue();
 
         var loaded = await Store().LoadAsync();
 
@@ -97,6 +98,19 @@ public class CostCacheStoreTests
     }
 
     [TestMethod]
+    public async Task SaveAsync_TargetIsDirectory_ReturnsFalseAndAllowsRetryAfterRepair()
+    {
+        var store = Store();
+        Directory.CreateDirectory(store.FilePath);
+        var costs = new Dictionary<string, CostData> { ["claude"] = Cost("claude", 5, Now) };
+
+        (await store.SaveAsync(costs)).Should().BeFalse();
+        Directory.Delete(store.FilePath);
+        (await store.SaveAsync(costs)).Should().BeTrue();
+        (await store.LoadAsync()).Should().ContainSingle().Which.Value.Last30DaysTokens.Should().Be(5);
+    }
+
+    [TestMethod]
     public async Task DeveloperMode_NeitherReadsNorWritesTheFile()
     {
         var store = Store();
@@ -104,7 +118,8 @@ public class CostCacheStoreTests
         _settings.Settings.DeveloperModeEnabled = true;
 
         (await store.LoadAsync()).Should().BeEmpty();
-        await store.SaveAsync(new Dictionary<string, CostData> { ["claude"] = Cost("claude", 9, Now) });
+        (await store.SaveAsync(new Dictionary<string, CostData> { ["claude"] = Cost("claude", 9, Now) }))
+            .Should().BeFalse();
 
         _settings.Settings.DeveloperModeEnabled = false;
         (await store.LoadAsync()).Keys.Should().Equal("codex");

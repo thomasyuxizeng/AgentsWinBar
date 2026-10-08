@@ -140,7 +140,7 @@ public class CacheService : ICacheService
                 // An entry that omits extraWindows deserializes it as null; treat that as none rather than as corruption.
                 data = data with { ExtraWindows = data.ExtraWindows ?? [] };
                 if (!string.Equals(item.Name, data.Provider, StringComparison.OrdinalIgnoreCase)
-                    || data.ExtraWindows.Any(window => window == null)
+                    || data.ExtraWindows.Any(window => window == null || window.Window == null)
                     || data.HasError || data.CommandNotFound || data.IsLoading || !IsFresh(data.FetchedAt)) continue;
                 _cache[ProviderConstants.ValidateAndNormalize(item.Name)] = data;
             }

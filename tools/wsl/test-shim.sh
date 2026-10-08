@@ -132,4 +132,129 @@ output=$(OAUTH_OUT=$good OAUTH_EXIT=0 CLI_OUT='[{"provider":"claude","error":{"m
 set -e
 [[ "$(cat "$CALLS")" = cli ]]
 check "$output" 'cli says sign in'
-echo 'Shim fake-CLI tests passed.'
+# During OAuth cooldown with no cache, preserve CLI failures even with empty stdout.
+for cli_exit in 1 125 127; do
+  : > "$CALLS"; rm -f "$TMP"/claude-cache/*
+  touch "$TMP/claude-cache/codexbar-claude-$uid-oauth-cooldown"
+  set +e
+  output=$(OAUTH_OUT=$good OAUTH_EXIT=0 CLI_OUT='' CLI_EXIT=$cli_exit bash "$TMP/claude-shim" usage --provider claude --format json --source cli); rc=$?
+  set -e
+  [[ "$rc" -eq "$cli_exit" && -z "$output" && "$(cat "$CALLS")" = cli ]]
+done
+
+# Gemini must report transform failure when the real CLI succeeds, and retain CLI failures.
+mkdir "$TMP/transform-bin"
+cat > "$TMP/transform-bin/python3" <<'PYTHON'
+#!/usr/bin/env bash
+cat >/dev/null
+printf 'partial-transform-output\n'
+exit 43
+PYTHON
+chmod +x "$TMP/transform-bin/python3"
+for cli_exit in 0 125 127; do
+  set +e
+  output=$(PATH="$TMP/transform-bin:$PATH" FAKE_EXIT=$cli_exit bash "$TMP/shim" usage --provider gemini --format json); rc=$?
+  set -e
+  expected=$cli_exit; [ "$cli_exit" -ne 0 ] || expected=43
+  [[ "$rc" -eq "$expected" ]]
+  check "$output" 'partial-transform-output'
+done
+
+# Installer commands and destinations are redirected into TMP; no downloads or system writes.
+mkdir -p "$TMP/install-bin" "$TMP/install-fixture" "$TMP/archive/CodexBar_CodexBarCore.bundle"
+export REAL_CP="$(command -v cp)" REAL_INSTALL="$(command -v install)" REAL_MV="$(command -v mv)"
+export INSTALL_FIXTURE="$TMP/install-fixture" INSTALL_TARGET="$TMP/installed"
+export INSTALL_SHIM_SOURCE="$TMP/install-shim" INSTALL_LOG="$TMP/install-log"
+cat > "$TMP/archive/CodexBarCLI" <<'CLI'
+#!/usr/bin/env bash
+printf 'fixture-cli-version\n'
+CLI
+printf 'fixture-plugin\n' > "$TMP/archive/CodexBar_CodexBarCore.bundle/plugin"
+printf 'fixture-version\n' > "$TMP/archive/VERSION"
+chmod +x "$TMP/archive/CodexBarCLI"
+tar -czf "$INSTALL_FIXTURE/archive.tar.gz" -C "$TMP/archive" .
+sed "s|^REAL=.*|REAL=$INSTALL_TARGET/CodexBarCLI|" "$ROOT/codexbar-shim.sh" > "$INSTALL_SHIM_SOURCE"
+sed -e "s|^INSTALL_DIR=.*|INSTALL_DIR=$INSTALL_TARGET|" \
+    -e "s|/usr/local/bin/codexbar|$TMP/installed-link|g" "$ROOT/install.sh" > "$TMP/installer"
+cat > "$TMP/install-bin/curl" <<'CURL'
+#!/usr/bin/env bash
+dest=''
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = -o ]; then dest=$2; shift 2; else shift; fi
+done
+if [[ "$dest" = *.sha256 ]]; then
+  file=${dest##*/}; file=${file%.sha256}
+  digest=$(sha256sum "$INSTALL_FIXTURE/archive.tar.gz"); digest=${digest%% *}
+  case "$INSTALL_CASE" in
+    wrong-name) file=unrelated.tar.gz ;;
+    absolute-name) file="$INSTALL_FIXTURE/archive.tar.gz" ;;
+    traversal-name) file="../$file" ;;
+    wrong-digest) digest=$(printf '%064d' 0) ;;
+    binary-checksum) file="*$file" ;;
+  esac
+  printf '%s  %s\n' "$digest" "$file" > "$dest"
+  if [ "$INSTALL_CASE" = extra-entry ]; then printf '%s  unrelated.tar.gz\n' "$digest" >> "$dest"; fi
+else
+  "$REAL_CP" "$INSTALL_FIXTURE/archive.tar.gz" "$dest"
+fi
+CURL
+cat > "$TMP/install-bin/cp" <<'COPY'
+#!/usr/bin/env bash
+if [ "$INSTALL_CASE" = copy-failure ] && [ "${1:-}" = -a ]; then exit 41; fi
+exec "$REAL_CP" "$@"
+COPY
+cat > "$TMP/install-bin/install" <<'INSTALL'
+#!/usr/bin/env bash
+if [ "${3:-}" = "$INSTALL_SHIM_SOURCE" ]; then
+  [[ "$4" = "$INSTALL_TARGET"/.codexbar-shim.* ]] || { echo 'Shim was not staged in its destination directory' >&2; exit 42; }
+  [ "$(cat "$INSTALL_TARGET/codexbar-shim")" = old-shim ] || { echo 'Existing shim changed before staging completed' >&2; exit 42; }
+  printf 'shim-staged\n' >> "$INSTALL_LOG"
+  if [ "$INSTALL_CASE" = shim-stage-failure ]; then printf 'partial-shim\n' > "$4"; exit 42; fi
+fi
+exec "$REAL_INSTALL" "$@"
+INSTALL
+cat > "$TMP/install-bin/mv" <<'MOVE'
+#!/usr/bin/env bash
+if [ "${3:-}" = "$INSTALL_TARGET/codexbar-shim" ]; then
+  [[ "$2" = "$INSTALL_TARGET"/.codexbar-shim.* ]] || exit 42
+  printf 'shim-renamed\n' >> "$INSTALL_LOG"
+fi
+exec "$REAL_MV" "$@"
+MOVE
+cat > "$TMP/install-bin/codexbar" <<'CLI'
+#!/usr/bin/env bash
+printf 'wrong-path-cli\n' >> "$INSTALL_LOG"
+exit 99
+CLI
+ln -s "$TMP/transform-bin/python3" "$TMP/install-bin/python3"
+chmod +x "$TMP"/install-bin/{curl,cp,install,mv,codexbar}
+installer_run() {
+  rm -rf "$INSTALL_TARGET"; rm -f "$TMP/installed-link"; : > "$INSTALL_LOG"
+  mkdir "$INSTALL_TARGET"; printf 'old-shim\n' > "$INSTALL_TARGET/codexbar-shim"
+  PATH="$TMP/install-bin:$PATH" bash "$TMP/installer" "$INSTALL_SHIM_SOURCE"
+}
+for install_case in wrong-name absolute-name traversal-name wrong-digest extra-entry copy-failure shim-stage-failure; do
+  set +e
+  output=$(INSTALL_CASE=$install_case installer_run 2>&1); rc=$?
+  set -e
+  [[ "$rc" -ne 0 && "$(cat "$INSTALL_TARGET/codexbar-shim")" = old-shim ]]
+  [[ ! -e "$TMP/installed-link" ]]
+  [[ -z "$(find "$INSTALL_TARGET" -name '.codexbar-shim.*' -o -name '.CodexBarCLI.*')" ]]
+  case "$install_case" in
+    wrong-name|absolute-name|traversal-name) check "$output" 'Invalid checksum entry' ;;
+    wrong-digest) check "$output" 'Checksum mismatch' ;;
+    extra-entry) check "$output" 'exactly one entry' ;;
+    copy-failure) [[ ! -e "$INSTALL_TARGET/CodexBarCLI" ]] ;;
+    shim-stage-failure) [[ "$(cat "$INSTALL_LOG")" = shim-staged ]] ;;
+  esac
+done
+for install_case in success binary-checksum; do
+  output=$(INSTALL_CASE=$install_case installer_run)
+  check "$output" 'Installed: fixture-cli-version'
+  [[ "$(cat "$INSTALL_LOG")" = $'shim-staged\nshim-renamed' ]]
+  [[ -x "$INSTALL_TARGET/codexbar-shim" && -L "$TMP/installed-link" ]]
+  [[ "$(cat "$INSTALL_TARGET/CodexBar_CodexBarCore.bundle/plugin")" = fixture-plugin ]]
+  [[ -z "$(find "$INSTALL_TARGET" -name '.codexbar-shim.*' -o -name '.CodexBarCLI.*')" ]]
+done
+
+echo 'Shim and installer fake-CLI tests passed.'

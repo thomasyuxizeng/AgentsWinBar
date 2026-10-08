@@ -13,6 +13,11 @@ public interface IWslService
     Task<WslResult> ExecuteAsync(string command, CancellationToken ct = default);
 
     /// <summary>
+    /// Executes a command with its own timeout instead of the default WSL command timeout.
+    /// </summary>
+    Task<WslResult> ExecuteAsync(string command, TimeSpan timeout, CancellationToken ct = default);
+
+    /// <summary>
     /// Executes independent commands together, notifying callers as each completes.
     /// The returned results have the same order as the commands.
     /// </summary>

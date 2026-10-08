@@ -14,6 +14,8 @@ public class WslService : IWslService
     private readonly ISettingsService? _settingsService;
     private readonly string? _distro;
     private readonly IActivityLog? _activityLog;
+    private readonly TimeProvider _timeProvider = TimeProvider.System;
+    private readonly Func<string, CancellationToken, Task<WslResult>>? _commandExecutor;
 
     private TimeSpan Timeout => _settingsService != null
         ? ResolveCommandTimeout(_settingsService.Settings.Timeouts)
@@ -31,7 +33,7 @@ public class WslService : IWslService
             timeouts.CliProviderFirstFetchTimeoutSeconds,
             timeouts.CliProviderTimeoutSeconds);
 
-        // Cost scans also receive a minimum 60-second deadline, including individual fallbacks.
+        // Ordinary commands keep a minimum 60-second cap; cost scans supply their own longer timeout.
         return TimeSpan.FromSeconds(Math.Max(60, Math.Max(timeouts.WslCommandTimeoutSeconds, longestProviderTimeout)));
     }
 
@@ -48,7 +50,17 @@ public class WslService : IWslService
         _activityLog = activityLog;
     }
 
-    public async Task<WslResult> ExecuteAsync(string command, CancellationToken ct = default)
+    internal WslService(ILogger<WslService> logger, TimeProvider timeProvider,
+        Func<string, CancellationToken, Task<WslResult>> commandExecutor) : this(logger)
+    {
+        _timeProvider = timeProvider;
+        _commandExecutor = commandExecutor;
+    }
+
+    public Task<WslResult> ExecuteAsync(string command, CancellationToken ct = default) =>
+        ExecuteAsync(command, Timeout, ct);
+
+    public async Task<WslResult> ExecuteAsync(string command, TimeSpan timeout, CancellationToken ct = default)
     {
         _logger.LogDebug("Executing WSL command: {Command}", command);
 
@@ -77,12 +89,13 @@ public class WslService : IWslService
         psi.ArgumentList.Add("-ic");  // -i for interactive (loads .bashrc for Codex CLI)
         psi.ArgumentList.Add(shellScript);
 
-        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        cts.CancelAfter(Timeout);
+        using var deadline = new CancellationTokenSource(timeout, _timeProvider);
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct, deadline.Token);
 
         Process? process = null;
         try
         {
+            if (_commandExecutor != null) return await _commandExecutor(command, cts.Token);
             process = new Process { StartInfo = psi };
             process.Start();
 
@@ -107,11 +120,11 @@ public class WslService : IWslService
         }
         catch (OperationCanceledException) when (cts.IsCancellationRequested && !ct.IsCancellationRequested)
         {
-            _logger.LogWarning("WSL command timed out after {Timeout}s: {Command}", Timeout.TotalSeconds, command);
+            _logger.LogWarning("WSL command timed out after {Timeout}s: {Command}", timeout.TotalSeconds, command);
             return new WslResult
             {
                 Success = false,
-                Error = $"Command timed out after {Timeout.TotalSeconds} seconds",
+                Error = $"Command timed out after {timeout.TotalSeconds} seconds",
                 ExitCode = -1
             };
         }
@@ -209,7 +222,7 @@ public class WslService : IWslService
                 WslResult result;
                 try
                 {
-                    result = await ExecuteAsync(commands[i].Command, deadline.Token);
+                    result = await ExecuteAsync(commands[i].Command, commands[i].Timeout, deadline.Token);
                     ct.ThrowIfCancellationRequested();
                     if (deadline.IsCancellationRequested) result = TimedOutResult(result);
                 }

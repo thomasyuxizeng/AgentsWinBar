@@ -13,6 +13,7 @@ public class MockWslService : IWslService
     private List<string> _distros = ["Ubuntu"];
 
     public List<string> ExecutedCommands { get; } = [];
+    public List<TimeSpan> ExecutedCommandTimeouts { get; } = [];
     public List<IReadOnlyList<WslBatchCommand>> ExecutedBatches { get; } = [];
     public Func<IReadOnlyList<WslBatchCommand>, Action<int, WslResult>?, CancellationToken,
         Task<IReadOnlyList<WslResult>>>? BatchHandler { get; set; }
@@ -66,6 +67,12 @@ public class MockWslService : IWslService
             Output = "[]",
             ExitCode = 0
         });
+    }
+
+    public Task<WslResult> ExecuteAsync(string command, TimeSpan timeout, CancellationToken ct = default)
+    {
+        ExecutedCommandTimeouts.Add(timeout);
+        return ExecuteAsync(command, ct);
     }
 
     public Task<bool> IsWslInstalledAsync(CancellationToken ct = default)

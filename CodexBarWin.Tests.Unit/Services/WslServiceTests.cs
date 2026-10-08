@@ -67,6 +67,112 @@ public class WslServiceTests
     #region ExecuteAsync Tests
 
     [TestMethod]
+    public async Task ExecuteAsync_ExplicitTimeoutLongerThanDefault_AllowsCommandToCompleteAfterSixtySeconds()
+    {
+        var clock = new DeadlineClock();
+        var completion = new TaskCompletionSource<WslResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var service = new WslService(_mockLogger.Object, clock, (_, token) => completion.Task.WaitAsync(token));
+
+        var executing = service.ExecuteAsync("cost scan", TimeSpan.FromMinutes(5));
+        clock.Advance(TimeSpan.FromSeconds(61));
+        executing.IsCompleted.Should().BeFalse();
+        completion.SetResult(new WslResult { Success = true, Output = "complete" });
+
+        (await executing.WaitAsync(TimeSpan.FromSeconds(5))).Success.Should().BeTrue();
+    }
+
+    [TestMethod]
+    public async Task ExecuteAsync_ExplicitTimeoutExpires_ReturnsFailureAtRequestedDeadline()
+    {
+        var clock = new DeadlineClock();
+        var service = new WslService(_mockLogger.Object, clock, WaitForCancellationAsync);
+        var executing = service.ExecuteAsync("cost scan", TimeSpan.FromMinutes(5));
+
+        clock.Advance(TimeSpan.FromMinutes(5) - TimeSpan.FromTicks(1));
+        executing.IsCompleted.Should().BeFalse();
+        clock.Advance(TimeSpan.FromTicks(1));
+
+        var result = await executing.WaitAsync(TimeSpan.FromSeconds(5));
+        result.Success.Should().BeFalse();
+        result.ExitCode.Should().Be(-1);
+        result.Error.Should().Be("Command timed out after 300 seconds");
+    }
+
+    [TestMethod]
+    public async Task ExecuteAsync_WithoutExplicitTimeout_ReturnsFailureAtDefaultDeadline()
+    {
+        var clock = new DeadlineClock();
+        var service = new WslService(_mockLogger.Object, clock, WaitForCancellationAsync);
+        var executing = service.ExecuteAsync("ordinary command");
+
+        clock.Advance(TimeSpan.FromSeconds(60) - TimeSpan.FromTicks(1));
+        executing.IsCompleted.Should().BeFalse();
+        clock.Advance(TimeSpan.FromTicks(1));
+
+        var result = await executing.WaitAsync(TimeSpan.FromSeconds(5));
+        result.Success.Should().BeFalse();
+        result.Error.Should().Be("Command timed out after 60 seconds");
+    }
+
+    [TestMethod]
+    public async Task ExecuteAsync_ExplicitTimeoutWithCallerCancellation_StopsBeforeDeadline()
+    {
+        var clock = new DeadlineClock();
+        var service = new WslService(_mockLogger.Object, clock, WaitForCancellationAsync);
+        using var caller = new CancellationTokenSource();
+        var executing = service.ExecuteAsync("cost scan", TimeSpan.FromMinutes(5), caller.Token);
+
+        caller.Cancel();
+
+        var result = await executing.WaitAsync(TimeSpan.FromSeconds(5));
+        result.Success.Should().BeFalse();
+        result.Error.Should().NotContain("timed out");
+    }
+
+    private static async Task<WslResult> WaitForCancellationAsync(string command, CancellationToken token)
+    {
+        await Task.Delay(System.Threading.Timeout.InfiniteTimeSpan, token);
+        return new WslResult();
+    }
+
+    // Advance the real CancellationTokenSource timer without wall-clock waits or WSL dependencies.
+    private sealed class DeadlineClock : TimeProvider
+    {
+        private DeadlineTimer? _timer;
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
+        {
+            _timer = new DeadlineTimer(callback, state, dueTime);
+            return _timer;
+        }
+
+        public void Advance(TimeSpan elapsed) => _timer!.Advance(elapsed);
+
+        private sealed class DeadlineTimer(TimerCallback callback, object? state, TimeSpan dueTime) : ITimer
+        {
+            private TimeSpan _remaining = dueTime;
+            private bool _disposed;
+            public void Advance(TimeSpan elapsed)
+            {
+                if (_disposed) return;
+                _remaining -= elapsed;
+                if (_remaining > TimeSpan.Zero) return;
+                _disposed = true;
+                callback(state);
+            }
+
+            public bool Change(TimeSpan due, TimeSpan period)
+            {
+                if (_disposed) return false;
+                _remaining = due;
+                return true;
+            }
+
+            public void Dispose() => _disposed = true;
+            public ValueTask DisposeAsync() { Dispose(); return ValueTask.CompletedTask; }
+        }
+    }
+
+    [TestMethod]
     [DataRow(2, 127)]
     [DataRow(5, -1)]
     public void ExecutionFailure_Win32StartupFailure_ClassifiesOnlyMissingExecutableAsCommandNotFound(int nativeError, int exit)
@@ -273,7 +379,7 @@ public class WslServiceTests
     }
 
     [TestMethod]
-    public void ResolveCommandTimeout_ShortProviderSettings_AllowsSixtySecondCostScan()
+    public void ResolveCommandTimeout_ShortProviderSettings_KeepsSixtySecondDefaultMinimum()
     {
         WslService.ResolveCommandTimeout(new TimeoutSettings
         {

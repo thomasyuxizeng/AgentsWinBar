@@ -88,7 +88,8 @@ function Wsl([string] $Command, [string] $Name, [switch] $Root, [switch] $Intera
     if ($Root) { $arguments += @('-u', 'root') }
     $arguments += @('--exec', 'bash')
     if ($Interactive) { $arguments += '-ic' } else { $arguments += '-c' }
-    $arguments += $Command
+    # A CRLF checkout (git autocrlf) puts CR in every here-string; bash rejects 'set -e\r' with exit 2.
+    $arguments += $Command.Replace("`r", '')
     Invoke-Native 'wsl.exe' $arguments $Timeout
 }
 function Require-Native($Result, [string] $Message) {
@@ -152,7 +153,7 @@ function Test-Usage([string] $Provider) {
     }
     $result = Wsl $command -Interactive -Timeout 180
     # The app deserializes stdout from its first character, so a .bashrc echo or Ubuntu's sudo banner in
-    # front of valid JSON still leaves the app with no data.
+    # front of valid JSON or output from an EXIT trap after it still leaves the app with no data.
     # wsl.exe prints its own errors (e.g. WSL_E_DISTRO_NOT_FOUND) on stdout with a failing exit code; those are
     # not shell noise, so only a successful run or JSON that starts later in the output counts.
     $trimmed = $result.Output.TrimStart()
@@ -170,6 +171,7 @@ function Test-Usage([string] $Provider) {
             if ($result.Output -match $rateLimitPattern) { return 'stale' }
             return $status
         }
+        if ($result.Output.Substring($end + 1).Trim()) { return 'noise' }
         $items = @($result.Output.Substring($start, $end - $start + 1) | ConvertFrom-Json)
         foreach ($item in $items) {
             if ($item.provider -ne $Provider) { continue }
@@ -274,7 +276,7 @@ function Read-Package([string] $Path) {
 try {
     # Reload only explicitly unbound parameters; passing a new flag overrides remembered values.
     if (($Resume -or $PSScriptRoot -eq $stage) -and (Test-Path -LiteralPath $statePath)) {
-        $saved = Get-Content -Raw -LiteralPath $statePath | ConvertFrom-Json
+        $saved = Get-Content -Raw -Encoding UTF8 -LiteralPath $statePath | ConvertFrom-Json
         $script:rememberedState = $saved
         $reloadNames = @('Repo', 'Providers', 'Distro', 'MsixPath', 'NoWindowsSignIns')
         if ($Resume) { $reloadNames += @('NoSignIn', 'SkipApp', 'SkipWsl') }
@@ -288,7 +290,7 @@ try {
     # Ordinary reruns must also recognize this installer's interrupted provisioning.
     # Parameter reload still follows the explicit Resume/staged-script rules above.
     if (-not $script:rememberedState -and (Test-Path -LiteralPath $statePath)) {
-        $script:rememberedState = Get-Content -Raw -LiteralPath $statePath | ConvertFrom-Json
+        $script:rememberedState = Get-Content -Raw -Encoding UTF8 -LiteralPath $statePath | ConvertFrom-Json
     }
     if (-not $Repo) {
         if (Get-Command git -ErrorAction SilentlyContinue) {
@@ -520,6 +522,7 @@ try {
         # install. Download instead, then launch the verified runtime without ShellExecute.
         # This preserves the harder one-UAC requirement; a failed attempt joins the batch.
         $runtimeAdmin = $false
+        $runtimeReboot = $false
         $runtimeInstaller = ''
         if (-not $SkipApp -and -not $runtimePresent) {
             if (Get-Command winget -ErrorAction SilentlyContinue) {
@@ -540,6 +543,7 @@ try {
                 $runtimeSignature = Get-AuthenticodeSignature -LiteralPath $runtimeInstaller
                 if ($runtimeSignature.Status -ne 'Valid' -or -not $runtimeSignature.SignerCertificate -or $runtimeSignature.SignerCertificate.Subject -notmatch '(?:^|,\s*)O=Microsoft Corporation(?:,|$)') { throw 'Windows App Runtime download is not validly Microsoft-signed.' }
                 $attempt = Invoke-Native $runtimeInstaller @('--quiet') 900 -NoElevation
+                if ($attempt.Code -eq 3010) { $runtimeReboot = $true }
                 $runtimePresent = Runtime-Installed
                 $runtimeAdmin = -not $runtimePresent
             }
@@ -554,7 +558,7 @@ try {
 param([string]$Stage)
 $ErrorActionPreference = 'Stop'
 $env:WSL_UTF8 = '1'
-$plan = Get-Content -Raw -LiteralPath (Join-Path $Stage 'admin-plan.json') | ConvertFrom-Json
+$plan = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $Stage 'admin-plan.json') | ConvertFrom-Json
 $result = [ordered]@{ Success = $false; Reboot = $false; Phase = ''; Code = 0; Message = '' }
 try {
     if ($plan.Trust) {
@@ -581,6 +585,7 @@ try {
         if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch '(?:^|,\s*)O=Microsoft Corporation(?:,|$)') { throw 'Runtime signature mismatch.' }
         $process = Start-Process -FilePath $plan.Runtime -ArgumentList '--quiet' -PassThru -Wait
         if ($process.ExitCode -notin @(0, 3010)) { $result.Code = $process.ExitCode; throw 'Runtime install failed.' }
+        if ($process.ExitCode -eq 3010) { $result.Reboot = $true }
     }
     $result.Success = $true
 } catch { $result.Message = $_.Exception.Message }
@@ -597,7 +602,7 @@ if ($result.Success) { exit 0 } else { exit 30 }
                 $adminProcess = Start-Process -FilePath 'powershell.exe' -Verb RunAs -ArgumentList $arguments -PassThru -Wait
             } catch { Fail 30 'UAC was declined or the administrator process could not start. Rerun and approve its single UAC prompt.' }
             if (-not (Test-Path -LiteralPath $resultPath)) { Fail 30 'Administrator step returned no result. Rerun setup.' }
-            $adminResult = Get-Content -Raw -LiteralPath $resultPath | ConvertFrom-Json
+            $adminResult = Get-Content -Raw -Encoding UTF8 -LiteralPath $resultPath | ConvertFrom-Json
             if (-not $adminResult.Success -or $adminProcess.ExitCode -ne 0) { Fail 30 "Administrator step failed at '$($adminResult.Phase)' (exit $($adminResult.Code)): $($adminResult.Message) Rerun setup after correcting this Windows issue." }
             Phase 'Elevation' 'Single batched elevation completed; subsequent operations remain in the original user account.'
         } else { $adminResult = [pscustomobject]@{ Reboot = $false }; Phase 'Elevation' 'No administrator actions needed; no UAC prompt.' }
@@ -607,17 +612,18 @@ if ($result.Success) { exit 0 } else { exit 30 }
             $afterRebootPending = Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending'
             $enabledNeedsReboot = $afterStatus.Code -ne 0 -or $afterRebootPending
         }
-        if ($adminResult.Reboot -or $enabledNeedsReboot -or ($featurePending -and -not $wslRuns)) {
+        if ($runtimeAdmin -and -not ($runtimeReboot -or $adminResult.Reboot -or $enabledNeedsReboot -or ($featurePending -and -not $wslRuns)) -and -not (Runtime-Installed)) {
+            # Elevation may have used another account; register per-user runtime
+            # packages again from the original process without permitting another UAC.
+            $registerRuntime = Invoke-Native $runtimeInstaller @('--quiet') 900 -NoElevation
+            if ($registerRuntime.Code -eq 3010) { $runtimeReboot = $true }
+        }
+        if ($runtimeReboot -or $adminResult.Reboot -or $enabledNeedsReboot -or ($featurePending -and -not $wslRuns)) {
             Phase 'Reboot' 'Reboot, then run the same command again' $false
             $script:human.Add('Reboot, then run the same command again. Staged alternative: powershell -NoProfile -ExecutionPolicy Bypass -File "$env:LOCALAPPDATA\CodexBarWin-Setup\install.ps1"')
             Finish 3010 'reboot'
         } else {
             Phase 'Reboot' 'No setup reboot required.'
-            if ($runtimeAdmin -and -not (Runtime-Installed)) {
-                # Elevation may have used another account; register per-user runtime
-                # packages again from the original process without permitting another UAC.
-                $registerRuntime = Invoke-Native $runtimeInstaller @('--quiet') 900 -NoElevation
-            }
             if (-not $SkipWsl) {
                 $distros = @(Get-Distros)
                 $installDistro = $distros.Name -notcontains $chosen
@@ -729,7 +735,7 @@ fi
             foreach ($provider in $Providers) {
                 $working = Test-Usage $provider
                 if ($working -eq 'noise') {
-                    Fail 1 "Text is printed before codexbar's JSON in the default WSL user's interactive shell (bash -ic), so the app cannot read $provider usage. Remove echo/printf output from ~/.bashrc (or move it under a check for an interactive terminal), then rerun."
+                    Fail 1 "Text is printed outside codexbar's JSON in the default WSL user's interactive shell (bash -ic), so the app cannot read $provider usage. Remove echo/printf output from ~/.bashrc (or move it under a check for an interactive terminal), then rerun."
                 }
                 if ($working -ne 'none') {
                     Phase "Provider $provider" "Usage is $working; provider CLI installation and sign-in skipped, existing sign-in preserved."
@@ -829,8 +835,8 @@ chmod 600 "$t"; mv "$t" "$p"
             $usageStates = @{}
             foreach ($provider in $Providers) { $usageStates[$provider] = Test-Usage $provider }
             $noisy = @($Providers | Where-Object { $usageStates[$_] -eq 'noise' })
-            if ($noisy.Count) { Fail 1 ("Text is printed before codexbar's JSON for " + ($noisy -join ', ') + " in the default WSL user's interactive shell (bash -ic), so the app cannot read it. Remove echo/printf output from ~/.bashrc, then rerun.") }
-            $pending = @($Providers | Where-Object { $usageStates[$_] -eq 'none' })
+            if ($noisy.Count) { Fail 1 ("Text is printed outside codexbar's JSON for " + ($noisy -join ', ') + " in the default WSL user's interactive shell (bash -ic), so the app cannot read it. Remove echo/printf output from ~/.bashrc, then rerun.") }
+            $pending = @($Providers | Where-Object { $usageStates[$_] -notin @('live', 'stale') })
             if ($pending.Count -gt 0 -and -not $NoSignIn) {
                 $loginLines = New-Object 'System.Collections.Generic.List[string]'
                 $loginLines.Add('set +e')
@@ -857,7 +863,9 @@ chmod 600 "$t"; mv "$t" "$p"
                 $argumentLine = '--exec bash -ic ' + (Quote-Native ('bash ' + (Quote-Sh $loginPath.Output)))
                 Start-Process -FilePath 'wsl.exe' -ArgumentList $argumentLine -Wait | Out-Null
                 foreach ($provider in $Providers) { $usageStates[$provider] = Test-Usage $provider }
-                $pending = @($Providers | Where-Object { $usageStates[$_] -eq 'none' })
+                $noisy = @($Providers | Where-Object { $usageStates[$_] -eq 'noise' })
+                if ($noisy.Count) { Fail 1 ("Text is printed outside codexbar's JSON for " + ($noisy -join ', ') + " in the default WSL user's interactive shell (bash -ic), so the app cannot read it. Remove echo/printf output from ~/.bashrc, then rerun.") }
+                $pending = @($Providers | Where-Object { $usageStates[$_] -notin @('live', 'stale') })
             }
             if (-not $SkipApp) {
                 try { Start-Process -FilePath 'explorer.exe' -ArgumentList ('shell:AppsFolder\' + $installed[0].PackageFamilyName + '!' + $package.AppId) | Out-Null } catch { Write-Warning 'Automatic app launch failed; launch CodexBarWin from Start.' }

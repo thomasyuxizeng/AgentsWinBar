@@ -110,7 +110,7 @@ Import-Certificate -FilePath .\CodexBarWin-v*-Certificate.cer -CertStoreLocation
 Add-AppxPackage .\CodexBarWin-v*-x64.msix
 ```
 
-Don't use `CodexBarWin.appinstaller`: it still points at the upstream project's releases and would install (and keep updating to) the upstream app, without the changes listed below.
+Releases no longer include `CodexBarWin.appinstaller`. If you have one from an older release, don't use it: it points at the upstream project's releases and would install (and keep updating to) the upstream app, without the changes listed below.
 
 **From source:**
 

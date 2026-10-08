@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.2] - 2026-10-08
+
+### Fixed
+- A manual refresh, and the periodic refresh while the dashboard is open, no longer shows "Refreshing…" for up to a few minutes while cost totals are scanned. Usage updates first; cost totals follow in the background.
+- Cost scans that fall back to one provider at a time (or a single cost lookup) were still cut off after 60 seconds. They now get the same 5 minutes as the combined scan.
+- The app package now includes the .NET runtime. Before, it needed the .NET 10 Desktop Runtime, which `install.ps1` never installed, so the app couldn't start on a PC without it.
+- `install.ps1` failed with "WSL package installation failed (exit 2)" when it was checked out with Windows line endings (a normal `git clone` on Windows). The scripts it runs inside WSL now always get Linux line endings.
+- `install.ps1` could report success when the provider output after sign-in still had extra text the app can't read, including text printed after the JSON. It also now asks for a reboot when the Windows App Runtime installer requires one, and reads its own state files correctly when the Windows user name has non-ASCII characters.
+- After midnight, cost totals could keep showing yesterday's "today" figures for up to 30 minutes.
+- Cancelling a cost scan (for example by changing settings) could bring back older totals for providers that had already finished.
+- If saving `cost-cache.json` failed once, it was not retried, so finished totals could be lost on restart.
+- Clicking Refresh while an automatic refresh was running didn't rescan costs.
+- A cached reading with an incomplete extra usage window could crash the provider details view.
+- The WSL helper reported success with empty output when reshaping Gemini usage failed. When Claude's sign-in route was cooling down, it also hid the real exit code of the Claude CLI.
+- The WSL installer checks the downloaded CLI's checksum against its exact file name, stops if copying any file fails, replaces the helper script atomically, and checks the version of the CLI it just installed rather than whatever comes first on `PATH`.
+- Releases now validate the tag (`vX.Y.Z`) before using the signing secrets, no longer insert the tag directly into scripts, and refuse to publish if a package, certificate or checksum is missing or doesn't match its build.
+
+### Removed
+- Releases no longer publish `CodexBarWin.appinstaller`. It pointed at the upstream project and wasn't meant to be used.
+
 ## [1.0.1] - 2026-10-08
 
 ### Fixed

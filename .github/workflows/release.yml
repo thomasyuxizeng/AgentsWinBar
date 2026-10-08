@@ -17,6 +17,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
+  TAG: ${{ github.ref_name }}
   DOTNET_VERSION: '10.0.x'
   DOTNET_NOLOGO: true
   DOTNET_CLI_TELEMETRY_OPTOUT: true
@@ -27,7 +28,27 @@ permissions:
   contents: write
 
 jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate release tag
+        shell: bash
+        run: |
+          pattern='^v(0|[1-9][0-9]{0,4})\.(0|[1-9][0-9]{0,4})\.(0|[1-9][0-9]{0,4})$'
+          if [[ ! "$TAG" =~ $pattern ]]; then
+            echo "Release tag must be vX.Y.Z with canonical numeric components." >&2
+            exit 1
+          fi
+          IFS='.' read -r major minor patch <<< "${TAG#v}"
+          for component in "$major" "$minor" "$patch"; do
+            if (( 10#$component > 65535 )); then
+              echo "Release version components must not exceed 65535." >&2
+              exit 1
+            fi
+          done
+
   cert:
+    needs: validate
     runs-on: windows-latest
 
     steps:
@@ -58,8 +79,8 @@ jobs:
           if ($cert.Subject -ne $manifest.Package.Identity.Publisher) {
             throw "Signing certificate subject must match Package.appxmanifest Publisher."
           }
-          Export-Certificate -Cert $cert -FilePath "signing/CodexBarWin-${{ github.ref_name }}-Certificate.cer" | Out-Null
-          Copy-Item "signing/CodexBarWin-${{ github.ref_name }}-Certificate.cer" signing/CodexBarWin-Certificate.cer
+          Export-Certificate -Cert $cert -FilePath "signing/CodexBarWin-$env:TAG-Certificate.cer" | Out-Null
+          Copy-Item "signing/CodexBarWin-$env:TAG-Certificate.cer" signing/CodexBarWin-Certificate.cer
 
       - name: Upload public certificates
         uses: actions/upload-artifact@v4
@@ -70,7 +91,7 @@ jobs:
           if-no-files-found: error
 
   build:
-    needs: cert
+    needs: [validate, cert]
     runs-on: windows-latest
 
     strategy:
@@ -116,10 +137,7 @@ jobs:
       - name: Update Package.appxmanifest version
         shell: pwsh
         run: |
-          $version = "${{ github.ref_name }}" -replace '^v', ''
-          $versionParts = $version.Split('.')
-          while ($versionParts.Count -lt 4) { $versionParts += "0" }
-          $appxVersion = $versionParts -join '.'
+          $appxVersion = "$($env:TAG.Substring(1)).0"
           Write-Host "Setting version to: $appxVersion"
 
           # Update Package.appxmanifest (only Identity Version, not MinVersion)
@@ -132,10 +150,7 @@ jobs:
       - name: Build MSIX package
         shell: pwsh
         run: |
-          $version = "${{ github.ref_name }}" -replace '^v', ''
-          $versionParts = $version.Split('.')
-          while ($versionParts.Count -lt 4) { $versionParts += "0" }
-          $appxVersion = $versionParts -join '.'
+          $appxVersion = "$($env:TAG.Substring(1)).0"
           Write-Host "Building with AppxVersion: $appxVersion"
 
           msbuild CodexBarWin.csproj /p:Configuration=Release /p:Platform=${{ matrix.platform }} /p:UapAppxPackageBuildMode=SideloadOnly /p:AppxBundle=Never /p:AppxPackageDir="AppPackages\" /p:AppxPackageSigningEnabled=false /p:GenerateAppxPackageOnBuild=true /p:PublishReadyToRun=false /p:AppxVersion="$appxVersion"
@@ -174,7 +189,7 @@ jobs:
         run: |
           $msixPath = Get-ChildItem -Path "AppPackages" -Filter "*.msix" -Recurse | Select-Object -First 1
           $signature = Get-AuthenticodeSignature -FilePath $msixPath.FullName
-          $publishedCert = [Security.Cryptography.X509Certificates.X509Certificate2]::new("$PWD\signing\CodexBarWin-${{ github.ref_name }}-Certificate.cer")
+          $publishedCert = [Security.Cryptography.X509Certificates.X509Certificate2]::new("$PWD\signing\CodexBarWin-$env:TAG-Certificate.cer")
           if (-not $signature.SignerCertificate -or $signature.SignerCertificate.Thumbprint -ne $publishedCert.Thumbprint) {
             throw "MSIX signer thumbprint does not match the published certificate."
           }
@@ -182,30 +197,17 @@ jobs:
       - name: Rename and prepare artifacts
         shell: pwsh
         run: |
-          $version = "${{ github.ref_name }}"
+          $version = $env:TAG
           $platform = "${{ matrix.platform }}"
           $msixPath = Get-ChildItem -Path "AppPackages" -Filter "*.msix" -Recurse | Select-Object -First 1
 
           Copy-Item $msixPath.FullName -Destination "CodexBarWin-$version-$platform.msix"
           Copy-Item $msixPath.FullName -Destination "CodexBarWin-$platform.msix"
 
-          # Update .appinstaller with version (only for x64)
-          if ($platform -eq "x64" -and (Test-Path "CodexBarWin.appinstaller")) {
-            $versionNum = $version -replace '^v', ''
-            # Ensure version has 4 parts (e.g., 0.1.0 -> 0.1.0.0)
-            $versionParts = $versionNum.Split('.')
-            while ($versionParts.Count -lt 4) { $versionParts += "0" }
-            $fullVersion = $versionParts -join '.'
-
-            $content = Get-Content "CodexBarWin.appinstaller" -Raw
-            $content = $content -replace 'Version="[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+"', "Version=`"$fullVersion`""
-            $content | Set-Content "CodexBarWin.appinstaller" -NoNewline
-          }
-
       - name: Generate checksum
         shell: pwsh
         run: |
-          $version = "${{ github.ref_name }}"
+          $version = $env:TAG
           $platform = "${{ matrix.platform }}"
           $hash = (Get-FileHash "CodexBarWin-$version-$platform.msix" -Algorithm SHA256).Hash.ToLower()
           "$hash  CodexBarWin-$version-$platform.msix" | Out-File -FilePath "CodexBarWin-$version-$platform.msix.sha256" -Encoding utf8NoBOM
@@ -218,11 +220,10 @@ jobs:
             CodexBarWin-${{ github.ref_name }}-${{ matrix.platform }}.msix
             CodexBarWin-${{ matrix.platform }}.msix
             CodexBarWin-${{ github.ref_name }}-${{ matrix.platform }}.msix.sha256
-            CodexBarWin.appinstaller
           retention-days: 1
 
   release:
-    needs: [cert, build]
+    needs: [validate, cert, build]
     runs-on: ubuntu-latest
 
     steps:
@@ -236,18 +237,38 @@ jobs:
           pattern: release-*
           merge-multiple: true
 
-      - name: Generate combined checksum file
+      - name: Verify release artifacts
+        shell: bash
         run: |
           cd artifacts
-          sha256sum *.msix > CodexBarWin-${{ github.ref_name }}-checksums.sha256
-          cp CodexBarWin-${{ github.ref_name }}-checksums.sha256 CodexBarWin-checksums.sha256
+          for platform in x64 ARM64; do
+            for file in "CodexBarWin-$TAG-$platform.msix" "CodexBarWin-$platform.msix" "CodexBarWin-$TAG-$platform.msix.sha256"; do
+              test -f "$file" || { echo "Missing release artifact: $file" >&2; exit 1; }
+            done
+          done
+          for file in "CodexBarWin-$TAG-Certificate.cer" "CodexBarWin-Certificate.cer"; do
+            test -f "$file" || { echo "Missing release artifact: $file" >&2; exit 1; }
+          done
+          sed -i 's/\r$//' ./*.msix.sha256
+          for platform in x64 ARM64; do
+            sha256sum -c "CodexBarWin-$TAG-$platform.msix.sha256"
+            cmp "CodexBarWin-$platform.msix" "CodexBarWin-$TAG-$platform.msix"
+          done
+
+      - name: Generate combined checksum file
+        shell: bash
+        run: |
+          cd artifacts
+          sha256sum *.msix > "CodexBarWin-$TAG-checksums.sha256"
+          test "$(wc -l < "CodexBarWin-$TAG-checksums.sha256")" -eq 4 || { echo "Combined checksum file must contain exactly four MSIX entries." >&2; exit 1; }
+          cp "CodexBarWin-$TAG-checksums.sha256" CodexBarWin-checksums.sha256
           rm -f *.msix.sha256
 
       - name: Extract release notes from CHANGELOG
         id: changelog
         shell: bash
         run: |
-          VERSION="${{ github.ref_name }}"
+          VERSION="$TAG"
           VERSION_NUM="${VERSION#v}"
           NOTES=""
 
@@ -287,7 +308,6 @@ jobs:
           files: |
             artifacts/*.msix
             artifacts/*.cer
-            artifacts/*.appinstaller
             artifacts/*-checksums.sha256
           draft: false
           prerelease: ${{ contains(github.ref, 'alpha') || contains(github.ref, 'beta') || contains(github.ref, 'rc') }}

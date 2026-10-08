@@ -29,6 +29,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private CancellationTokenSource? _refreshCts;
     private CancellationTokenSource? _timerCts;
     private CancellationTokenSource? _costRefreshCts;
+    private CancellationTokenSource? _backgroundCostRefreshCts;
+    private bool _backgroundCostRefreshForced;
     private CancellationTokenSource? _trimCts;
     private readonly SynchronizationContext? _uiContext = SynchronizationContext.Current;
     private UsageFingerprint? _usageFingerprint;
@@ -46,6 +48,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private int _stopVersion;
     private TaskCompletionSource? _refreshCompletion;
     private TaskCompletionSource? _costRefreshCompletion;
+    private TaskCompletionSource? _backgroundCostRefreshCompletion;
+    private Task _retiredCostRefreshes = Task.CompletedTask;
     private bool _forceCostRefreshPending;
 
     [ObservableProperty]
@@ -165,6 +169,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _timerCts?.Dispose();
         _timerCts = null;
         _costRefreshCts?.Cancel();
+        _backgroundCostRefreshCts?.Cancel();
         _trimCts?.Cancel();
         NextRefreshUtc = null;
     }
@@ -203,7 +208,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
             if (Interlocked.Decrement(ref _costDemand) == 0)
                 OnUiThread(() =>
                 {
-                    if (Volatile.Read(ref _costDemand) == 0) _costRefreshCts?.Cancel();
+                    if (Volatile.Read(ref _costDemand) == 0)
+                    {
+                        _costRefreshCts?.Cancel();
+                        if (!_backgroundCostRefreshForced) _backgroundCostRefreshCts?.Cancel();
+                    }
                     ScheduleWorkingSetTrim();
                 });
         });
@@ -311,7 +320,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         if (_disposed || _stopped || _exiting || !_settingsService.Settings.ShowCostTotals ||
             _settingsService.Settings.DeveloperModeEnabled ||
-            Volatile.Read(ref _costDemand) == 0 || _costRefreshCts != null || _forceCostRefreshPending) return;
+            Volatile.Read(ref _costDemand) == 0 || _costRefreshCts != null ||
+            _backgroundCostRefreshCts != null || _forceCostRefreshPending) return;
         var enabled = _settingsService.Settings.Providers.Where(p => p.IsEnabled)
             .Select(p => p.Id).Where(provider => Providers.FirstOrDefault(p =>
                 p.Provider.Equals(provider, StringComparison.OrdinalIgnoreCase))?.Cost == null).ToList();
@@ -322,7 +332,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _costRefreshCompletion = completion;
         try
         {
-            await RefreshCostsAsync(enabled, false, scanCts.Token);
+            await RefreshCostsAsync(enabled, false, scanCts);
         }
         catch (OperationCanceledException) when (scanCts.IsCancellationRequested)
         {
@@ -342,18 +352,88 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
     }
 
-    private async Task RefreshCostsAsync(IReadOnlyList<string> providers, bool forceRefresh, CancellationToken ct)
+    private async Task RefreshBackgroundCostsAsync(IReadOnlyList<string> providers, bool forceRefresh)
+    {
+        if (_disposed || _stopped || _exiting || !_settingsService.Settings.ShowCostTotals ||
+            _settingsService.Settings.DeveloperModeEnabled) return;
+        if (!forceRefresh && (Volatile.Read(ref _costDemand) == 0 || _costRefreshCts != null ||
+            _backgroundCostRefreshCts != null || _forceCostRefreshPending)) return;
+
+        var activeDemand = forceRefresh ? _costRefreshCompletion?.Task : null;
+        var previousBackground = _backgroundCostRefreshCompletion?.Task;
+        if (forceRefresh)
+        {
+            _costRefreshCts?.Cancel();
+            _backgroundCostRefreshCts?.Cancel();
+        }
+        // This scan owns its lifetime independently of the completed usage refresh. Replace the owner before
+        // awaiting cleanup so superseded scans cannot publish or clear the newer scan's state.
+        using var scanCts = new CancellationTokenSource();
+        _backgroundCostRefreshCts = scanCts;
+        _backgroundCostRefreshForced = forceRefresh;
+        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _backgroundCostRefreshCompletion = completion;
+        if (previousBackground != null)
+            _retiredCostRefreshes = _retiredCostRefreshes.IsCompleted
+                ? previousBackground : Task.WhenAll(_retiredCostRefreshes, previousBackground);
+        if (forceRefresh) _forceCostRefreshPending = false;
+        try
+        {
+            if (activeDemand != null)
+            {
+                try { await activeDemand.WaitAsync(TimeSpan.FromSeconds(2), scanCts.Token); }
+                catch (TimeoutException) { _logger.LogDebug("Demand cost scan did not stop in time; continuing with the forced scan"); }
+            }
+            scanCts.Token.ThrowIfCancellationRequested();
+            await RefreshCostsAsync(providers, forceRefresh, scanCts, backgroundScan: true);
+        }
+        catch (OperationCanceledException) when (scanCts.IsCancellationRequested)
+        {
+            _logger.LogDebug("Obsolete background cost refresh canceled");
+        }
+        finally
+        {
+            if (ReferenceEquals(_backgroundCostRefreshCts, scanCts))
+            {
+                _backgroundCostRefreshCts = null;
+                _backgroundCostRefreshForced = false;
+            }
+            if (ReferenceEquals(_backgroundCostRefreshCompletion, completion)) _backgroundCostRefreshCompletion = null;
+            completion.TrySetResult();
+            ScheduleWorkingSetTrim();
+            if (scanCts.IsCancellationRequested)
+                RefreshDemandedCostsAsync().SafeFireAndForget(
+                    onError: ex => _logger.LogError(ex, "Pending demanded cost refresh failed"));
+        }
+    }
+
+    private async Task RefreshCostsAsync(IReadOnlyList<string> providers, bool forceRefresh,
+        CancellationTokenSource scanCts, bool backgroundScan = false)
     {
         if (!_settingsService.Settings.ShowCostTotals || _settingsService.Settings.DeveloperModeEnabled) return;
+        var ct = scanCts.Token;
         await foreach (var (provider, cost) in _codexBarService.GetCostsAsync(providers, forceRefresh, ct))
         {
             ct.ThrowIfCancellationRequested();
             if (!forceRefresh && Volatile.Read(ref _costDemand) == 0) return;
-            var index = Providers.ToList().FindIndex(p => p.Provider.Equals(provider, StringComparison.OrdinalIgnoreCase));
-            if (index >= 0) Providers[index] = Providers[index] with
+            var published = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            OnUiThread(() =>
             {
-                Cost = _settingsService.Settings.ShowCostTotals ? cost : null
-            };
+                try
+                {
+                    // Recheck on the dispatcher: cancellation, replacement or disposal may happen while queued.
+                    if (_disposed || _stopped || _exiting || ct.IsCancellationRequested ||
+                        !ReferenceEquals(backgroundScan ? _backgroundCostRefreshCts : _costRefreshCts, scanCts) ||
+                        !_settingsService.Settings.ShowCostTotals || _settingsService.Settings.DeveloperModeEnabled ||
+                        (!forceRefresh && Volatile.Read(ref _costDemand) == 0)) return;
+                    var index = Providers.ToList().FindIndex(p => p.Provider.Equals(provider, StringComparison.OrdinalIgnoreCase));
+                    if (index >= 0) Providers[index] = Providers[index] with { Cost = cost };
+                }
+                catch (Exception ex) { published.TrySetException(ex); }
+                finally { published.TrySetResult(); }
+            });
+            // Keep the scan owner alive until queued UI results have been applied or rejected.
+            await published.Task.WaitAsync(ct);
         }
     }
 
@@ -374,7 +454,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
             await Task.Delay(TimeSpan.FromSeconds(10), trimCts.Token);
             var now = DateTime.UtcNow;
             if (!_disposed && !_stopped && !_exiting && WorkingSetTrimmer.ShouldTrim(now, _lastTrim,
-                _flyoutVisible, Volatile.Read(ref _dashboardVisibility) > 0, IsLoading || _costRefreshCts != null))
+                _flyoutVisible, Volatile.Read(ref _dashboardVisibility) > 0,
+                IsLoading || _costRefreshCts != null || _backgroundCostRefreshCts != null))
             {
                 WorkingSetTrimmer.Trim();
                 _lastTrim = now;
@@ -390,10 +471,20 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     private async Task RefreshCoreAsync(bool forceCostRefresh = false)
     {
-        if (IsLoading || _stopped || _disposed || _exiting)
+        if (_stopped || _disposed || _exiting)
         {
             return;
         }
+
+        if (forceCostRefresh)
+        {
+            _forceCostRefreshPending = true;
+            // Supersede cost scans even when the manual request joins an existing usage refresh.
+            _costRefreshCts?.Cancel();
+            _backgroundCostRefreshCts?.Cancel();
+        }
+        if (IsLoading) return;
+        forceCostRefresh |= _forceCostRefreshPending;
 
         // Check if this is the first load (no existing data)
         bool isFirstLoad = Providers.Count == 0;
@@ -403,6 +494,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         var resetVersion = _adaptiveResetVersion;
         var resetAdaptiveStreak = _adaptiveResetPending;
         _adaptiveResetPending = false;
+        _forceCostRefreshPending = forceCostRefresh;
         IsLoading = true;
         ErrorMessage = null;
         using var refreshCts = new CancellationTokenSource();
@@ -411,7 +503,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         _refreshCompletion = completion;
         var developerMode = _settingsService.Settings.DeveloperModeEnabled;
-        _forceCostRefreshPending = forceCostRefresh;
+        List<string>? costProviders = null;
         var refreshStarted = Stopwatch.GetTimestamp();
 
         try
@@ -447,6 +539,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 // Services may finish despite cancellation; obsolete results must never reach UI or history.
                 ct.ThrowIfCancellationRequested();
                 if (data.CommandNotFound) await _setupMemo.InvalidateAsync(ct);
+                ct.ThrowIfCancellationRequested();
                 try
                 {
                     _activityLog.RecordRefresh(new DashboardRefreshEntry
@@ -490,43 +583,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
                 catch (Exception ex) { _logger.LogWarning(ex, "Usage cache could not be saved"); }
             }
-            // Demand-start scans run separately so usage never waits behind a slow scan.
-            if (forceCostRefresh)
-            {
-                // A manual refresh supersedes a demand scan: cancel it and give it a moment to wind down so a late
-                // demand result cannot overwrite forced totals. The wait is bounded, so a scan that ignores
-                // cancellation can never block a manual refresh.
-                var activeCostRefresh = _costRefreshCompletion?.Task;
-                _costRefreshCts?.Cancel();
-                if (activeCostRefresh != null)
-                {
-                    try { await activeCostRefresh.WaitAsync(TimeSpan.FromSeconds(2), ct); }
-                    catch (TimeoutException) { _logger.LogDebug("Demand cost scan did not stop in time; continuing with the forced scan"); }
-                }
-                ct.ThrowIfCancellationRequested();
-                await RefreshCostsAsync(Providers.Select(p => p.Provider).ToList(), true, ct);
-            }
-            else if (Volatile.Read(ref _costDemand) > 0 && _costRefreshCts == null)
-            {
-                using var scanCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-                _costRefreshCts = scanCts;
-                try
-                {
-                    await RefreshCostsAsync(Providers.Select(p => p.Provider).ToList(), false, scanCts.Token);
-                }
-                catch (OperationCanceledException) when (scanCts.IsCancellationRequested && !ct.IsCancellationRequested)
-                {
-                    _logger.LogDebug("Obsolete periodic cost refresh canceled");
-                }
-                finally
-                {
-                    if (ReferenceEquals(_costRefreshCts, scanCts)) _costRefreshCts = null;
-                    if (scanCts.IsCancellationRequested && !ct.IsCancellationRequested)
-                        RefreshDemandedCostsAsync().SafeFireAndForget(
-                            onError: ex => _logger.LogError(ex, "Pending demanded cost refresh failed"));
-                }
-            }
-
             ct.ThrowIfCancellationRequested();
             var fingerprint = UsageFingerprint.Create(Providers);
             _unchangedRefreshes = resetAdaptiveStreak || resetVersion != _adaptiveResetVersion || forceCostRefresh ||
@@ -538,6 +594,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             NotifyAlerts();
 
             _logger.LogInformation("Usage data refreshed, {Count} providers", Providers.Count);
+            costProviders = Providers.Select(p => p.Provider).ToList();
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -545,6 +602,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
         catch (Exception ex)
         {
+            if (_disposed || _stopped || _exiting || ct.IsCancellationRequested)
+            {
+                _logger.LogDebug(ex, "Obsolete usage refresh failed during cancellation");
+                return;
+            }
             ResetAdaptiveRefresh();
             _logger.LogError(ex, "Failed to refresh usage data");
 
@@ -568,17 +630,26 @@ public partial class MainViewModel : ObservableObject, IDisposable
         finally
         {
             _refreshCts = null;
-            _forceCostRefreshPending = false;
-            for (var i = 0; i < Providers.Count; i++)
-                if (Providers[i].IsLoading) Providers[i] = Providers[i] with { IsLoading = false };
-            IsLoading = false;
+            if (!_disposed)
+            {
+                for (var i = 0; i < Providers.Count; i++)
+                    if (Providers[i].IsLoading) Providers[i] = Providers[i] with { IsLoading = false };
+                IsLoading = false;
+            }
             completion.TrySetResult();
             if (!_disposed && !_stopped && !_exiting) RecreateTimer();
             ScheduleWorkingSetTrim();
+            // Finish usage and restore its timer before starting any potentially slow cost work.
+            // Keep the forced-pending guard until the background scan registers its owner synchronously.
+            forceCostRefresh |= _forceCostRefreshPending;
+            if (costProviders != null && !ct.IsCancellationRequested && !_refreshPending)
+                RefreshBackgroundCostsAsync(costProviders, forceCostRefresh).SafeFireAndForget(
+                    onError: ex => _logger.LogError(ex, "Background cost refresh failed"));
+            _forceCostRefreshPending = false;
             if (_refreshPending && !_disposed && !_stopped && !_exiting)
             {
                 _refreshPending = false;
-                RefreshCoreAsync().SafeFireAndForget(onError: ex => _logger.LogError(ex, "Pending settings refresh failed"));
+                RefreshCoreAsync(forceCostRefresh).SafeFireAndForget(onError: ex => _logger.LogError(ex, "Pending settings refresh failed"));
             }
         }
     }
@@ -623,8 +694,14 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _exiting = true;
         _logger.LogInformation("Exit requested");
         var activeRefresh = _refreshCompletion?.Task;
+        var activeDemand = _costRefreshCompletion?.Task;
+        var activeBackground = Task.WhenAll(_retiredCostRefreshes,
+            _backgroundCostRefreshCompletion?.Task ?? Task.CompletedTask);
         Stop();
         if (activeRefresh != null) await activeRefresh;
+        // Iterator disposal waits for the service producer to persist completed costs even on cancellation.
+        if (activeDemand != null) await activeDemand;
+        await activeBackground;
         await _historyPersistence.SaveAsync(force: true);
         ExitRequested?.Invoke(this, EventArgs.Empty);
     }
@@ -676,6 +753,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             _logger.LogDebug("Settings changed, recreating timer and refreshing data");
             ResetAdaptiveRefresh();
             _costRefreshCts?.Cancel();
+            _backgroundCostRefreshCts?.Cancel();
             if (!_settingsService.Settings.ShowCostTotals)
                 for (var i = 0; i < Providers.Count; i++) Providers[i] = Providers[i] with { Cost = null };
             if (IsLoading) { _refreshPending = true; _refreshCts?.Cancel(); return; }

@@ -56,23 +56,25 @@ public sealed class CostCacheStore : ICostCacheStore
         return items;
     }
 
-    public async Task SaveAsync(IReadOnlyDictionary<string, CostData> items, CancellationToken ct = default)
+    public async Task<bool> SaveAsync(IReadOnlyDictionary<string, CostData> items, CancellationToken ct = default)
     {
-        if (DeveloperMode) return;
+        if (DeveloperMode) return false;
         var acquired = false;
         try
         {
             await _ioGate.WaitAsync(ct); acquired = true;
-            if (DeveloperMode) return;
+            if (DeveloperMode) return false;
             var file = new CostCacheFile { Items = items.Where(pair => pair.Value.HasData).ToDictionary(pair => pair.Key, pair => pair.Value) };
             var json = JsonSerializer.Serialize(file, AppJsonSerializerContext.Default.CostCacheFile);
             Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(FilePath))!);
             var temporaryPath = FilePath + ".tmp";
             await File.WriteAllTextAsync(temporaryPath, json, ct);
             File.Move(temporaryPath, FilePath, overwrite: true);
+            return true;
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (Exception ex) { _logger.LogWarning(ex, "Cost cache could not be saved"); }
         finally { if (acquired) _ioGate.Release(); }
+        return false;
     }
 }
