@@ -77,6 +77,20 @@ wsl --exec bash -ic "codexbar usage --provider codex --source cli --format json"
 
 Usage has three states: `live` means provider-matching, current usage windows; `stale` means usage older than the 30-minute freshness window, otherwise outdated usage, or a rate-limit error (including a temporarily cached Claude result); `none` means no usable usage and no rate-limit indication, including authentication errors. An explicit authentication failure means `none` even with cached windows; a rate-limit indication takes precedence and means `stale`. Stale providers are reported as "temporarily stale (rate limit or provider issue), not a sign-in problem". Only `none` opens sign-in and prevents exit `0`. Empty JSON or exit zero alone is insufficient. Repeat for `claude` and `gemini` if selected.
 
+## Update
+
+To update an existing install, update the clone and run the installer again:
+
+```powershell
+cd CodexBarWin
+git pull
+powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1
+```
+
+It installs the latest release over the current app (settings and cost totals are kept) and updates the WSL
+helper. It skips everything that is already current. Releases from 1.0.0 on are signed with the same
+certificate, so an update needs no UAC prompt. Handle the exit code exactly as for a first install.
+
 ## Uninstall
 
 Remove the Windows app as the original user:
