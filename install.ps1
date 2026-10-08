@@ -38,6 +38,8 @@ $script:exitCode = 1
 $script:outcome = 'failed'
 $script:failureCode = 1
 $script:ghRelease = $false
+# Defaults for preflight; replaced by the downloaded package's own PackageDependency once it is read.
+$runtimeName = 'Microsoft.WindowsAppRuntime.1.8'
 $runtimeMinimum = [version]'8000.731.1532.0'
 $script:rememberedState = $null
 
@@ -111,7 +113,7 @@ function Write-Utf8([string] $Path, [string] $Content) {
 function Fail([int] $Code, [string] $Message) { $script:failureCode = $Code; throw $Message }
 function Finish([int] $Code, [string] $Outcome) { $script:exitCode = $Code; $script:outcome = $Outcome }
 function Runtime-Installed {
-    $packages = @(Get-AppxPackage -Name 'Microsoft.WindowsAppRuntime.1.8' -ErrorAction SilentlyContinue)
+    $packages = @(Get-AppxPackage -Name $runtimeName -ErrorAction SilentlyContinue)
     @($packages | Where-Object { ([string]$_.Architecture -ieq $arch) -and ([version]$_.Version -ge $runtimeMinimum) }).Count -gt 0
 }
 function Get-Distros {
@@ -137,7 +139,22 @@ function Linux-Tool([string] $Tool, [string] $Name) {
 function Test-Usage([string] $Provider) {
     # Match the app: default distribution, default user, interactive bash, source cli.
     # Never emit raw JSON: it can contain account identity and diagnostic secrets.
-    $result = Wsl ("codexbar usage --provider $Provider --format json --source cli") -Interactive -Timeout 180
+    # Returns 'live', 'stale' (old or rate-limited data, not a sign-in problem), 'none' (no usage: sign-in or
+    # provider problem) or 'noise' (text before the JSON, which the app's parser rejects).
+    $command = "codexbar usage --provider $Provider --format json --source cli"
+    if ($Provider -eq 'claude') {
+        # Cooldown markers left by an earlier probe would turn this one into the shim's synthetic
+        # "rate limited" answer and hide a missing sign-in.
+        $command = 'rm -f /var/tmp/codexbar-claude-$(id -u)-oauth-cooldown /var/tmp/codexbar-claude-$(id -u)-cli-broken 2>/dev/null; ' + $command
+        # Exit 4 = Claude Code is installed and reports no sign-in. Only the loggedIn flag is read, never printed.
+        $auth = Wsl 'command -v claude >/dev/null || exit 3; claude auth status --json 2>/dev/null | python3 -c "import json,sys; sys.exit(0 if json.load(sys.stdin).get(\"loggedIn\") else 4)"' -Interactive -Timeout 60
+        if ($auth.Code -eq 4) { return 'none' }
+    }
+    $result = Wsl $command -Interactive -Timeout 180
+    # The app deserializes stdout from its first character, so a .bashrc echo or Ubuntu's sudo banner in
+    # front of valid JSON still leaves the app with no data.
+    $trimmed = $result.Output.TrimStart()
+    if ($trimmed -and -not ($trimmed.StartsWith('[') -or $trimmed.StartsWith('{'))) { return 'noise' }
     $status = 'none'
     $rateLimitPattern = '(?i)rate[\s_-]*limit|too many requests|\b429\b'
     $authPattern = '(?i)"kind"\s*:\s*"(?:auth|authentication)"|\b(?:401|403|unauthorized|forbidden)\b|(?:log[\s_-]*in|sign[\s_-]*in|authentication)\s+(?:is\s+)?required|(?:expired|invalid)\s+(?:credentials?|tokens?)|(?:credentials?|tokens?)\s+(?:have\s+|has\s+|is\s+)?(?:expired|invalid)'
@@ -240,7 +257,14 @@ function Read-Package([string] $Path) {
         $application = $manifest.SelectSingleNode("/*[local-name()='Package']/*[local-name()='Applications']/*[local-name()='Application']")
         if ($identity.Name -ne 'CodexBarWin' -or $identity.Publisher -ne 'CN=CodexBarWin OSS') { throw 'MSIX identity or publisher is not CodexBarWin.' }
         if ($identity.ProcessorArchitecture -and $identity.ProcessorArchitecture -ne 'neutral' -and $identity.ProcessorArchitecture -ine $arch) { throw 'MSIX architecture differs from the OS architecture.' }
-        [pscustomobject]@{ Version = [version]$identity.Version; AppId = [string]$application.Id }
+        $runtime = $manifest.SelectSingleNode("/*[local-name()='Package']/*[local-name()='Dependencies']/*[local-name()='PackageDependency'][starts-with(@Name, 'Microsoft.WindowsAppRuntime.')]")
+        $runtimeVersion = $null
+        if ($runtime) {
+            if ([string]$runtime.Name -notmatch '^Microsoft\.WindowsAppRuntime\.\d+\.\d+$') { throw 'MSIX names an unexpected Windows App Runtime package.' }
+            $runtimeVersion = [version]$runtime.MinVersion
+        }
+        [pscustomobject]@{ Version = [version]$identity.Version; AppId = [string]$application.Id
+            RuntimeName = $(if ($runtime) { [string]$runtime.Name } else { '' }); RuntimeMinVersion = $runtimeVersion }
     } finally { $zip.Dispose() }
 }
 
@@ -303,9 +327,11 @@ try {
     $wslProbeBlocked = ($wslStatus.Output + $wslStatus.Error + $wslVersion.Output + $wslVersion.Error) -match 'E_ACCESSDENIED|Access is denied|access denied'
     $featureErrors = @()
     $features = @(Get-CimInstance Win32_OptionalFeature -ErrorAction SilentlyContinue -ErrorVariable +featureErrors | Where-Object { $_.Name -in @('Microsoft-Windows-Subsystem-Linux', 'VirtualMachinePlatform') })
-    $enableWsl = (-not $SkipWsl) -and (($wslStatus.Code -ne 0 -and -not $distros.Count) -or @($features | Where-Object { $_.InstallState -eq 2 }).Count -gt 0)
-    $featurePending = @($features | Where-Object { $_.InstallState -eq 3 }).Count -gt 0
+    # Win32_OptionalFeature.InstallState: 1 Enabled, 2 Disabled, 3 Absent (payload removed), 4 Unknown.
+    # A feature enabled but not yet active shows as 1 while Windows has a reboot pending.
+    $enableWsl = (-not $SkipWsl) -and (($wslStatus.Code -ne 0 -and -not $distros.Count) -or @($features | Where-Object { $_.InstallState -in @(2, 3) }).Count -gt 0)
     $rebootPending = (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending') -or (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired')
+    $featurePending = $rebootPending -and $wslStatus.Code -ne 0 -and @($features | Where-Object { $_.InstallState -eq 1 }).Count -gt 0
     $wslRuns = $false
     $defaultRuns = $false
     if ($defaultName) { $defaultRuns = (Invoke-Native 'wsl.exe' @('-d', $defaultName, '--exec', 'true')).Code -eq 0; $wslRuns = $defaultRuns }
@@ -453,6 +479,11 @@ try {
                 if ((Get-FileHash -LiteralPath $msix -Algorithm SHA256).Hash -ine $expected) { throw 'MSIX SHA256 mismatch. Nothing has been installed.' }
             }
             $package = Read-Package $msix
+            if ($package.RuntimeName) {
+                $runtimeName = $package.RuntimeName
+                $runtimeMinimum = $package.RuntimeMinVersion
+                $runtimePresent = Runtime-Installed
+            }
             $signature = Get-AuthenticodeSignature -LiteralPath $msix
             $signer = $signature.SignerCertificate
             # Before the self-signed certificate is trusted, Windows reports UnknownError ("terminated in a root
@@ -490,7 +521,7 @@ try {
             if (Get-Command winget -ErrorAction SilentlyContinue) {
                 $wingetDirectory = Join-Path $downloads 'runtime-winget'
                 New-Item -ItemType Directory -Path $wingetDirectory -Force | Out-Null
-                $attempt = Invoke-Native 'winget' @('download', '--id', 'Microsoft.WindowsAppRuntime.1.8', '-e', '--accept-package-agreements', '--accept-source-agreements', '--disable-interactivity', '--architecture', $arch.ToLowerInvariant(), '--download-directory', $wingetDirectory) 900
+                $attempt = Invoke-Native 'winget' @('download', '--id', $runtimeName, '-e', '--accept-package-agreements', '--accept-source-agreements', '--disable-interactivity', '--architecture', $arch.ToLowerInvariant(), '--download-directory', $wingetDirectory) 900
                 if ($attempt.Code -eq 0) {
                     $runtimeCandidate = @(Get-ChildItem -LiteralPath $wingetDirectory -Filter '*.exe' -File | Sort-Object LastWriteTime -Descending | Select-Object -First 1)
                     if ($runtimeCandidate.Count) { $runtimeInstaller = $runtimeCandidate[0].FullName }
@@ -500,7 +531,7 @@ try {
             if (-not $runtimePresent) {
                 if (-not $runtimeInstaller) {
                     $runtimeInstaller = Join-Path $downloads "windowsappruntimeinstall-$($arch.ToLowerInvariant()).exe"
-                    Invoke-WebRequest -Uri "https://aka.ms/windowsappsdk/1.8/latest/windowsappruntimeinstall-$($arch.ToLowerInvariant()).exe" -OutFile $runtimeInstaller -UseBasicParsing -TimeoutSec 600
+                    Invoke-WebRequest -Uri "https://aka.ms/windowsappsdk/$($runtimeName -replace '^Microsoft\.WindowsAppRuntime\.', '')/latest/windowsappruntimeinstall-$($arch.ToLowerInvariant()).exe" -OutFile $runtimeInstaller -UseBasicParsing -TimeoutSec 600
                 }
                 $runtimeSignature = Get-AuthenticodeSignature -LiteralPath $runtimeInstaller
                 if ($runtimeSignature.Status -ne 'Valid' -or -not $runtimeSignature.SignerCertificate -or $runtimeSignature.SignerCertificate.Subject -notmatch '(?:^|,\s*)O=Microsoft Corporation(?:,|$)') { throw 'Windows App Runtime download is not validly Microsoft-signed.' }
@@ -509,7 +540,9 @@ try {
                 $runtimeAdmin = -not $runtimePresent
             }
         }
-        $updateWsl = -not $SkipWsl -and -not $wslModern
+        # `wsl --install --no-distribution` already installs the current WSL; an update right after it can fail
+        # until the reboot and would turn a reboot into an admin failure.
+        $updateWsl = -not $SkipWsl -and -not $wslModern -and -not $enableWsl
         if ($trustNeeded -or $enableWsl -or $updateWsl -or $runtimeAdmin) {
             $adminPlan = [ordered]@{ Certificate = $certificatePath; Thumbprint = $signerThumbprint; Trust = $trustNeeded; EnableWsl = $enableWsl; UpdateWsl = $updateWsl; Runtime = $runtimeInstaller; InstallRuntime = $runtimeAdmin }
             $adminPlan | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $stage 'admin-plan.json') -Encoding UTF8
@@ -518,7 +551,7 @@ param([string]$Stage)
 $ErrorActionPreference = 'Stop'
 $env:WSL_UTF8 = '1'
 $plan = Get-Content -Raw -LiteralPath (Join-Path $Stage 'admin-plan.json') | ConvertFrom-Json
-$result = [ordered]@{ Success = $false; Reboot = $false; Phase = ''; Code = 0 }
+$result = [ordered]@{ Success = $false; Reboot = $false; Phase = ''; Code = 0; Message = '' }
 try {
     if ($plan.Trust) {
         $result.Phase = 'certificate'
@@ -546,7 +579,7 @@ try {
         if ($process.ExitCode -notin @(0, 3010)) { $result.Code = $process.ExitCode; throw 'Runtime install failed.' }
     }
     $result.Success = $true
-} catch { }
+} catch { $result.Message = $_.Exception.Message }
 $result | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $Stage 'admin-result.json') -Encoding UTF8
 if ($result.Success) { exit 0 } else { exit 30 }
 '@
@@ -561,14 +594,14 @@ if ($result.Success) { exit 0 } else { exit 30 }
             } catch { Fail 30 'UAC was declined or the administrator process could not start. Rerun and approve its single UAC prompt.' }
             if (-not (Test-Path -LiteralPath $resultPath)) { Fail 30 'Administrator step returned no result. Rerun setup.' }
             $adminResult = Get-Content -Raw -LiteralPath $resultPath | ConvertFrom-Json
-            if (-not $adminResult.Success -or $adminProcess.ExitCode -ne 0) { Fail 30 "Administrator step failed at '$($adminResult.Phase)' (exit $($adminResult.Code)). Rerun setup after correcting this Windows issue." }
+            if (-not $adminResult.Success -or $adminProcess.ExitCode -ne 0) { Fail 30 "Administrator step failed at '$($adminResult.Phase)' (exit $($adminResult.Code)): $($adminResult.Message) Rerun setup after correcting this Windows issue." }
             Phase 'Elevation' 'Single batched elevation completed; subsequent operations remain in the original user account.'
         } else { $adminResult = [pscustomobject]@{ Reboot = $false }; Phase 'Elevation' 'No administrator actions needed; no UAC prompt.' }
         $enabledNeedsReboot = $false
         if ($enableWsl) {
             $afterStatus = Invoke-Native 'wsl.exe' @('--status')
-            $afterFeatures = @(Get-CimInstance Win32_OptionalFeature -ErrorAction SilentlyContinue | Where-Object { $_.Name -in @('Microsoft-Windows-Subsystem-Linux', 'VirtualMachinePlatform') -and $_.InstallState -eq 3 })
-            $enabledNeedsReboot = $afterStatus.Code -ne 0 -or $afterFeatures.Count -gt 0
+            $afterRebootPending = Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending'
+            $enabledNeedsReboot = $afterStatus.Code -ne 0 -or $afterRebootPending
         }
         if ($adminResult.Reboot -or $enabledNeedsReboot -or ($featurePending -and -not $wslRuns)) {
             Phase 'Reboot' 'Reboot, then run the same command again' $false
@@ -686,16 +719,28 @@ fi
                 $bridgeUsed = $false
                 Write-Host 'Codex: the minimal system PATH contains a Codex CLI, so the read-only Windows bridge cannot be used safely. Using a separate Linux sign-in.'
             }
+            # Ubuntu prints a "use sudo" banner in every interactive shell of a sudo-group user who never ran sudo,
+            # ahead of the app's JSON. ~/.hushlogin silences it; root and users who have used sudo are unaffected.
+            [void](Wsl '[ "$(id -u)" -ne 0 ] && [ ! -e "$HOME/.sudo_as_admin_successful" ] && [ ! -e "$HOME/.hushlogin" ] && id -nG | grep -qwE "sudo|admin" && touch "$HOME/.hushlogin"; true')
             foreach ($provider in $Providers) {
                 $working = Test-Usage $provider
+                if ($working -eq 'noise') {
+                    Fail 1 "Text is printed before codexbar's JSON in the default WSL user's interactive shell (bash -ic), so the app cannot read $provider usage. Remove echo/printf output from ~/.bashrc (or move it under a check for an interactive terminal), then rerun."
+                }
                 if ($working -ne 'none') {
                     Phase "Provider $provider" "Usage is $working; provider CLI installation and sign-in skipped, existing sign-in preserved."
                     continue
                 }
-                if ($provider -eq 'codex' -and $working -eq 'none' -and -not $NoWindowsSignIns -and $bridgeSafe -and (Windows-CodexAvailable)) {
+                $linuxHome = $null
+                if ($provider -eq 'codex' -and -not $NoWindowsSignIns -and $bridgeSafe -and (Windows-CodexAvailable)) {
                     $linuxHome = Invoke-Native 'wsl.exe' @('--exec', 'wslpath', '-a', '-u', (Join-Path $env:USERPROFILE '.codex'))
-                    Require-Native $linuxHome 'Translating Windows Codex home failed'
-                    if ($linuxHome.Output -notmatch '^/mnt/[a-z]/[^\r\n]+$') { throw 'Unexpected Windows Codex home path.' }
+                    # A custom automount root (not /mnt/<drive>) is left alone: the bridge is an optimisation.
+                    if ($linuxHome.Code -ne 0 -or $linuxHome.Output -notmatch '^/mnt/[a-z]/[^\r\n]+$') {
+                        Write-Host 'Codex: the Windows Codex folder is not under /mnt/<drive> in WSL; using a separate Linux sign-in instead of the read-only bridge.'
+                        $linuxHome = $null
+                    }
+                }
+                if ($linuxHome) {
                     $envValue = 'CODEXBAR_CODEX_HOME=' + $linuxHome.Output
                     $encoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($envValue + "`n"))
                     $writeBridge = @'
@@ -709,9 +754,16 @@ printf '%s' ENCODED | base64 -d >> "$t"
 chmod 600 "$t"; mv "$t" "$p"
 '@
                     Require-Native (Wsl $writeBridge.Replace('ENCODED', (Quote-Sh $encoded))) 'Configuring read-only Windows sign-in bridge failed'
-                    $bridgeUsed = $true
-                    Phase 'Provider codex' 'Codex: using your Windows sign-in (read-only); if usage goes stale, use Codex on Windows once or run install.ps1 -NoWindowsSignIns.'
-                    continue
+                    $bridged = Test-Usage 'codex'
+                    if ($bridged -eq 'live' -or $bridged -eq 'stale') {
+                        $bridgeUsed = $true
+                        Phase 'Provider codex' "Codex: using your Windows sign-in (read-only, usage $bridged); if usage goes stale, use Codex on Windows once or run install.ps1 -NoWindowsSignIns."
+                        continue
+                    }
+                    # The Windows sign-in didn't produce usage (expired, or a different setup): undo the bridge and
+                    # fall through to a Linux Codex install and sign-in.
+                    Require-Native (Wsl $removeBridge) 'Removing the non-working Windows sign-in bridge failed'
+                    Write-Host 'Codex: the Windows sign-in did not return usage through the bridge; using a separate Linux sign-in.'
                 }
                 if ($provider -eq 'codex' -and $bridgeUsed) {
                     Phase 'Provider codex' 'Read-only Windows sign-in bridge is active; a Linux Codex install and login are skipped.'
@@ -736,7 +788,7 @@ chmod 600 "$t"; mv "$t" "$p"
 
             if (-not $SkipApp) {
                 if ((Get-AuthenticodeSignature -LiteralPath $msix).Status -ne 'Valid') { throw 'Verified MSIX signature remains untrusted after the certificate phase.' }
-                if (-not (Runtime-Installed)) { throw 'Windows App Runtime 1.8 remains unavailable to the original user after installation.' }
+                if (-not (Runtime-Installed)) { throw "$runtimeName remains unavailable to the original user after installation." }
                 if (-not $installed.Count -or [version]$installed[0].Version -lt $package.Version) {
                     # The deployment service can fail to open packages in new folders directly under %LOCALAPPDATA%
                     # (0x80073CF0 / 0x80070003, seen where Codex's Windows sandbox has changed that folder's ACLs),
@@ -772,6 +824,8 @@ chmod 600 "$t"; mv "$t" "$p"
 
             $usageStates = @{}
             foreach ($provider in $Providers) { $usageStates[$provider] = Test-Usage $provider }
+            $noisy = @($Providers | Where-Object { $usageStates[$_] -eq 'noise' })
+            if ($noisy.Count) { Fail 1 ("Text is printed before codexbar's JSON for " + ($noisy -join ', ') + " in the default WSL user's interactive shell (bash -ic), so the app cannot read it. Remove echo/printf output from ~/.bashrc, then rerun.") }
             $pending = @($Providers | Where-Object { $usageStates[$_] -eq 'none' })
             if ($pending.Count -gt 0 -and -not $NoSignIn) {
                 $loginLines = New-Object 'System.Collections.Generic.List[string]'
