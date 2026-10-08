@@ -14,6 +14,43 @@ REAL=/opt/codexbar/CodexBarCLI
 # variables, which are deliberately absent from usage commands and from the usage cache key.
 if [ "${1:-}" = "cost" ]; then exec "$REAL" "$@"; fi
 
+# The bridge is explicitly enabled by this one literal setting. Never execute the config as shell code.
+# Only usage invocations for the Codex provider can use a Windows-mounted home.
+codex_provider=0; args=("$@")
+for ((i=0; i<$#; i++)); do
+  if [ "${args[$i]}" = "--provider" ] && [ "${args[$((i+1))]:-}" = "codex" ]; then codex_provider=1; fi
+done
+if [ "$codex_provider" -eq 1 ] && { [ "${1:-}" = "usage" ] || [[ "${1:-}" = --* ]]; }; then
+  bridge_defined=0; bridge_home=''
+  config="${HOME}/.config/codexbar/shim.env"
+  if [ -f "$config" ]; then
+    while IFS= read -r line || [ -n "$line" ]; do
+      line="${line%$'\r'}"
+      case "$line" in
+        CODEXBAR_CODEX_HOME=*) bridge_defined=1; bridge_home="${line#CODEXBAR_CODEX_HOME=}" ;;
+      esac
+    done < "$config"
+  fi
+  if [ "$bridge_defined" -eq 1 ]; then
+    [ -n "$bridge_home" ] && [[ "$bridge_home" = /* ]] || { echo 'CODEXBAR_CODEX_HOME must be a nonempty absolute WSL path.' >&2; exit 1; }
+    bridge_path=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+    # Linux Codex in a system directory could refresh bridged credentials. Fail closed if it exists.
+    if PATH="$bridge_path" command -v codex >/dev/null 2>&1 || PATH="$bridge_path" command -v codex.exe >/dev/null 2>&1; then
+      echo 'Codex bridge refused: move the Linux Codex CLI to ~/.local/bin (outside system PATH), or remove CODEXBAR_CODEX_HOME from shim.env.' >&2
+      exit 1
+    fi
+    bridge_args=(); args=("$@"); i=0
+    while [ "$i" -lt "${#args[@]}" ]; do
+      case "${args[$i]}" in
+        --source) i=$((i+2)); continue ;;
+        --source=*) i=$((i+1)); continue ;;
+      esac
+      bridge_args+=("${args[$i]}"); i=$((i+1))
+    done
+    exec env PATH="$bridge_path" CODEX_HOME="$bridge_home" "$REAL" "${bridge_args[@]}" --source oauth
+  fi
+fi
+
 args=("$@"); gem=0; json=0; out=()
 i=0
 while [ $i -lt ${#args[@]} ]; do
@@ -78,12 +115,28 @@ fi
 #      attempt isn't repeated on every refresh (which used to push a refresh past the app's timeout).
 #   3. The last good result, however old.
 case " $* " in *" --provider claude "*)
-  C=/var/tmp/codexbar-claude-$(printf '%s' "$*" | md5sum | cut -c1-8).json
-  COOLDOWN=/var/tmp/codexbar-claude-oauth-cooldown
-  CLI_BROKEN=/var/tmp/codexbar-claude-cli-broken
+  uid=$(id -u)
+  key=$(printf '%s' "$*" | md5sum | cut -c1-8)
+  C=/var/tmp/codexbar-claude-$uid-$key.json
+  COOLDOWN=/var/tmp/codexbar-claude-$uid-oauth-cooldown
+  CLI_BROKEN=/var/tmp/codexbar-claude-$uid-cli-broken
+  # Legacy state is usable only when it belongs to this user. New writes always use UID-scoped names.
+  owned() { [ -f "$1" ] && [ ! -L "$1" ] && [ -O "$1" ]; }
+  readable_state() {
+    if owned "$1"; then printf '%s' "$1"; elif owned "$2"; then printf '%s' "$2"; fi
+  }
+  cache_read=$(readable_state "$C" "/var/tmp/codexbar-claude-$key.json")
+  cooldown_read=$(readable_state "$COOLDOWN" /var/tmp/codexbar-claude-oauth-cooldown)
+  broken_read=$(readable_state "$CLI_BROKEN" /var/tmp/codexbar-claude-cli-broken)
+  write_state() {
+    local staged
+    staged=$(mktemp "/var/tmp/codexbar-claude-$uid.XXXXXX") || return 1
+    if printf '%s\n' "$2" > "$staged" && mv -f "$staged" "$1"; then return 0; fi
+    rm -f "$staged"; return 1
+  }
   age() { echo $(( $(date +%s) - $(stat -c %Y "$1") )); }
 
-  if [ -s "$C" ] && [ "$(age "$C")" -lt 600 ]; then cat "$C"; exit 0; fi
+  if [ -n "$cache_read" ] && [ -s "$cache_read" ] && [ "$(age "$cache_read")" -lt 600 ]; then cat "$cache_read"; exit 0; fi
 
   oauth=(); cli=()
   for a in "${out[@]}"; do
@@ -93,18 +146,18 @@ case " $* " in *" --provider claude "*)
   o='[{"provider":"claude","source":"oauth","error":{"kind":"provider","code":3,"message":"Claude usage is rate limited right now; retrying shortly."}}]'
   rc=3
 
-  if [ ! -e "$COOLDOWN" ] || [ "$(age "$COOLDOWN")" -ge 600 ]; then
+  if [ -z "$cooldown_read" ] || [ "$(age "$cooldown_read")" -ge 600 ]; then
     r=$("$REAL" "${oauth[@]}"); rc=$?
-    if [ $rc -eq 0 ]; then o=$r; rm -f "$COOLDOWN"; else o=$r; touch "$COOLDOWN"; fi
+    if [ $rc -eq 0 ]; then o=$r; owned "$COOLDOWN" && rm -f "$COOLDOWN"; else o=$r; write_state "$COOLDOWN" ''; fi
   fi
 
-  if [ $rc -ne 0 ] && { [ ! -e "$CLI_BROKEN" ] || [ "$(age "$CLI_BROKEN")" -ge 21600 ]; }; then
+  if [ $rc -ne 0 ] && { [ -z "$broken_read" ] || [ "$(age "$broken_read")" -ge 21600 ]; }; then
     r=$("$REAL" "${cli[@]}"); rc2=$?
-    if [ $rc2 -eq 0 ]; then o=$r; rc=0; rm -f "$CLI_BROKEN"; else touch "$CLI_BROKEN"; fi
+    if [ $rc2 -eq 0 ]; then o=$r; rc=0; owned "$CLI_BROKEN" && rm -f "$CLI_BROKEN"; else write_state "$CLI_BROKEN" ''; fi
   fi
 
-  if [ $rc -eq 0 ]; then printf '%s\n' "$o" > "$C"; printf '%s\n' "$o"; exit 0; fi
-  if [ -s "$C" ]; then cat "$C"; exit 0; fi
+  if [ $rc -eq 0 ]; then write_state "$C" "$o"; printf '%s\n' "$o"; exit 0; fi
+  if [ -n "$cache_read" ] && [ -s "$cache_read" ]; then cat "$cache_read"; exit 0; fi
   printf '%s\n' "$o"; exit $rc ;;
 esac
 

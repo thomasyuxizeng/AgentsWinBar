@@ -1,3 +1,9 @@
+# Stable signing setup (run locally; use a strong password and keep the PFX private):
+# $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject "CN=CodexBarWin OSS" -KeyUsage DigitalSignature -NotAfter (Get-Date).AddYears(10) -CertStoreLocation "Cert:\CurrentUser\My" -TextExtension @("2.5.29.37={text}1.3.6.1.5.5.7.3.3", "2.5.29.19={text}")
+# $password = Read-Host "PFX password" -AsSecureString; Export-PfxCertificate -Cert $cert -FilePath signing.pfx -Password $password
+# [IO.File]::WriteAllText("signing.base64", [Convert]::ToBase64String([IO.File]::ReadAllBytes("signing.pfx")))
+# gh secret set SIGNING_PFX_BASE64 < signing.base64  (use a shell supporting input redirection)
+# gh secret set SIGNING_PFX_PASSWORD  (enter the same password at the prompt)
 name: Release
 
 on:
@@ -21,7 +27,76 @@ permissions:
   contents: write
 
 jobs:
+  cert:
+    runs-on: windows-latest
+    outputs:
+      mode: ${{ steps.signing.outputs.mode }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Prepare shared signing certificate
+        id: signing
+        shell: pwsh
+        env:
+          SIGNING_PFX_BASE64: ${{ secrets.SIGNING_PFX_BASE64 }}
+          SIGNING_PFX_PASSWORD: ${{ secrets.SIGNING_PFX_PASSWORD }}
+        run: |
+          New-Item -ItemType Directory -Path signing | Out-Null
+          if ($env:SIGNING_PFX_BASE64 -and $env:SIGNING_PFX_PASSWORD) {
+            "mode=stable" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+            [IO.File]::WriteAllBytes("$PWD\signing\CodexBarWin.pfx", [Convert]::FromBase64String($env:SIGNING_PFX_BASE64))
+            $password = ConvertTo-SecureString -String $env:SIGNING_PFX_PASSWORD -Force -AsPlainText
+            $cert = Import-PfxCertificate -FilePath signing/CodexBarWin.pfx -Password $password -CertStoreLocation "Cert:\CurrentUser\My" |
+              Where-Object { $_.HasPrivateKey }
+            if (@($cert).Count -ne 1) { throw "Signing PFX must contain exactly one certificate with a private key." }
+          } else {
+            "mode=ephemeral" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+            $generatedPassword = [Convert]::ToBase64String([Security.Cryptography.RandomNumberGenerator]::GetBytes(32))
+            Write-Output "::add-mask::$generatedPassword"
+            $password = ConvertTo-SecureString -String $generatedPassword -Force -AsPlainText
+            $cert = New-SelfSignedCertificate `
+              -Type CodeSigningCert `
+              -Subject "CN=CodexBarWin OSS" `
+              -KeyUsage DigitalSignature `
+              -NotAfter (Get-Date).AddYears(10) `
+              -FriendlyName "CodexBarWin Code Signing Certificate" `
+              -CertStoreLocation "Cert:\CurrentUser\My" `
+              -TextExtension @("2.5.29.37={text}1.3.6.1.5.5.7.3.3", "2.5.29.19={text}")
+            Export-PfxCertificate -Cert $cert -FilePath signing/CodexBarWin.pfx -Password $password | Out-Null
+            # The fallback password travels only in the short-lived signing artifact, never job outputs or release assets.
+            [IO.File]::WriteAllText("$PWD\signing\password.txt", $generatedPassword)
+          }
+
+          [xml]$manifest = Get-Content Package.appxmanifest -Raw
+          if ($cert.Subject -ne $manifest.Package.Identity.Publisher) {
+            throw "Signing certificate subject must match Package.appxmanifest Publisher."
+          }
+          Export-Certificate -Cert $cert -FilePath "signing/CodexBarWin-${{ github.ref_name }}-Certificate.cer" | Out-Null
+          Copy-Item "signing/CodexBarWin-${{ github.ref_name }}-Certificate.cer" signing/CodexBarWin-Certificate.cer
+
+      - name: Upload shared signing material
+        if: steps.signing.outputs.mode == 'ephemeral'
+        uses: actions/upload-artifact@v4
+        with:
+          name: signing-material
+          path: |
+            signing/CodexBarWin.pfx
+            signing/password.txt
+          retention-days: 1
+          if-no-files-found: error
+
+      - name: Upload public certificates
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-certificate
+          path: signing/*.cer
+          retention-days: 1
+          if-no-files-found: error
+
   build:
+    needs: cert
     runs-on: windows-latest
 
     strategy:
@@ -58,22 +133,18 @@ jobs:
       - name: Restore dependencies
         run: dotnet restore CodexBarWin.csproj -p:Platform=${{ matrix.platform }}
 
-      - name: Create self-signed certificate
-        shell: pwsh
-        run: |
-          $cert = New-SelfSignedCertificate `
-            -Type CodeSigningCert `
-            -Subject "CN=CodexBarWin OSS" `
-            -KeyUsage DigitalSignature `
-            -FriendlyName "CodexBarWin Code Signing Certificate" `
-            -CertStoreLocation "Cert:\CurrentUser\My" `
-            -TextExtension @("2.5.29.37={text}1.3.6.1.5.5.7.3.3", "2.5.29.19={text}")
-          
-          $password = ConvertTo-SecureString -String "temp123" -Force -AsPlainText
-          Export-PfxCertificate -Cert "Cert:\CurrentUser\My\$($cert.Thumbprint)" -FilePath CodexBarWin.pfx -Password $password
-          
-          # Export public certificate for users
-          Export-Certificate -Cert "Cert:\CurrentUser\My\$($cert.Thumbprint)" -FilePath CodexBarWin.cer
+      - name: Download shared signing material
+        if: needs.cert.outputs.mode == 'ephemeral'
+        uses: actions/download-artifact@v4
+        with:
+          name: signing-material
+          path: signing
+
+      - name: Download public certificates
+        uses: actions/download-artifact@v4
+        with:
+          name: release-certificate
+          path: signing
 
       - name: Update Package.appxmanifest version
         shell: pwsh
@@ -104,6 +175,9 @@ jobs:
 
       - name: Sign MSIX package
         shell: pwsh
+        env:
+          SIGNING_PFX_BASE64: ${{ secrets.SIGNING_PFX_BASE64 }}
+          SIGNING_PFX_PASSWORD: ${{ secrets.SIGNING_PFX_PASSWORD }}
         run: |
           $msixPath = Get-ChildItem -Path "AppPackages" -Filter "*.msix" -Recurse | Select-Object -First 1
           # Find signtool.exe dynamically
@@ -111,7 +185,37 @@ jobs:
             Where-Object { $_.FullName -match "x64" } |
             Sort-Object { [version]($_.Directory.Parent.Name -replace '\.0$', '') } -Descending |
             Select-Object -First 1
-          & $signtool.FullName sign /fd SHA256 /a /f CodexBarWin.pfx /p "temp123" $msixPath.FullName
+          if ($env:SIGNING_PFX_BASE64 -and $env:SIGNING_PFX_PASSWORD) {
+            # Decode the stable private key directly from secrets; it never travels through artifacts.
+            [IO.File]::WriteAllBytes("$PWD\signing\CodexBarWin.pfx", [Convert]::FromBase64String($env:SIGNING_PFX_BASE64))
+            $signingPassword = $env:SIGNING_PFX_PASSWORD
+          } else {
+            $signingPassword = [IO.File]::ReadAllText("$PWD\signing\password.txt")
+            Write-Output "::add-mask::$signingPassword"
+          }
+          if (-not $signingPassword) { throw "Missing signing password." }
+          # Handle native failures explicitly so transient timestamp failures can be retried.
+          $PSNativeCommandUseErrorActionPreference = $false
+          for ($attempt = 1; $attempt -le 3; $attempt++) {
+            & $signtool.FullName sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 /a /f signing/CodexBarWin.pfx /p $signingPassword $msixPath.FullName
+            $signingExitCode = $LASTEXITCODE
+            if ($signingExitCode -eq 0) { break }
+            if ($attempt -eq 3) {
+              throw "MSIX signing failed after 3 attempts with exit code $signingExitCode."
+            }
+            Write-Warning "MSIX signing attempt $attempt failed with exit code $signingExitCode. Retrying in 10 seconds."
+            Start-Sleep -Seconds 10
+          }
+
+      - name: Verify MSIX signer matches published certificate
+        shell: pwsh
+        run: |
+          $msixPath = Get-ChildItem -Path "AppPackages" -Filter "*.msix" -Recurse | Select-Object -First 1
+          $signature = Get-AuthenticodeSignature -FilePath $msixPath.FullName
+          $publishedCert = [Security.Cryptography.X509Certificates.X509Certificate2]::new("$PWD\signing\CodexBarWin-${{ github.ref_name }}-Certificate.cer")
+          if (-not $signature.SignerCertificate -or $signature.SignerCertificate.Thumbprint -ne $publishedCert.Thumbprint) {
+            throw "MSIX signer thumbprint does not match the published certificate."
+          }
 
       - name: Rename and prepare artifacts
         shell: pwsh
@@ -122,7 +226,6 @@ jobs:
 
           Copy-Item $msixPath.FullName -Destination "CodexBarWin-$version-$platform.msix"
           Copy-Item $msixPath.FullName -Destination "CodexBarWin-$platform.msix"
-          Copy-Item "CodexBarWin.cer" -Destination "CodexBarWin-$version-Certificate.cer"
 
           # Update .appinstaller with version (only for x64)
           if ($platform -eq "x64" -and (Test-Path "CodexBarWin.appinstaller")) {
@@ -153,12 +256,11 @@ jobs:
             CodexBarWin-${{ github.ref_name }}-${{ matrix.platform }}.msix
             CodexBarWin-${{ matrix.platform }}.msix
             CodexBarWin-${{ github.ref_name }}-${{ matrix.platform }}.msix.sha256
-            CodexBarWin-${{ github.ref_name }}-Certificate.cer
             CodexBarWin.appinstaller
           retention-days: 1
 
   release:
-    needs: build
+    needs: [cert, build]
     runs-on: ubuntu-latest
 
     steps:
@@ -175,7 +277,8 @@ jobs:
       - name: Generate combined checksum file
         run: |
           cd artifacts
-          cat *.sha256 > CodexBarWin-${{ github.ref_name }}-checksums.sha256
+          sha256sum *.msix > CodexBarWin-${{ github.ref_name }}-checksums.sha256
+          cp CodexBarWin-${{ github.ref_name }}-checksums.sha256 CodexBarWin-checksums.sha256
           rm -f *.msix.sha256
 
       - name: Extract release notes from CHANGELOG
@@ -229,3 +332,24 @@ jobs:
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  cleanup:
+    needs: [cert, build, release]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+
+    steps:
+      - name: Delete throwaway signing material
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          artifact_ids=$(gh api --paginate "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts" \
+            --jq '.artifacts[] | select(.name == "signing-material") | .id')
+          while IFS= read -r artifact_id; do
+            if [ -n "$artifact_id" ]; then
+              gh api --method DELETE "repos/${{ github.repository }}/actions/artifacts/$artifact_id"
+            fi
+          done <<< "$artifact_ids"

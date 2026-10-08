@@ -5,6 +5,7 @@
 set -euo pipefail
 
 VERSION="${CODEXBAR_VERSION:-v0.69.0}"
+[[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Invalid CODEXBAR_VERSION: expected vMAJOR.MINOR.PATCH" >&2; exit 1; }
 SHIM_SRC="${1:-$(dirname "$(readlink -f "$0")")/codexbar-shim.sh}"
 INSTALL_DIR=/opt/codexbar
 
@@ -21,18 +22,29 @@ esac
 
 FILE="CodexBarCLI-${VERSION}-linux-${ARCH}.tar.gz"
 BASE="https://github.com/steipete/CodexBar/releases/download/${VERSION}"
-TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
+TMP="$(mktemp -d)"; STAGED=''; trap 'rm -rf "$TMP"; [ -z "$STAGED" ] || rm -f "$STAGED"' EXIT
 
 echo "Downloading ${FILE} ..."
-curl -fsSL -o "$TMP/$FILE" "$BASE/$FILE"
-curl -fsSL -o "$TMP/$FILE.sha256" "$BASE/$FILE.sha256"
+curl -fsSL --retry 3 --connect-timeout 15 --max-time 300 -o "$TMP/$FILE" "$BASE/$FILE"
+curl -fsSL --retry 3 --connect-timeout 15 --max-time 300 -o "$TMP/$FILE.sha256" "$BASE/$FILE.sha256"
 (cd "$TMP" && sha256sum -c "$FILE.sha256")
 
 mkdir -p "$INSTALL_DIR"
-tar -xzf "$TMP/$FILE" -C "$INSTALL_DIR"
+mkdir "$TMP/extracted"
+tar -xzf "$TMP/$FILE" -C "$TMP/extracted"
+[ -f "$TMP/extracted/CodexBarCLI" ] && [ ! -L "$TMP/extracted/CodexBarCLI" ] || { echo "Archive does not contain a regular CodexBarCLI executable" >&2; exit 1; }
+# The archive also carries CodexBar_CodexBarCore.bundle (provider plugins), VERSION and a codexbar symlink.
+# Copy everything else first, then swap the binary in with an atomic rename on the destination filesystem.
+(cd "$TMP/extracted" && find . -mindepth 1 -maxdepth 1 ! -name CodexBarCLI -exec cp -a --remove-destination {} "$INSTALL_DIR/" \;)
+STAGED="$(mktemp "$INSTALL_DIR/.CodexBarCLI.XXXXXX")"
+install -m 0755 "$TMP/extracted/CodexBarCLI" "$STAGED"
+mv -f "$STAGED" "$INSTALL_DIR/CodexBarCLI"
+STAGED=''
 
 install -m 0755 "$SHIM_SRC" "$INSTALL_DIR/codexbar-shim"
 ln -sf "$INSTALL_DIR/codexbar-shim" /usr/local/bin/codexbar
 
-echo "Installed: $(codexbar --version)"
+installed_version="$(codexbar --version)" || { echo "Installed CLI failed its version check" >&2; exit 1; }
+[ -n "$installed_version" ] || { echo "Installed CLI returned an empty version" >&2; exit 1; }
+echo "Installed: $installed_version"
 echo "Next: sign in to the tools you use inside WSL (claude, agy) - see tools/wsl/README.md"

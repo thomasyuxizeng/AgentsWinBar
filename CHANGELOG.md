@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-10-08
+
+### Added
+- `install.ps1`: one-command setup that an AI coding agent (or you) can run from a clone. It checks the machine, downloads the latest release and verifies its checksum and signer, sets up WSL and the CodexBar CLI, installs any missing provider CLIs, installs the app and checks that each provider returns live usage. Admin actions (certificate trust, enabling or updating WSL, the Windows App Runtime) are batched into at most one UAC prompt, and any sign-ins happen in one window. It is safe to rerun and has a `-DryRun` preview.
+- `INSTALL.md`: instructions written for an AI agent, covering exit codes, what the human has to do, and safety rules.
+- Codex can reuse your Windows Codex sign-in read-only, so no second Codex login inside WSL is needed. It is used only when WSL Codex isn't signed in; turn it off with `install.ps1 -NoWindowsSignIns`.
+
+### Changed
+- Releases sign both architectures with one certificate (a stable one when the `SIGNING_PFX_BASE64` and `SIGNING_PFX_PASSWORD` repository secrets are set), valid for 10 years, and timestamp the signature. Each build checks that its package signer matches the published certificate. Releases also publish `CodexBarWin-Certificate.cer` and `CodexBarWin-checksums.sha256` under stable names.
+- The WSL CLI installer validates the version, uses private temporary files, adds download timeouts and retries, and fails if the installed CLI doesn't run.
+- The shim keeps its Claude cache and cooldown files per Linux user, so files left by another user (for example root) can't block refreshes.
+
+### Fixed
+- The ARM64 package was signed with a different certificate from the one published with the release, so it couldn't be installed by trusting that certificate.
+
 ## [0.9.9] - 2026-10-06
 
 ### Changed

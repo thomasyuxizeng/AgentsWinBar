@@ -6,6 +6,10 @@ A Windows 11 app that puts your AI coding usage on the desktop: a tray flyout, a
 
 This is the Wave-OCE fork of [nek0der/CodexBarWin](https://github.com/nek0der/CodexBarWin), which is the Windows front end for [steipete/CodexBar](https://github.com/steipete/CodexBar). What changed in the fork is [listed below](#what-this-fork-adds).
 
+## Install
+
+Tell your AI coding agent: `Install CodexBarWin from https://github.com/Wave-OCE/CodexBarWin — follow INSTALL.md`. Or run `powershell -ExecutionPolicy Bypass -File install.ps1` from a clone. See [INSTALL.md](INSTALL.md) for commands and exit codes.
+
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE.txt)
 [![.NET](https://img.shields.io/badge/.NET-10.0-512BD4)](https://dotnet.microsoft.com/)
 [![WinUI](https://img.shields.io/badge/WinUI-3-blue)](https://microsoft.github.io/microsoft-ui-xaml/)
@@ -55,6 +59,8 @@ The two compact displays, which you can run together or separately:
 | Rows are Claude, Codex and Gemini; each row shows two bars. | The same readout laid out along the taskbar. |
 
 ## Quick start
+
+`install.ps1` automates steps 1–4 below; see [INSTALL.md](INSTALL.md).
 
 You need about 15 minutes the first time. The app runs on Windows; the usage data comes from a small tool inside WSL, so there are three parts: WSL, sign-ins, then the app.
 
@@ -249,7 +255,7 @@ That's Smart App Control or App Control for Business rejecting an unsigned build
 
 ### "The app package must be signed" or error `0x800B0109`
 
-The signing certificate isn't in **Trusted People** on the *Local Machine* store, or the certificate you trusted isn't the one that signed the package (each release is signed with a new certificate, so trust the `.cer` that came with that release). Compare thumbprints: `Get-AuthenticodeSignature .\CodexBarWin.msix`.
+The signing certificate isn't in **Trusted People** on the *Local Machine* store, or the certificate you trusted isn't the one that signed the package (releases from 1.0.0 share one certificate; earlier releases each had their own, so trust the `.cer` that came with that release). `install.ps1` handles this for you. Compare thumbprints: `Get-AuthenticodeSignature .\CodexBarWin.msix`.
 
 ### WSL won't install
 

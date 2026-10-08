@@ -1,5 +1,7 @@
 # CodexBarWin
 
+If you were asked to install the app (not develop it), follow INSTALL.md instead.
+
 Windows 11 WinUI 3 app for AI coding tool usage monitoring. Frontend for [CodexBar CLI](https://github.com/steipete/CodexBar).
 
 ## Stack
