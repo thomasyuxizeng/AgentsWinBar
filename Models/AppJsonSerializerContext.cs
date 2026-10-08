@@ -21,6 +21,7 @@ namespace CodexBarWin.Models;
 [JsonSerializable(typeof(CostCoverage))]
 [JsonSerializable(typeof(DailyCost))]
 [JsonSerializable(typeof(ModelCost))]
+[JsonSerializable(typeof(CostCacheFile))]
 [JsonSerializable(typeof(UsageHistorySample))]
 [JsonSerializable(typeof(List<UsageHistorySample>))]
 [JsonSerializable(typeof(IReadOnlyList<UsageHistorySample>))]

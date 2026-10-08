@@ -250,6 +250,7 @@ public partial class App : Application
         // Services
         services.AddSingleton<IWslService, WslService>();
         services.AddSingleton<ICacheService, CacheService>();
+        services.AddSingleton<ICostCacheStore, CostCacheStore>();
         services.AddSingleton<ICodexBarService, CodexBarService>();
         services.AddSingleton<ISettingsService, SettingsService>();
         services.AddSingleton<ISetupChecker, SetupChecker>();

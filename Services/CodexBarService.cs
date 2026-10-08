@@ -21,6 +21,17 @@ public class CodexBarService : ICodexBarService
     private readonly SemaphoreSlim _costGate = new(1, 1);
     private readonly Dictionary<string, (DateTimeOffset AttemptedAt, CostData? Data)> _costCache = [];
     private static readonly TimeSpan CostCacheTtl = TimeSpan.FromMinutes(30);
+    // Cost scans run in the background and can read hundreds of MB of logs over /mnt/c (Codex took ~90 s on
+    // a real machine), so they get their own deadline instead of the interactive usage timeout.
+    internal static readonly TimeSpan CostScanTimeout = TimeSpan.FromMinutes(5);
+    private readonly ICostCacheStore? _costStore;
+    // The last complete result per provider (guarded by _costCache). A failed, empty or timed-out scan serves it
+    // instead of blanking the totals; only a newer good result replaces it.
+    private readonly Dictionary<string, CostData> _lastGoodCost = [];
+    // Results restored from disk that this session hasn't rescanned yet; published once, before the first scan.
+    private readonly HashSet<string> _restoredCost = [];
+    private bool _costStoreLoaded;
+    private bool _costStoreDirty;
 
 
     public CodexBarService(
@@ -32,8 +43,10 @@ public class CodexBarService : ICodexBarService
         TimeProvider? timeProvider = null,
         Func<string>? userProfile = null,
         Func<string, bool>? directoryExists = null,
-        IActivityLog? activityLog = null)
+        IActivityLog? activityLog = null,
+        ICostCacheStore? costStore = null)
     {
+        _costStore = costStore;
         _wslService = wslService;
         _cacheService = cacheService;
         _settingsService = settingsService;
@@ -109,30 +122,41 @@ public class CodexBarService : ICodexBarService
         try
         {
             if (!CostsEnabled) return;
+            if (_costStore != null && !_costStoreLoaded)
+            {
+                var restored = await _costStore.LoadAsync(ct);
+                lock (_costCache)
+                    foreach (var (provider, data) in restored)
+                        if (_lastGoodCost.TryAdd(provider, data)) _restoredCost.Add(provider);
+                _costStoreLoaded = true;
+            }
             var now = _timeProvider.GetUtcNow();
             var due = new List<string>();
             foreach (var provider in normalized)
             {
                 ct.ThrowIfCancellationRequested();
-                CostData? cachedData;
+                CostData? published;
                 lock (_costCache)
                 {
                     if (!forceRefresh && _costCache.TryGetValue(provider, out var cached) && now - cached.AttemptedAt < CostCacheTtl)
-                        cachedData = cached.Data;
+                        published = cached.Data ?? LastGoodCost(provider, now);
                     else
                     {
                         previousAttempts[provider] = _costCache.TryGetValue(provider, out var prior) ? prior : null;
                         _costCache[provider] = (now, null); // Back off on errors too.
                         due.Add(provider);
-                        continue;
+                        // Show a result restored from disk straight away; the scan below replaces it.
+                        published = _restoredCost.Remove(provider) ? LastGoodCost(provider, now) : null;
+                        if (published == null) continue;
                     }
                 }
-                onCompleted(provider, cachedData);
+                onCompleted(provider, published);
             }
             if (due.Count == 0) return;
+            var scanTimeout = TimeSpan.FromSeconds(Math.Max(CostScanTimeout.TotalSeconds,
+                _settingsService.Settings.Timeouts.CliProviderFirstFetchTimeoutSeconds));
             var commands = due.Select(provider => new WslBatchCommand(
-                Helpers.CostCommandBuilder.Build(provider, _userProfile(), _directoryExists),
-                TimeSpan.FromSeconds(Math.Max(60, _settingsService.Settings.Timeouts.CliProviderFirstFetchTimeoutSeconds)))).ToArray();
+                Helpers.CostCommandBuilder.Build(provider, _userProfile(), _directoryExists), scanTimeout)).ToArray();
             var completed = new bool[due.Count];
             var retry = new bool[due.Count];
             var batchFailed = false;
@@ -143,6 +167,8 @@ public class CodexBarService : ICodexBarService
                 if (completed[index]) return;
                 completed[index] = true;
                 var data = CostsEnabled ? InterpretCostResult(due[index], result, now) : null;
+                if (data == null && CostsEnabled)
+                    lock (_costCache) data = LastGoodCost(due[index], now);
                 onCompleted(due[index], data);
             }
             async Task ScanIndividuallyAsync(int index)
@@ -212,8 +238,35 @@ public class CodexBarService : ICodexBarService
                     }
                 }
             }
+            else await SaveCostStoreAsync();
             _costGate.Release();
         }
+    }
+
+    /// <summary>The last complete result; its "today" totals are cleared once that calendar day has passed.</summary>
+    private CostData? LastGoodCost(string provider, DateTimeOffset now)
+    {
+        if (!_lastGoodCost.TryGetValue(provider, out var data)) return null;
+        var zone = _timeProvider.LocalTimeZone;
+        var fetchedUtc = data.FetchedAt.Kind == DateTimeKind.Local
+            ? data.FetchedAt.ToUniversalTime()
+            : DateTime.SpecifyKind(data.FetchedAt, DateTimeKind.Utc);
+        if (TimeZoneInfo.ConvertTimeFromUtc(fetchedUtc, zone).Date == TimeZoneInfo.ConvertTime(now, zone).Date) return data;
+        return data with { TodayCostUSD = 0, TodayTokens = 0 };
+    }
+
+    private async Task SaveCostStoreAsync()
+    {
+        if (_costStore == null) return;
+        Dictionary<string, CostData>? snapshot = null;
+        lock (_costCache)
+        {
+            if (!_costStoreDirty) return;
+            snapshot = new Dictionary<string, CostData>(_lastGoodCost, StringComparer.Ordinal);
+            _costStoreDirty = false;
+        }
+        try { await _costStore.SaveAsync(snapshot); }
+        catch (Exception ex) { _logger.LogDebug(ex, "Cost cache could not be saved"); }
     }
 
     private CostData? InterpretCostResult(string provider, WslResult result, DateTimeOffset attemptedAt)
@@ -232,7 +285,16 @@ public class CodexBarService : ICodexBarService
             if (dto == null || !string.Equals(dto.Provider, provider == "gemini" ? "antigravity" : provider,
                 StringComparison.OrdinalIgnoreCase)) return null;
             var data = dto.ToCostData(provider, attemptedAt.UtcDateTime);
-            lock (_costCache) _costCache[provider] = (attemptedAt, data.HasData ? data : null);
+            lock (_costCache)
+            {
+                _costCache[provider] = (attemptedAt, data.HasData ? data : null);
+                if (data.HasData)
+                {
+                    _lastGoodCost[provider] = data;
+                    _restoredCost.Remove(provider);
+                    _costStoreDirty = true;
+                }
+            }
             return data.HasData ? data : null;
         }
         catch (Exception ex)

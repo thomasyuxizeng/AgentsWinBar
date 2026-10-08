@@ -48,6 +48,13 @@ public record ModelCost
     public decimal? Cost { get; init; }
 }
 
+/// <summary>The last complete cost result per provider, kept on disk so a failed or slow scan never blanks it.</summary>
+public record CostCacheFile
+{
+    public int Version { get; init; } = 1;
+    public Dictionary<string, CostData> Items { get; init; } = [];
+}
+
 /// <summary>The CLI calls today's calendar-day totals "session".</summary>
 public record CostDataDto
 {

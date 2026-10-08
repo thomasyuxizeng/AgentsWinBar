@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- Cost totals could show only Gemini (for example "$0.25 · all providers"): Claude and Codex cost scans were cut off after 60 seconds, but reading large Windows logs through WSL can take longer (about 90 seconds for Codex on a real machine), and a failed scan replaced the last totals with nothing for 30 minutes. Cost scans now get up to 5 minutes, the last complete result per provider is kept in `cost-cache.json` and shown at startup, and a failed or timed-out scan keeps showing it until a newer complete scan replaces it.
 - `install.ps1` refused every first-time install: before the certificate is trusted, Windows reports the release package's signature as `UnknownError` (untrusted root), which the signer check didn't accept. It now accepts that status only when an untrusted self-signed root is the certificate chain's sole problem.
 - `install.ps1` could fail to install the app with `0x80073CF0` ("Package could not be opened"), because Windows' deployment service couldn't open packages in a new folder directly under `%LOCALAPPDATA%` on some machines. The verified package is now installed from a fresh copy in `%TEMP%`.
 

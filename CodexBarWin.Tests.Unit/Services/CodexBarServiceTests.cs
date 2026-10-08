@@ -377,6 +377,113 @@ public class CodexBarServiceTests
         return results;
     }
 
+    private sealed class MemoryCostStore : ICostCacheStore
+    {
+        public Dictionary<string, CostData> Items { get; } = [];
+        public int LoadCount { get; private set; }
+        public List<IReadOnlyDictionary<string, CostData>> Saves { get; } = [];
+        public Task<IReadOnlyDictionary<string, CostData>> LoadAsync(CancellationToken ct = default)
+        {
+            LoadCount++;
+            return Task.FromResult<IReadOnlyDictionary<string, CostData>>(new Dictionary<string, CostData>(Items));
+        }
+        public Task SaveAsync(IReadOnlyDictionary<string, CostData> items, CancellationToken ct = default)
+        {
+            Saves.Add(new Dictionary<string, CostData>(items));
+            return Task.CompletedTask;
+        }
+    }
+
+    private CodexBarService StoredCostService(MemoryCostStore store, CostClock clock) =>
+        new(_mockWslService, _mockCacheService, _mockSettingsService, _mockSampleDataLoader, _mockLogger.Object,
+            clock, () => "C:\\Users\\Test", _ => true, costStore: store);
+
+    [TestMethod]
+    public async Task GetCostAsync_RescanFailsOrTimesOut_KeepsLastGoodTotals()
+    {
+        var clock = new CostClock(); var service = CostService(clock);
+        SetCostResponse();
+        var good = await service.GetCostAsync("claude");
+        good!.Last30DaysCostUSD.Should().Be(5m);
+        SetCostResponse(success: false, json: "Command timed out");
+        (await service.GetCostAsync("claude", forceRefresh: true)).Should().BeSameAs(good);
+        // The failure still backs off; the cached answer during backoff is the last good result, not nothing.
+        clock.Now += TimeSpan.FromMinutes(10);
+        (await service.GetCostAsync("claude")).Should().BeSameAs(good);
+        _mockWslService.ExecutedCommands.Should().HaveCount(2);
+        service.GetCostCacheInfo().Single().HasData.Should().BeFalse();
+    }
+
+    [TestMethod]
+    public async Task GetCostAsync_LastGoodFromEarlierDay_ClearsTodayButKeepsThirtyDayTotals()
+    {
+        var clock = new CostClock(); var service = CostService(clock);
+        SetCostResponse();
+        await service.GetCostAsync("claude");
+        clock.Now += TimeSpan.FromDays(1);
+        SetCostResponse(success: false, json: "Command timed out");
+        var stale = await service.GetCostAsync("claude");
+        stale!.TodayCostUSD.Should().Be(0m);
+        stale.TodayTokens.Should().Be(0);
+        stale.Last30DaysCostUSD.Should().Be(5m);
+        stale.Last30DaysTokens.Should().Be(123456);
+    }
+
+    [TestMethod]
+    public async Task GetCostsAsync_StoredResults_PublishedBeforeScanThenReplacedAndSaved()
+    {
+        var clock = new CostClock();
+        var store = new MemoryCostStore();
+        store.Items["codex"] = new CostData { Provider = "codex", Last30DaysCostUSD = 38m, Last30DaysTokens = 99,
+            FetchedAt = clock.Now.UtcDateTime.AddHours(-1) };
+        _mockWslService.BatchHandler = (_, completed, _) =>
+        {
+            IReadOnlyList<WslResult> batch = [CostResult("codex", tokens: 500)];
+            completed!(0, batch[0]);
+            return Task.FromResult(batch);
+        };
+        var service = StoredCostService(store, clock);
+
+        var results = await CollectCostsAsync(service, ["codex"]);
+
+        results.Select(r => r.Cost!.Last30DaysTokens).Should().Equal(99, 500);
+        store.Saves.Should().ContainSingle().Which["codex"].Last30DaysTokens.Should().Be(500);
+        // Restored results are shown once; later scans publish only their own outcome.
+        clock.Now += TimeSpan.FromMinutes(31);
+        (await CollectCostsAsync(service, ["codex"])).Select(r => r.Cost!.Last30DaysTokens).Should().Equal(500);
+        store.LoadCount.Should().Be(1);
+    }
+
+    [TestMethod]
+    public async Task GetCostsAsync_StoredResultAndTimedOutScan_KeepsStoredResultWithoutSaving()
+    {
+        var clock = new CostClock();
+        var store = new MemoryCostStore();
+        var stored = new CostData { Provider = "codex", Last30DaysCostUSD = 38m, Last30DaysTokens = 99, FetchedAt = clock.Now.UtcDateTime };
+        store.Items["codex"] = stored;
+        _mockWslService.BatchHandler = (_, completed, _) =>
+        {
+            IReadOnlyList<WslResult> batch = [new() { ExitCode = 124, Error = "Command timed out" }];
+            completed!(0, batch[0]);
+            return Task.FromResult(batch);
+        };
+
+        var results = await CollectCostsAsync(StoredCostService(store, clock), ["codex"]);
+
+        results.Should().HaveCount(2).And.OnlyContain(r => ReferenceEquals(r.Cost, stored));
+        store.Saves.Should().BeEmpty();
+    }
+
+    [TestMethod]
+    public async Task GetCostsAsync_DeveloperModeOrDisabled_NeitherLoadsNorSavesStore()
+    {
+        var store = new MemoryCostStore();
+        _mockSettingsService.Settings.DeveloperModeEnabled = true;
+        (await CollectCostsAsync(StoredCostService(store, new CostClock()), ["claude"])).Should().BeEmpty();
+        store.LoadCount.Should().Be(0);
+        store.Saves.Should().BeEmpty();
+    }
+
     [TestMethod]
     public async Task GetCostsAsync_ThreeProviders_RunsOneBatchAndYieldsInCompletionOrder()
     {
@@ -384,7 +491,8 @@ public class CodexBarServiceTests
         _mockWslService.BatchHandler = (commands, completed, _) =>
         {
             commands.Should().HaveCount(3);
-            commands.Should().OnlyContain(command => command.Timeout == TimeSpan.FromSeconds(75));
+            // Cost scans use their own background deadline, never shorter than the provider fetch timeout.
+            commands.Should().OnlyContain(command => command.Timeout == CodexBarService.CostScanTimeout);
             commands[2].Command.Should().Be("codexbar cost --provider antigravity --format json --refresh");
             IReadOnlyList<WslResult> batch = [CostResult("claude"), CostResult("codex"), CostResult("gemini")];
             completed!(2, batch[2]); completed(0, batch[0]); completed(1, batch[1]);
