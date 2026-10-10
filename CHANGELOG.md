@@ -151,7 +151,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Window slide-in animation from system tray
 - Setup wizard for first-time configuration
 
-[Unreleased]: https://github.com/Wave-OCE/CodexBarWin/compare/v0.9.9...HEAD
+[Unreleased]: https://github.com/Wave-OCE/CodexBarWin/compare/v1.0.2...HEAD
+[1.0.2]: https://github.com/Wave-OCE/CodexBarWin/compare/v1.0.1...v1.0.2
+[1.0.1]: https://github.com/Wave-OCE/CodexBarWin/compare/v1.0.0...v1.0.1
+[1.0.0]: https://github.com/Wave-OCE/CodexBarWin/compare/v0.9.9...v1.0.0
 [0.9.9]: https://github.com/Wave-OCE/CodexBarWin/compare/v0.9.8...v0.9.9
 [0.9.8]: https://github.com/Wave-OCE/CodexBarWin/compare/v0.9.7...v0.9.8
 [0.9.7]: https://github.com/Wave-OCE/CodexBarWin/compare/v0.9.6...v0.9.7

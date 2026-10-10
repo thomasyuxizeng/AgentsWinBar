@@ -6,7 +6,7 @@ Windows 11 WinUI 3 app for AI coding tool usage monitoring. Frontend for [CodexB
 
 ## Stack
 
-.NET 10, WinUI 3, Windows App SDK, MVVM (CommunityToolkit.Mvvm), H.NotifyIcon.WinUI, MSTest/Moq/FluentAssertions
+.NET 10, WinUI 3, Windows App SDK, MVVM (CommunityToolkit.Mvvm), H.NotifyIcon.WinUI, MSTest/Moq/AwesomeAssertions
 
 ## Commands
 

@@ -86,4 +86,10 @@
     <Compile Include="..\ViewModels\MainViewModel.cs" Link="Linked\MainViewModel.cs" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Content Include="..\Samples\*.json" Link="Samples\%(Filename)%(Extension)">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
 </Project>
