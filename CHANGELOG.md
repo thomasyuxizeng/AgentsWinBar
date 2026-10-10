@@ -23,6 +23,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Stale dashboard cost displays and trailing 30-day totals now recompute reliably from the permanent cost ledger when a fresh CLI scan is unavailable or covers fewer than 30 days.
 
 ### Fixed
+- The cost ledger can no longer hang the app after developer mode is turned off; initial queries load saved costs in the background.
+- Claude service status no longer flips to stale on alternate refreshes when a fresh incident status is available alongside replayed usage.
+- Slow provider status requests no longer block the UI batch callback or delay starting an individual WSL usage fetch.
+- Held usage replays remain valid when the WSL observation clock is more than five minutes ahead.
+- Cost-cache backfill without daily entries uses the original reading's local calendar day instead of the ledger load day.
+- The cost ledger report accepts a provider as its first positional argument while keeping the ledger path named.
 - Claude no longer shows 'Fetch failed' on every other refresh when the WSL shim replays a cached reading within its 10-minute TTL.
 - Gemini and incident status feeds no longer re-download and abort on each refresh; the 500 ms refresh budget bounds waiting rather than canceling HTTP requests, slow fetches populate the cache in the background, and failures are cached for 60 seconds.
 - History no longer feeds the usage fallback or launders synthetic records into cache; `CacheService` (retained up to 7 days) serves as the sole last-known usage source.

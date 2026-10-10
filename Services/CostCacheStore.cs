@@ -53,7 +53,6 @@ public sealed class CostCacheStore : ICostCacheStore
                     if (lastSuccessUtc - now > CacheRetention.ClockSkewTolerance) continue;
                     if (lastSuccessUtc > now) currentData = currentData with { LastSuccessfulFetch = now };
                 }
-                var successAt = (currentData.LastSuccessfulFetch ?? currentData.FetchedAt).ToUniversalTime();
                 items[provider] = currentData with { Provider = provider, Daily = currentData.Daily ?? [] };
             }
         }

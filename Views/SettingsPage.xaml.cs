@@ -109,7 +109,12 @@ public sealed partial class SettingsPage : Page
             ViewModel.ShowCostTotals = CostTotalsToggle.IsOn;
             ViewModel.DeveloperModeEnabled = DeveloperModeToggle.IsOn;
 
+            var wasDeveloperMode = App.Services.GetRequiredService<Services.ISettingsService>().Settings.DeveloperModeEnabled;
             await ViewModel.SaveCommand.ExecuteAsync(null);
+            if (wasDeveloperMode && !ViewModel.DeveloperModeEnabled)
+            {
+                await App.Services.GetRequiredService<Services.ICostLedger>().LoadAsync();
+            }
 
             // Apply theme change
             App.ApplyTheme();

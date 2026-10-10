@@ -74,7 +74,7 @@ public class ReleaseHardeningTests
     }
 
     [TestMethod]
-    public async Task GetUsageAsync_WhenCallerCancelsDuringStatus_StopsBeforeUsageCommand()
+    public async Task GetUsageAsync_WhenCallerCancels_CancelsConcurrentStatusAndUsage()
     {
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         _fallback.Setup(f => f.GetStatusAsync(It.IsAny<CancellationToken>())).Returns(async (CancellationToken ct) =>
@@ -84,14 +84,22 @@ public class ReleaseHardeningTests
             return null;
         });
         var commands = 0;
-        _wsl.CommandHandler = (_, _) => { commands++; return Task.FromResult(new WslResult()); };
+        CancellationToken usageToken = default;
+        _wsl.CommandHandler = async (_, ct) =>
+        {
+            commands++;
+            usageToken = ct;
+            await Task.Delay(Timeout.Infinite, ct);
+            return new WslResult();
+        };
         using var cancellation = new CancellationTokenSource();
         var task = Service().GetUsageAsync("gemini", cancellation.Token);
         await entered.Task;
         cancellation.Cancel();
-        Func<Task> act = async () => await task;
+        Func<Task> act = async () => await task.WaitAsync(TimeSpan.FromSeconds(2));
         await act.Should().ThrowAsync<OperationCanceledException>();
-        commands.Should().Be(0);
+        commands.Should().Be(1);
+        usageToken.IsCancellationRequested.Should().BeTrue();
     }
 
     [TestMethod]

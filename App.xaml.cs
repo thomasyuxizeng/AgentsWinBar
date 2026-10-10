@@ -253,7 +253,6 @@ public partial class App : Application
         services.AddSingleton<ICacheService, CacheService>();
         services.AddSingleton<ICostCacheStore, CostCacheStore>();
         services.AddSingleton<ICostLedger, CostLedger>();
-        services.AddSingleton<IGeminiStatusFallback, GeminiStatusFallback>();
         services.AddSingleton<IProviderIncidentFetcher, ProviderIncidentFetcher>();
         services.AddSingleton<ICodexBarService, CodexBarService>();
         services.AddSingleton<ISettingsService, SettingsService>();

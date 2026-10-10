@@ -5,6 +5,7 @@ namespace CodexBarWin.Services;
 /// <summary>
 /// Permanent cost ledger interface. Lifetime costs survive local log rotation,
 /// allowing reliable lifetime queries and 30-day lookups.
+/// Queries read memory only; before loading completes they return no data and queue a background load.
 /// </summary>
 public interface ICostLedger
 {

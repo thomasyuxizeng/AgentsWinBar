@@ -24,12 +24,12 @@
     .\tools\cost-ledger-report.ps1 -From 2026-09-01 -To 2026-09-30
 #>
 
-[CmdletBinding()]
+[CmdletBinding(PositionalBinding = $false)]
 param(
-    [Parameter(Position = 0)]
+    [Parameter()]
     [string]$Path = (Join-Path $env:LOCALAPPDATA 'CodexBarWin\cost-ledger.json'),
 
-    [Parameter(Position = 1)]
+    [Parameter(Position = 0)]
     [string]$Provider = '',
 
     [Parameter()]

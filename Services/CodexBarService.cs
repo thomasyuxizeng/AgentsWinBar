@@ -375,14 +375,15 @@ public class CodexBarService : ICodexBarService
         var normalizedProvider = ProviderConstants.ValidateAndNormalize(provider);
         var generation = BeginProviderRefresh(normalizedProvider);
         ProviderStatus? prefetchedStatus = null;
+        Dictionary<string, Task<ProviderStatus?>> prefetchTasks = [];
         try
         {
-            var prefetchTasks = StartProviderStatusPrefetches([normalizedProvider], ct);
-            ct.ThrowIfCancellationRequested();
-            prefetchedStatus = await AwaitPrefetchedStatusAsync(normalizedProvider, prefetchTasks, ct);
+            prefetchTasks = StartProviderStatusPrefetches([normalizedProvider], ct);
             ct.ThrowIfCancellationRequested();
             var source = ProviderConstants.GetSource(normalizedProvider);
             var result = await _wslService.ExecuteAsync($"codexbar --provider {normalizedProvider} --format json --source {source} --status", ct);
+            prefetchedStatus = await AwaitPrefetchedStatusAsync(normalizedProvider, prefetchTasks, ct);
+            ct.ThrowIfCancellationRequested();
 
             return InterpretProviderResult(normalizedProvider, result, prefetchedStatus, generation);
         }
@@ -390,6 +391,7 @@ public class CodexBarService : ICodexBarService
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to get usage for {Provider}", provider);
+            prefetchedStatus ??= await AwaitPrefetchedStatusAsync(normalizedProvider, prefetchTasks, ct);
             return ProviderError(normalizedProvider, "Usage fetch unavailable", prefetchedStatus, generation);
         }
         finally { await SaveUsageCacheAsync(); }
@@ -540,20 +542,10 @@ public class CodexBarService : ICodexBarService
                         ProviderStatus? pStatus = null;
                         if (prefetchTasks.TryGetValue(providers[index], out var task))
                         {
-                            if (task.IsCompleted)
-                            {
-                                pStatus = task.IsCompletedSuccessfully ? task.Result : null;
-                            }
-                            else
-                            {
-                                try
-                                {
-                                    task.Wait(StatusBudget, ct);
-                                    pStatus = task.IsCompletedSuccessfully ? task.Result : null;
-                                }
-                                catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-                                catch { }
-                            }
+                            // The callback runs on the UI thread. Leave pending statuses to the
+                            // bounded asynchronous wait after the batch has finished.
+                            if (!task.IsCompleted) return;
+                            pStatus = task.IsCompletedSuccessfully ? task.Result : null;
                         }
                         Complete(index, InterpretProviderResult(providers[index], result, pStatus, generations[index]));
                     }
@@ -659,7 +651,7 @@ public class CodexBarService : ICodexBarService
             var data = ParseUsageJsonArray(result.Output).FirstOrDefault(d => string.Equals(d.Provider, provider, StringComparison.OrdinalIgnoreCase));
             if (data == null) return ProviderError(provider, "No data available", prefetchedStatus, generation);
             data = AttachProviderStatus(data, prefetchedStatus);
-            data = ResolveUsage(data with { Provider = provider }, generation);
+            data = ResolveUsage(data with { Provider = provider }, generation, prefetchedStatus != null);
             _logger.LogDebug("Fetched {Provider} successfully", provider);
             return data;
         }
@@ -739,17 +731,12 @@ public class CodexBarService : ICodexBarService
     {
         var provider = data.Provider;
         var cached = _cacheService.GetLastKnown(provider);
+        if (status != null) data = data with { StatusFetchOutcome = FetchOutcome.Success };
 
         // Case 1: Provider had NO status from CLI (e.g. Gemini, where CLI gives no status)
         if (data.ServiceStatus == null)
         {
-            if (string.Equals(provider, "gemini", StringComparison.OrdinalIgnoreCase))
-            {
-                // For Gemini, CLI gives no status: status fetcher supplies the whole status as today.
-                return status == null ? data : data with { ServiceStatus = status, StatusFetchOutcome = FetchOutcome.Success };
-            }
-
-            return data;
+            return status == null ? data : data with { ServiceStatus = status };
         }
 
         // Case 2: CLI SUPPLIED a status (e.g. Claude, Codex, etc.)
@@ -827,28 +814,21 @@ public class CodexBarService : ICodexBarService
         }
     }
 
-    private static UsageData AttachGeminiStatus(UsageData data, ProviderStatus? status)
-    {
-        if (!string.Equals(data.Provider, "gemini", StringComparison.OrdinalIgnoreCase) || data.ServiceStatus != null)
-            return data;
-        return status == null ? data : data with { ServiceStatus = status, StatusFetchOutcome = FetchOutcome.Success };
-    }
-
     private UsageData ProviderError(string provider, string error, ProviderStatus? prefetchedStatus = null, long generation = 0) => ResolveUsage(AttachProviderStatus(new UsageData
     {
         Provider = provider, Error = error, FetchedAt = _timeProvider.GetUtcNow().UtcDateTime,
         UsageFetchOutcome = FetchOutcome.Failed, StatusFetchOutcome = FetchOutcome.Failed
-    }, prefetchedStatus), generation);
+    }, prefetchedStatus), generation, prefetchedStatus != null);
 
-    private UsageData ResolveUsage(UsageData data, long generation)
+    private UsageData ResolveUsage(UsageData data, long generation, bool statusFetchedThisRefresh = false)
     {
         var state = _providerRefreshes.GetOrAdd(data.Provider, _ => new());
         // Keep the entire read/merge/write atomic. Requests are numbered before network work,
         // so completion order cannot let a superseded result replace a newer success.
-        lock (state) return ResolveUsageCore(data, generation, state);
+        lock (state) return ResolveUsageCore(data, generation, state, statusFetchedThisRefresh);
     }
 
-    private UsageData ResolveUsageCore(UsageData data, long generation, ProviderRefreshState state)
+    private UsageData ResolveUsageCore(UsageData data, long generation, ProviderRefreshState state, bool statusFetchedThisRefresh)
     {
         var now = _timeProvider.GetUtcNow().UtcDateTime;
         bool usageSuperseded;
@@ -879,16 +859,20 @@ public class CodexBarService : ICodexBarService
         var freshSuccess = !usageSuperseded && !isCached && data.UsageFetchOutcome == FetchOutcome.Success;
         var isNewerCachedReading = !usageSuperseded && isCached && data.HasUsage && isObservationRetained &&
             (previous == null || prevObsAt == null || obsAtUtc!.Value > prevObsAt.Value);
-        var isReplayOfHeld = !usageSuperseded && isCached && data.HasUsage && isObservationRetained &&
+        var isReplayOfHeld = !usageSuperseded && isCached && data.HasUsage && obsAtUtc.HasValue &&
             (previous != null && prevObsAt != null && obsAtUtc!.Value <= prevObsAt.Value);
 
         var acceptsUsage = freshSuccess || isNewerCachedReading || isReplayOfHeld;
         var usageAt = isNewerCachedReading ? (obsAtUtc!.Value > now ? now : obsAtUtc.Value) : now;
 
-        var statusSuccess = !statusSuperseded && !isCached && data.StatusFetchOutcome == FetchOutcome.Success;
+        var statusSuccess = !statusSuperseded && data.ServiceStatus != null &&
+            (statusFetchedThisRefresh || (!isCached && data.StatusFetchOutcome == FetchOutcome.Success));
         var cachedStatusAt = data.CacheUpdatedAt ?? observationAt;
         var cachedStatus = !statusSuperseded && isCached && data.ServiceStatus != null &&
             cached?.ServiceStatus == null && cachedStatusAt.HasValue && CacheRetention.IsRetained(cachedStatusAt.Value, now);
+        // A held replay may still clear incident detail or supply the CLI's authoritative indicator,
+        // but cannot renew status freshness or restore a status that has expired independently.
+        var replayStatus = !statusSuperseded && isReplayOfHeld && data.ServiceStatus != null && cached?.ServiceStatus != null;
 
         var isHeldStale = prevObsAt.HasValue && (now - prevObsAt.Value > ShimTtl);
         var isNewerStale = obsAtUtc.HasValue && (now - obsAtUtc.Value > ShimTtl);
@@ -910,7 +894,7 @@ public class CodexBarService : ICodexBarService
             UsageFetchOutcome = acceptsUsage ? FetchOutcome.Success : (usageSuperseded || isCached ? FetchOutcome.Unavailable : data.UsageFetchOutcome),
             UsageIsCached = isCached || isReplayOfHeld || (previous?.UsageIsCached == true && !freshSuccess),
             UsageIsStale = isUsageStale,
-            ServiceStatus = statusSuccess || cachedStatus ? data.ServiceStatus : cached?.ServiceStatus,
+            ServiceStatus = statusSuccess || cachedStatus || replayStatus ? data.ServiceStatus : cached?.ServiceStatus,
             LastSuccessfulStatusFetch = statusSuccess ? now : cachedStatus ? Helpers.DashboardValues.Utc(cachedStatusAt!.Value) : cached?.LastSuccessfulStatusFetch,
             StatusIsStale = !statusSuccess && (cachedStatus || cached?.ServiceStatus != null),
             Cost = CacheRetention.RetainedCost(previous?.Cost, now),

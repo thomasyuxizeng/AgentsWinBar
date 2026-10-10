@@ -21,7 +21,8 @@ public sealed class CostLedger : ICostLedger
     private readonly object _stateLock = new();
 
     private CostLedgerFile _file = new();
-    private bool _isLoaded;
+    private volatile bool _isLoaded;
+    private int _loadQueued;
 
     public string FilePath { get; }
 
@@ -47,13 +48,14 @@ public sealed class CostLedger : ICostLedger
 
     public async Task LoadAsync(CancellationToken ct = default)
     {
-        if (DeveloperMode) return;
+        if (_isLoaded || DeveloperMode) return;
         var acquired = false;
         try
         {
-            await _ioGate.WaitAsync(ct);
+            await _ioGate.WaitAsync(ct).ConfigureAwait(false);
             acquired = true;
-            await LoadCoreAsync(ct);
+            if (DeveloperMode) return;
+            await LoadCoreAsync(ct).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (Exception ex)
@@ -66,29 +68,25 @@ public sealed class CostLedger : ICostLedger
         }
     }
 
-    private void EnsureLoadedSync()
+    private bool EnsureLoadStarted()
     {
-        if (_isLoaded || DeveloperMode) return;
-        lock (_stateLock)
+        if (_isLoaded) return true;
+        if (!DeveloperMode && Interlocked.CompareExchange(ref _loadQueued, 1, 0) == 0)
         {
-            if (_isLoaded || DeveloperMode) return;
-            try
+            // Queries must never perform file IO or wait for the IO gate on their caller's thread.
+            Task.Run(async () =>
             {
-                _ioGate.Wait();
                 try
                 {
-                    LoadCoreAsync(CancellationToken.None).GetAwaiter().GetResult();
+                    await LoadAsync().ConfigureAwait(false);
                 }
                 finally
                 {
-                    _ioGate.Release();
+                    Interlocked.Exchange(ref _loadQueued, 0);
                 }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Synchronous cost ledger load failed");
-            }
+            }).SafeFireAndForget(onError: ex => _logger.LogWarning(ex, "Background cost ledger load failed"));
         }
+        return false;
     }
 
     private async Task LoadCoreAsync(CancellationToken ct)
@@ -99,10 +97,10 @@ public sealed class CostLedger : ICostLedger
         if (!File.Exists(FilePath))
         {
             // First run: backfill from existing cost-cache.json if present
-            var backfilled = await TryBackfillFromCostCacheAsync(nowUtc, ct);
+            var backfilled = await TryBackfillFromCostCacheAsync(ct).ConfigureAwait(false);
             if (backfilled)
             {
-                await SaveCoreAsync(nowUtc, ct);
+                await SaveCoreAsync(nowUtc, ct).ConfigureAwait(false);
             }
             _isLoaded = true;
             return;
@@ -111,13 +109,13 @@ public sealed class CostLedger : ICostLedger
         string rawJson;
         try
         {
-            rawJson = await File.ReadAllTextAsync(FilePath, ct);
+            rawJson = await File.ReadAllTextAsync(FilePath, ct).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Could not read cost ledger file at {Path}", FilePath);
             RenameToCorrupt(FilePath, nowUtc);
-            await TryRecoverFromBackupAsync(nowUtc, ct);
+            await TryRecoverFromBackupAsync(nowUtc, ct).ConfigureAwait(false);
             _isLoaded = true;
             return;
         }
@@ -126,7 +124,7 @@ public sealed class CostLedger : ICostLedger
         {
             _logger.LogWarning("Cost ledger file at {Path} is empty; renaming to corrupt", FilePath);
             RenameToCorrupt(FilePath, nowUtc);
-            await TryRecoverFromBackupAsync(nowUtc, ct);
+            await TryRecoverFromBackupAsync(nowUtc, ct).ConfigureAwait(false);
             _isLoaded = true;
             return;
         }
@@ -146,7 +144,7 @@ public sealed class CostLedger : ICostLedger
             _logger.LogWarning("Cost ledger at {Path} has invalid or unsupported schema version {Version}; renaming to corrupt",
                 FilePath, deserialized?.SchemaVersion);
             RenameToCorrupt(FilePath, nowUtc);
-            await TryRecoverFromBackupAsync(nowUtc, ct);
+            await TryRecoverFromBackupAsync(nowUtc, ct).ConfigureAwait(false);
             _isLoaded = true;
             return;
         }
@@ -164,14 +162,14 @@ public sealed class CostLedger : ICostLedger
         {
             try
             {
-                var bakJson = await File.ReadAllTextAsync(_bakPath, ct);
+                var bakJson = await File.ReadAllTextAsync(_bakPath, ct).ConfigureAwait(false);
                 if (!string.IsNullOrWhiteSpace(bakJson))
                 {
                     var recovered = JsonSerializer.Deserialize(bakJson, AppJsonSerializerContext.Default.CostLedgerFile);
                     if (recovered != null && recovered.SchemaVersion == 1)
                     {
                         lock (_stateLock) { _file = recovered; }
-                        await SaveCoreAsync(nowUtc, ct);
+                        await SaveCoreAsync(nowUtc, ct).ConfigureAwait(false);
                         _logger.LogInformation("Successfully recovered cost ledger from backup {BakPath}", _bakPath);
                         return true;
                     }
@@ -188,16 +186,16 @@ public sealed class CostLedger : ICostLedger
         {
             _file = new CostLedgerFile();
         }
-        await TryBackfillFromCostCacheAsync(nowUtc, ct);
+        await TryBackfillFromCostCacheAsync(ct).ConfigureAwait(false);
         return false;
     }
 
-    private async Task<bool> TryBackfillFromCostCacheAsync(DateTime nowUtc, CancellationToken ct)
+    private async Task<bool> TryBackfillFromCostCacheAsync(CancellationToken ct)
     {
         if (!File.Exists(_costCachePath)) return false;
         try
         {
-            var json = await File.ReadAllTextAsync(_costCachePath, ct);
+            var json = await File.ReadAllTextAsync(_costCachePath, ct).ConfigureAwait(false);
             if (string.IsNullOrWhiteSpace(json)) return false;
             var cacheFile = JsonSerializer.Deserialize(json, AppJsonSerializerContext.Default.CostCacheFile);
             if (cacheFile?.Items == null || cacheFile.Items.Count == 0) return false;
@@ -206,7 +204,7 @@ public sealed class CostLedger : ICostLedger
             foreach (var (key, costData) in cacheFile.Items)
             {
                 if (costData == null || !costData.HasData || !ProviderConstants.IsValidProvider(key)) continue;
-                MergeScanUnlocked(costData, nowUtc);
+                MergeScanUnlocked(costData, DashboardValues.Utc(costData.LastSuccessfulFetch ?? costData.FetchedAt));
                 changed = true;
             }
             return changed;
@@ -252,15 +250,15 @@ public sealed class CostLedger : ICostLedger
         var acquired = false;
         try
         {
-            await _ioGate.WaitAsync(ct);
+            await _ioGate.WaitAsync(ct).ConfigureAwait(false);
             acquired = true;
 
-            await LoadCoreAsync(ct);
+            await LoadCoreAsync(ct).ConfigureAwait(false);
 
             var now = nowUtc ?? _clock.GetUtcNow().UtcDateTime;
             MergeScanUnlocked(scan, now);
 
-            await SaveCoreAsync(now, ct);
+            await SaveCoreAsync(now, ct).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (Exception ex)
@@ -463,7 +461,7 @@ public sealed class CostLedger : ICostLedger
 
             var json = JsonSerializer.Serialize(snapshot, AppJsonSerializerContext.Default.CostLedgerFile);
 
-            await File.WriteAllTextAsync(_tmpPath, json, ct);
+            await File.WriteAllTextAsync(_tmpPath, json, ct).ConfigureAwait(false);
             File.Move(_tmpPath, FilePath, overwrite: true);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
@@ -476,7 +474,7 @@ public sealed class CostLedger : ICostLedger
 
     public CostLedgerLifetimeResult GetLifetime(string? provider = null)
     {
-        EnsureLoadedSync();
+        if (!EnsureLoadStarted()) return new CostLedgerLifetimeResult();
         lock (_stateLock)
         {
             var providersToInclude = provider != null && ProviderConstants.IsValidProvider(provider)
@@ -556,7 +554,7 @@ public sealed class CostLedger : ICostLedger
 
     public CostLedgerRangeResult GetRange(string? provider = null, DateOnly fromDay = default, DateOnly toDay = default)
     {
-        EnsureLoadedSync();
+        if (!EnsureLoadStarted()) return new CostLedgerRangeResult();
         lock (_stateLock)
         {
             if (fromDay > toDay)
@@ -720,7 +718,6 @@ public sealed class CostLedger : ICostLedger
 
     public CostLedgerLast30DaysResult GetLast30Days(string? provider = null, DateOnly? asOfDay = null)
     {
-        EnsureLoadedSync();
         var end = asOfDay ?? DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(_clock.GetUtcNow().UtcDateTime, _clock.LocalTimeZone));
         var start = end.AddDays(-29);
 
