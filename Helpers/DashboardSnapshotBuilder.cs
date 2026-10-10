@@ -113,8 +113,8 @@ public static class DashboardSnapshotBuilder
                 ErrorProviderCount = providers.Count(p => !string.IsNullOrEmpty(p.Error)),
                 StaleProviderCount = providers.Count(p => p.IsStale),
                 IncidentCount = providers.Count(p => ProviderStatusPresentation.IsIncident(p.ServiceStatus)),
-                WindowCount = refs.Length, WindowsAtLimit = refs.Count(w => w.Window.UsedPercent >= 95),
-                WindowsNearLimit = refs.Count(w => w.Window.UsedPercent is >= 80 and < 95),
+                WindowCount = refs.Length, WindowsAtLimit = refs.Count(w => w.Window.UsedPercent >= UsageThresholds.Critical),
+                WindowsNearLimit = refs.Count(w => w.Window.UsedPercent is >= UsageThresholds.Warning and < UsageThresholds.Critical),
                 WindowsAheadOfPace = refs.Count(w => w.Window.Pace.Kind == PaceKind.WillRunOut),
                 MostUsedWindow = refs.OrderByDescending(w => w.Window.UsedPercent).Select(w => w.Ref).FirstOrDefault(),
                 NextResetWindow = refs.Where(w => w.Window.ResetsAtUtc > now)

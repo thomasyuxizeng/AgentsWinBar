@@ -114,7 +114,7 @@ public sealed partial class DashboardPage : Page
 
         tiles.Add(s.MostUsedWindow is { } most
             ? new("MOST USED", $"{most.UsedPercent:F0}%", $"{most.ProviderName} · {most.WindowTitle} · resets {DashboardFormat.In(most.ResetsAtUtc)}",
-                most.UsedPercent >= 95 ? Red : most.UsedPercent >= 80 ? Amber : Blue)
+                most.UsedPercent >= UsageThresholds.Critical ? Red : most.UsedPercent >= UsageThresholds.Warning ? Amber : Blue)
             : new("MOST USED", "—", "No usage windows yet", Neutral));
 
         tiles.Add(s.NextResetWindow is { } next

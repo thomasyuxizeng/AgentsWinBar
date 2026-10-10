@@ -35,6 +35,7 @@
     <Compile Include="..\Helpers\DashboardContent.cs" Link="Linked\DashboardContent.cs" />
     <Compile Include="..\Helpers\DashboardSnapshotBuilder.cs" Link="Linked\DashboardSnapshotBuilder.cs" />
     <Compile Include="..\Helpers\DataAge.cs" Link="Linked\DataAge.cs" />
+    <Compile Include="..\Helpers\UsageThresholds.cs" Link="Linked\UsageThresholds.cs" />
     <Compile Include="..\Services\IActivityLog.cs" Link="Linked\IActivityLog.cs" />
     <Compile Include="..\Services\ActivityLog.cs" Link="Linked\ActivityLog.cs" />
     <Compile Include="..\Services\IDashboardService.cs" Link="Linked\IDashboardService.cs" />

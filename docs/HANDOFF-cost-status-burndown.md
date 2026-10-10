@@ -213,7 +213,7 @@ Record usage snapshots and draw a per-window burndown on the detail page.
 - A `BurndownChart` control built from `Canvas` and `Polyline`/`Path` (do **not** add a charting package
   unless its licence is MIT or Apache-2.0 and CI's licence check passes). Show it under each main window card on
   the detail page, with the capture time and sample count. Use the existing colours: blue usage, lavender time,
-  amber and red when 80 and 95 percent, provider accents for extra windows.
+  amber and red when 75 and 90 percent, provider accents for extra windows.
 - Tests for the store (dedupe, prune, persistence round trip) and `BurndownBuilder`.
 
 ### Definition of done

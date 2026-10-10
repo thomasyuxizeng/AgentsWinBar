@@ -264,12 +264,12 @@ public sealed partial class TaskbarWindow : Window
         window?.PercentText ?? (isLoading ? "…" : "–");
 
     /// <summary>
-    /// Same thresholds and colours as the usage meters: amber from 80%, red from 95%.
+    /// Same thresholds and colours as the usage meters: amber from 75%, red from 90% (UsageThresholds).
     /// </summary>
     private static SolidColorBrush? WarningBrush(UsageWindow? window) => window?.Percent switch
     {
-        >= 95 => new SolidColorBrush(ColorHelper.FromArgb(255, 232, 17, 35)),
-        >= 80 => new SolidColorBrush(ColorHelper.FromArgb(255, 255, 185, 0)),
+        >= UsageThresholds.Critical => new SolidColorBrush(ColorHelper.FromArgb(255, 232, 17, 35)),
+        >= UsageThresholds.Warning => new SolidColorBrush(ColorHelper.FromArgb(255, 255, 185, 0)),
         _ => null
     };
 
