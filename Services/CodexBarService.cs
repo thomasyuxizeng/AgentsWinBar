@@ -26,6 +26,7 @@ public class CodexBarService : ICodexBarService
     internal static readonly TimeSpan CostScanTimeout = TimeSpan.FromMinutes(5);
     private readonly ICostCacheStore? _costStore;
     private readonly UsageHistoryStore? _history;
+    private readonly IGeminiStatusFallback? _geminiStatusFallback;
     // The last complete result per provider (guarded by _costCache). A failed, empty or timed-out scan serves it
     // instead of blanking the totals; only a newer good result replaces it.
     private readonly Dictionary<string, CostData> _lastGoodCost = [];
@@ -46,10 +47,12 @@ public class CodexBarService : ICodexBarService
         Func<string, bool>? directoryExists = null,
         IActivityLog? activityLog = null,
         ICostCacheStore? costStore = null,
-        UsageHistoryStore? history = null)
+        UsageHistoryStore? history = null,
+        IGeminiStatusFallback? geminiStatusFallback = null)
     {
         _history = history;
         _costStore = costStore;
+        _geminiStatusFallback = geminiStatusFallback;
         _wslService = wslService;
         _cacheService = cacheService;
         _settingsService = settingsService;
@@ -596,6 +599,7 @@ public class CodexBarService : ICodexBarService
         {
             var data = ParseUsageJsonArray(result.Output).FirstOrDefault(d => string.Equals(d.Provider, provider, StringComparison.OrdinalIgnoreCase));
             if (data == null) return ProviderError(provider, "No data available");
+            data = AttachGeminiStatus(data);
             data = ResolveUsage(data with { Provider = provider });
             _logger.LogDebug("Fetched {Provider} successfully", provider);
             return data;
@@ -606,6 +610,18 @@ public class CodexBarService : ICodexBarService
         {
             CommandNotFound = result.ExitCode == 127
         };
+    }
+
+    private UsageData AttachGeminiStatus(UsageData data)
+    {
+        if (_geminiStatusFallback == null ||
+            !string.Equals(data.Provider, "gemini", StringComparison.OrdinalIgnoreCase) ||
+            data.ServiceStatus != null)
+            return data;
+
+        var status = _geminiStatusFallback.GetStatus();
+        // A fallback status is a fresh status reading: mark it so ResolveUsage keeps it instead of the cached one.
+        return status == null ? data : data with { ServiceStatus = status, StatusFetchOutcome = FetchOutcome.Success };
     }
 
     private UsageData ProviderError(string provider, string error) => ResolveUsage(new UsageData

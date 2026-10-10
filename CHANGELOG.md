@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Cache loading now treats explicitly null `extraWindows` JSON fields as empty instead of skipping the provider.
 - `CostCacheStore` and `UsageData.IsStale` normalize timestamps to UTC, preventing false future/stale classifications with Local or Unspecified DateTimeKind.
 
+### Added
+- Gemini service status fallback (`GeminiStatusFallback`): queries the Google Workspace Status incident feed directly with in-memory 5-minute caching when the CodexBar CLI returns no status object for Gemini.
+
 ## [1.0.2] - 2026-10-08
 
 ### Fixed
