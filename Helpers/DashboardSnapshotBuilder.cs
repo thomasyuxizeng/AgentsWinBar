@@ -110,11 +110,18 @@ public static class DashboardSnapshotBuilder
             if (data.StatusIsStale && data.LastSuccessfulStatusFetch.HasValue) staleTimes.Add(Utc(data.LastSuccessfulStatusFetch.Value));
             if (cost?.IsStale == true) staleTimes.Add(Utc(cost.LastSuccessfulFetch ?? cost.FetchedAt));
             var lastSuccess = staleTimes.Count > 0 ? staleTimes.Min() : oldReading ?? usageAt;
+            var status = data.ServiceStatus;
+            var hasIncident = status != null && status.Indicator != ProviderStatusIndicator.None;
+            var incidentTitle = hasIncident && !string.IsNullOrWhiteSpace(status!.IncidentTitle) ? status.IncidentTitle : null;
+            var incidentUpdateText = hasIncident && !string.IsNullOrWhiteSpace(status!.LatestUpdateText) ? status.LatestUpdateText : null;
+            var incidentUpdateAtUtc = hasIncident ? Utc(status!.LatestUpdateAt) : null;
             return new DashboardProvider
             {
                 Id = id, DisplayName = id.ToLowerInvariant() switch
                 { "claude" => "Claude", "codex" => "Codex", "gemini" => "Gemini", _ => id },
                 Plan = data.Plan, Source = data.Status, ServiceStatus = data.ServiceStatus,
+                IncidentTitle = incidentTitle, IncidentUpdateText = incidentUpdateText,
+                IncidentUpdateAtUtc = incidentUpdateAtUtc,
                 IsLoading = data.IsLoading,
                 IsStale = data.UsageIsStale || data.StatusIsStale || cost?.IsStale == true || now - Utc(data.FetchedAt) > TimeSpan.FromMinutes(5) || oldReading != null,
                 UsageIsStale = data.UsageIsStale, StatusIsStale = data.StatusIsStale,

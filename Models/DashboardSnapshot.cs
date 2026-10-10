@@ -74,6 +74,9 @@ public sealed record DashboardProvider
     public string? Source { get; init; }
 
     public ProviderStatus? ServiceStatus { get; init; }
+    public string? IncidentTitle { get; init; }
+    public string? IncidentUpdateText { get; init; }
+    public DateTime? IncidentUpdateAtUtc { get; init; }
     public bool IsLoading { get; init; }
     public bool IsStale { get; init; }
     public bool UsageIsStale { get; init; }

@@ -27,7 +27,9 @@ public class CodexBarService : ICodexBarService
     private readonly ICostCacheStore? _costStore;
     private readonly UsageHistoryStore? _history;
     private readonly IGeminiStatusFallback? _geminiStatusFallback;
-    internal static readonly TimeSpan GeminiStatusBudget = TimeSpan.FromMilliseconds(500);
+    private readonly IProviderIncidentFetcher? _incidentFetcher;
+    internal static readonly TimeSpan StatusBudget = TimeSpan.FromMilliseconds(500);
+    internal static readonly TimeSpan GeminiStatusBudget = StatusBudget;
     // The last complete result per provider (guarded by _costCache). A failed, empty or timed-out scan serves it
     // instead of blanking the totals; only a newer good result replaces it.
     private readonly Dictionary<string, CostData> _lastGoodCost = [];
@@ -61,11 +63,13 @@ public class CodexBarService : ICodexBarService
         IActivityLog? activityLog = null,
         ICostCacheStore? costStore = null,
         UsageHistoryStore? history = null,
-        IGeminiStatusFallback? geminiStatusFallback = null)
+        IGeminiStatusFallback? geminiStatusFallback = null,
+        IProviderIncidentFetcher? incidentFetcher = null)
     {
         _history = history;
         _costStore = costStore;
         _geminiStatusFallback = geminiStatusFallback;
+        _incidentFetcher = incidentFetcher;
         _wslService = wslService;
         _cacheService = cacheService;
         _settingsService = settingsService;
@@ -365,22 +369,23 @@ public class CodexBarService : ICodexBarService
         if (!ProviderConstants.IsValidProvider(provider)) return null;
         var normalizedProvider = ProviderConstants.ValidateAndNormalize(provider);
         var generation = BeginProviderRefresh(normalizedProvider);
-        ProviderStatus? geminiStatus = null;
+        ProviderStatus? prefetchedStatus = null;
         try
         {
-            geminiStatus = await PrefetchGeminiStatusAsync([normalizedProvider], ct);
+            var prefetched = await PrefetchProviderStatusesAsync([normalizedProvider], ct);
+            prefetched.TryGetValue(normalizedProvider, out prefetchedStatus);
             ct.ThrowIfCancellationRequested();
             var source = ProviderConstants.GetSource(normalizedProvider);
             var result = await _wslService.ExecuteAsync($"codexbar --provider {normalizedProvider} --format json --source {source} --status", ct);
 
             ct.ThrowIfCancellationRequested();
-            return InterpretProviderResult(normalizedProvider, result, geminiStatus, generation);
+            return InterpretProviderResult(normalizedProvider, result, prefetchedStatus, generation);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to get usage for {Provider}", provider);
-            return ProviderError(normalizedProvider, "Usage fetch unavailable", geminiStatus, generation);
+            return ProviderError(normalizedProvider, "Usage fetch unavailable", prefetchedStatus, generation);
         }
         finally { await SaveUsageCacheAsync(); }
     }
@@ -495,7 +500,7 @@ public class CodexBarService : ICodexBarService
         else
         {
             var generations = providers.Select(BeginProviderRefresh).ToArray();
-            var geminiStatus = await PrefetchGeminiStatusAsync(providers, ct);
+            var prefetchedStatuses = await PrefetchProviderStatusesAsync(providers, ct);
             ct.ThrowIfCancellationRequested();
             var commands = providers.Select(BuildProviderCommand).ToArray();
             var retryInIndividualShell = new bool[providers.Count];
@@ -506,7 +511,8 @@ public class CodexBarService : ICodexBarService
                     _logger.LogInformation("WSL batch command not found for {Provider}; retrying individually", providers[index]);
                     RecordBatchFallback(providers[index], "Command failed (exit code 127)");
                 }
-                Complete(index, await FetchProviderAsync(providers[index], commands[index], geminiStatus, generations[index], ct));
+                prefetchedStatuses.TryGetValue(providers[index], out var pStatus);
+                Complete(index, await FetchProviderAsync(providers[index], commands[index], pStatus, generations[index], ct));
             }
             try
             {
@@ -521,7 +527,11 @@ public class CodexBarService : ICodexBarService
                         retryInIndividualShell[index] = true;
                         return;
                     }
-                    if (results[index] == null) Complete(index, InterpretProviderResult(providers[index], result, geminiStatus, generations[index]));
+                    if (results[index] == null)
+                    {
+                        prefetchedStatuses.TryGetValue(providers[index], out var pStatus);
+                        Complete(index, InterpretProviderResult(providers[index], result, pStatus, generations[index]));
+                    }
                 }, ct);
                 ct.ThrowIfCancellationRequested();
                 if (batch == null || batch.Count != commands.Length)
@@ -533,7 +543,11 @@ public class CodexBarService : ICodexBarService
                     {
                         retryInIndividualShell[i] = true;
                     }
-                    else Complete(i, InterpretProviderResult(providers[i], batch[i], geminiStatus, generations[i]));
+                    else
+                    {
+                        prefetchedStatuses.TryGetValue(providers[i], out var pStatus);
+                        Complete(i, InterpretProviderResult(providers[i], batch[i], pStatus, generations[i]));
+                    }
                 }
                 await Task.WhenAll(Enumerable.Range(0, providers.Count)
                     .Where(i => results[i] == null && retryInIndividualShell[i]).Select(RetryProviderAsync));
@@ -579,7 +593,7 @@ public class CodexBarService : ICodexBarService
         }
     }
 
-    private async Task<UsageData> FetchProviderAsync(string provider, WslBatchCommand command, ProviderStatus? geminiStatus, long generation, CancellationToken ct)
+    private async Task<UsageData> FetchProviderAsync(string provider, WslBatchCommand command, ProviderStatus? prefetchedStatus, long generation, CancellationToken ct)
     {
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
         deadline.CancelAfter(command.Timeout);
@@ -588,67 +602,100 @@ public class CodexBarService : ICodexBarService
             var result = await _wslService.ExecuteAsync(command.Command, deadline.Token);
             ct.ThrowIfCancellationRequested();
             return deadline.IsCancellationRequested
-                ? ProviderError(provider, "Request timed out", geminiStatus, generation)
-                : InterpretProviderResult(provider, result, geminiStatus, generation);
+                ? ProviderError(provider, "Request timed out", prefetchedStatus, generation)
+                : InterpretProviderResult(provider, result, prefetchedStatus, generation);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-        catch (OperationCanceledException) { return ProviderError(provider, "Request timed out", geminiStatus, generation); }
+        catch (OperationCanceledException) { return ProviderError(provider, "Request timed out", prefetchedStatus, generation); }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Failed to fetch {Provider}", provider);
-            return ProviderError(provider, "Unexpected error occurred", geminiStatus, generation);
+            return ProviderError(provider, "Unexpected error occurred", prefetchedStatus, generation);
         }
     }
 
-    private UsageData InterpretProviderResult(string provider, WslResult result, ProviderStatus? geminiStatus, long generation)
+    private UsageData InterpretProviderResult(string provider, WslResult result, ProviderStatus? prefetchedStatus, long generation)
     {
-        try { return InterpretProviderResultCore(provider, result, geminiStatus, generation); }
+        try { return InterpretProviderResultCore(provider, result, prefetchedStatus, generation); }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Failed to interpret {Provider}", provider);
-            return ProviderError(provider, "Unexpected error occurred", geminiStatus, generation);
+            return ProviderError(provider, "Unexpected error occurred", prefetchedStatus, generation);
         }
     }
 
-    private UsageData InterpretProviderResultCore(string provider, WslResult result, ProviderStatus? geminiStatus, long generation)
+    private UsageData InterpretProviderResultCore(string provider, WslResult result, ProviderStatus? prefetchedStatus, long generation)
     {
         if (!result.Success && (result.ExitCode == 124 ||
             (result.ExitCode == -1 && result.Error.Contains("timed out", StringComparison.OrdinalIgnoreCase))))
-            return ProviderError(provider, "Request timed out", geminiStatus, generation);
+            return ProviderError(provider, "Request timed out", prefetchedStatus, generation);
         if (result.Success && !string.IsNullOrWhiteSpace(result.Output))
         {
             var data = ParseUsageJsonArray(result.Output).FirstOrDefault(d => string.Equals(d.Provider, provider, StringComparison.OrdinalIgnoreCase));
-            if (data == null) return ProviderError(provider, "No data available", geminiStatus, generation);
-            data = AttachGeminiStatus(data, geminiStatus);
+            if (data == null) return ProviderError(provider, "No data available", prefetchedStatus, generation);
+            data = AttachProviderStatus(data, prefetchedStatus);
             data = ResolveUsage(data with { Provider = provider }, generation);
             _logger.LogDebug("Fetched {Provider} successfully", provider);
             return data;
         }
         _logger.LogDebug("{Provider} failed: {Error}", provider, result.Error);
         return ProviderError(provider, string.IsNullOrWhiteSpace(result.Error)
-            ? $"Command failed (exit code {result.ExitCode})" : result.Error.Trim(), geminiStatus, generation) with
+            ? $"Command failed (exit code {result.ExitCode})" : result.Error.Trim(), prefetchedStatus, generation) with
         {
             CommandNotFound = result.ExitCode == 127
         };
     }
 
-    private async Task<ProviderStatus?> PrefetchGeminiStatusAsync(IReadOnlyList<string> providers, CancellationToken ct)
+    private async Task<Dictionary<string, ProviderStatus?>> PrefetchProviderStatusesAsync(IReadOnlyList<string> providers, CancellationToken ct)
     {
-        if (_geminiStatusFallback == null || _settingsService.Settings.DeveloperModeEnabled ||
-            !providers.Contains("gemini", StringComparer.OrdinalIgnoreCase)) return null;
+        var results = new Dictionary<string, ProviderStatus?>(StringComparer.OrdinalIgnoreCase);
+        if (_settingsService.Settings.DeveloperModeEnabled || providers.Count == 0 ||
+            (_incidentFetcher == null && _geminiStatusFallback == null))
+        {
+            return results;
+        }
+
+        var distinct = providers
+            .Where(ProviderConstants.IsValidProvider)
+            .Select(ProviderConstants.ValidateAndNormalize)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (distinct.Count == 0) return results;
+
+        var tasks = distinct.Select(async p =>
+        {
+            var status = await PrefetchSingleStatusAsync(p, ct).ConfigureAwait(false);
+            return (Provider: p, Status: status);
+        }).ToArray();
+
+        var entries = await Task.WhenAll(tasks).ConfigureAwait(false);
+        foreach (var (p, status) in entries)
+        {
+            results[p] = status;
+        }
+        return results;
+    }
+
+    private async Task<ProviderStatus?> PrefetchSingleStatusAsync(string provider, CancellationToken ct)
+    {
+        if (_incidentFetcher == null && !string.Equals(provider, "gemini", StringComparison.OrdinalIgnoreCase))
+            return null;
+        if (_incidentFetcher == null && _geminiStatusFallback == null)
+            return null;
+
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        deadline.CancelAfter(GeminiStatusBudget);
+        deadline.CancelAfter(StatusBudget);
         Task<ProviderStatus?>? pending = null;
         try
         {
-            pending = _geminiStatusFallback.GetStatusAsync(deadline.Token);
-            // Also bound implementations that fail to observe cancellation.
-            return await pending.WaitAsync(GeminiStatusBudget, ct).ConfigureAwait(false);
+            pending = FetchProviderStatusAsync(provider, deadline.Token);
+            return await pending.WaitAsync(StatusBudget, ct).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (Exception ex)
         {
-            _logger.LogDebug(ex, "Gemini status fallback unavailable within refresh budget");
+            _logger.LogDebug(ex, "Provider status unavailable within refresh budget for {Provider}", provider);
             return null;
         }
         finally
@@ -656,7 +703,112 @@ public class CodexBarService : ICodexBarService
             deadline.Cancel();
             if (pending != null)
                 Helpers.AsyncHelper.SafeFireAndForget(pending,
-                    onError: ex => _logger.LogDebug(ex, "Gemini status fallback completed after refresh budget"));
+                    onError: ex => _logger.LogDebug(ex, "Provider status fallback completed after refresh budget for {Provider}", provider));
+        }
+    }
+
+    private async Task<ProviderStatus?> FetchProviderStatusAsync(string provider, CancellationToken ct)
+    {
+        if (_incidentFetcher != null)
+        {
+            return await _incidentFetcher.GetIncidentAsync(provider, ct).ConfigureAwait(false);
+        }
+        if (string.Equals(provider, "gemini", StringComparison.OrdinalIgnoreCase) && _geminiStatusFallback != null)
+        {
+            return await _geminiStatusFallback.GetStatusAsync(ct).ConfigureAwait(false);
+        }
+        return null;
+    }
+
+    private UsageData AttachProviderStatus(UsageData data, ProviderStatus? status)
+    {
+        var provider = data.Provider;
+        var cached = _cacheService.GetLastKnown(provider);
+
+        // Case 1: Provider had NO status from CLI (e.g. Gemini, where CLI gives no status)
+        if (data.ServiceStatus == null)
+        {
+            if (string.Equals(provider, "gemini", StringComparison.OrdinalIgnoreCase))
+            {
+                // For Gemini, CLI gives no status: status fetcher supplies the whole status as today.
+                return status == null ? data : data with { ServiceStatus = status, StatusFetchOutcome = FetchOutcome.Success };
+            }
+
+            return data;
+        }
+
+        // Case 2: CLI SUPPLIED a status (e.g. Claude, Codex, etc.)
+        var cliStatus = data.ServiceStatus;
+
+        // MERGE rule 1: If CLI returned an indicator of 'None' (healthy), clear any old incident detail
+        // (no stale incident text on a healthy provider).
+        if (cliStatus.Indicator == ProviderStatusIndicator.None)
+        {
+            return data with
+            {
+                ServiceStatus = cliStatus with
+                {
+                    IncidentTitle = null,
+                    LatestUpdateText = null,
+                    LatestUpdateAt = null
+                }
+            };
+        }
+
+        // CLI reported non-None indicator (e.g. Minor, Major, Maintenance, etc.)
+        if (status != null)
+        {
+            // MERGE rule 2: If the fetcher returns an indicator that is 'none' or no open incident,
+            // clear any old incident detail (no stale incident text on a healthy provider).
+            var hasOpenIncident = status.Indicator != ProviderStatusIndicator.None &&
+                (!string.IsNullOrWhiteSpace(status.IncidentTitle) || !string.IsNullOrWhiteSpace(status.LatestUpdateText));
+
+            if (!hasOpenIncident)
+            {
+                return data with
+                {
+                    ServiceStatus = cliStatus with
+                    {
+                        IncidentTitle = null,
+                        LatestUpdateText = null,
+                        LatestUpdateAt = null
+                    }
+                };
+            }
+
+            // MERGE rule 3: Fetcher has an open incident: ADD incident details.
+            // CLI's status indicator/description/url stay authoritative (do not overwrite them).
+            return data with
+            {
+                ServiceStatus = cliStatus with
+                {
+                    IncidentTitle = status.IncidentTitle,
+                    LatestUpdateText = status.LatestUpdateText,
+                    LatestUpdateAt = status.LatestUpdateAt,
+                    Url = !string.IsNullOrWhiteSpace(cliStatus.Url) ? cliStatus.Url : status.Url
+                }
+            };
+        }
+        else
+        {
+            // Fetcher failed or timed out (status == null).
+            // Keep StatusFetchOutcome semantics for ResolveUsage intact (a fetcher failure must not mark a CLI-successful status as failed).
+            // If cached data had incident detail and CLI indicator is still non-None, retain previous detail as stale:
+            var prevStatus = cached?.ServiceStatus;
+            if (prevStatus != null && (!string.IsNullOrWhiteSpace(prevStatus.IncidentTitle) || !string.IsNullOrWhiteSpace(prevStatus.LatestUpdateText)))
+            {
+                return data with
+                {
+                    ServiceStatus = cliStatus with
+                    {
+                        IncidentTitle = prevStatus.IncidentTitle,
+                        LatestUpdateText = prevStatus.LatestUpdateText,
+                        LatestUpdateAt = prevStatus.LatestUpdateAt
+                    }
+                };
+            }
+
+            return data;
         }
     }
 
@@ -664,15 +816,14 @@ public class CodexBarService : ICodexBarService
     {
         if (!string.Equals(data.Provider, "gemini", StringComparison.OrdinalIgnoreCase) || data.ServiceStatus != null)
             return data;
-        // A fallback status is a fresh status reading: mark it so ResolveUsage keeps it instead of the cached one.
         return status == null ? data : data with { ServiceStatus = status, StatusFetchOutcome = FetchOutcome.Success };
     }
 
-    private UsageData ProviderError(string provider, string error, ProviderStatus? geminiStatus = null, long generation = 0) => ResolveUsage(AttachGeminiStatus(new UsageData
+    private UsageData ProviderError(string provider, string error, ProviderStatus? prefetchedStatus = null, long generation = 0) => ResolveUsage(AttachProviderStatus(new UsageData
     {
         Provider = provider, Error = error, FetchedAt = _timeProvider.GetUtcNow().UtcDateTime,
         UsageFetchOutcome = FetchOutcome.Failed, StatusFetchOutcome = FetchOutcome.Failed
-    }, geminiStatus), generation);
+    }, prefetchedStatus), generation);
 
     private UsageData ResolveUsage(UsageData data, long generation)
     {
