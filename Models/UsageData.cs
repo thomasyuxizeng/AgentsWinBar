@@ -79,6 +79,9 @@ public record ProviderStatus
     public string? Description { get; init; }
     public string? Url { get; init; }
     public DateTime? UpdatedAt { get; init; }
+    public string? IncidentTitle { get; init; }
+    public string? LatestUpdateText { get; init; }
+    public DateTime? LatestUpdateAt { get; init; }
 }
 
 public enum ProviderStatusIndicator

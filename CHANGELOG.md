@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Provider incident fetcher (`ProviderIncidentFetcher`) and status text sanitizer (`IncidentTextSanitizer`) for provider outage and degradation details across Claude, Codex, and Gemini feeds.
+
 ## [1.1.0] - 2026-10-11
 
 ### Changed

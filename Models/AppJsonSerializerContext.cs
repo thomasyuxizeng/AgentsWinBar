@@ -85,13 +85,19 @@ public record ProviderStatusDto
     public string? Description { get; init; }
     public string? Url { get; init; }
     public DateTime? UpdatedAt { get; init; }
+    public string? IncidentTitle { get; init; }
+    public string? LatestUpdateText { get; init; }
+    public DateTime? LatestUpdateAt { get; init; }
 
     public ProviderStatus ToProviderStatus() => new()
     {
         Indicator = Helpers.ProviderStatusPresentation.ParseIndicator(Indicator),
         Description = Description,
         Url = Url,
-        UpdatedAt = UpdatedAt
+        UpdatedAt = UpdatedAt,
+        IncidentTitle = IncidentTitle,
+        LatestUpdateText = LatestUpdateText,
+        LatestUpdateAt = LatestUpdateAt
     };
 }
 
