@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Permanent cost ledger (`Services/CostLedger.cs`, `ICostLedger`) persisting daily cost and token series to `cost-ledger.json` across local CLI log rotations, with atomic writes, rolling `.bak` backup, resilient corrupt file rotation, and automatic first-run backfill from `cost-cache.json`.
+- Query API on `ICostLedger` for pure lifetime totals (`GetLifetime`), daily date ranges (`GetRange`), and 30 calendar day series (`GetLast30Days`) with distinct 'no data' vs recorded zero indication.
+- Standalone read-only PowerShell report script `tools/cost-ledger-report.ps1` to query lifetime and last-30-days totals per provider or custom date ranges.
+
+### Changed
+- Cost data is now retained indefinitely in cache and memory, exempt from the 7-day retention limit that continues to apply to usage meters and service status.
+- Stale dashboard cost displays and trailing 30-day totals now recompute reliably from the permanent cost ledger when a fresh CLI scan is unavailable or covers fewer than 30 days.
+
 ## [1.1.0] - 2026-10-11
 
 ### Changed

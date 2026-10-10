@@ -616,33 +616,28 @@ public class MainViewModelTests
     }
 
     [TestMethod]
-    public async Task AcquireCostDemand_ExpiredAttachedCost_RequestsScanOnReopen()
+    public async Task AcquireCostDemand_RetainedCostPresent_DoesNotRequestScanOnReopen()
     {
         SetupImmediateUsage();
         await _viewModel.StartAsync();
         _viewModel.Providers[0] = _viewModel.Providers[0] with
         { Cost = new CostData { Provider = "claude", TodayCostUSD = 10, FetchedAt = DateTime.UtcNow,
             LastSuccessfulFetch = DateTime.UtcNow.AddDays(-8) } };
-        var scan = new TaskCompletionSource<CostData?>(TaskCreationOptions.RunContinuationsAsynchronously);
-        _usage.Setup(s => s.GetCostAsync("claude", false, It.IsAny<CancellationToken>())).Returns(scan.Task);
         using var demand = _viewModel.AcquireCostDemand();
-        var completion = CostScanCompletion(background: false);
-        _usage.Verify(s => s.GetCostsAsync(It.Is<IReadOnlyList<string>>(p => p.Count == 1 && p[0] == "claude"),
-            false, It.IsAny<CancellationToken>()), Times.Once);
-        scan.SetResult(new CostData { Provider = "claude", TodayCostUSD = 2 });
-        await completion.WaitAsync(TimeSpan.FromSeconds(5));
-        _viewModel.Providers.Single().Cost!.TodayCostUSD.Should().Be(2);
+        _usage.Verify(s => s.GetCostsAsync(It.IsAny<IReadOnlyList<string>>(), false, It.IsAny<CancellationToken>()), Times.Never);
+        _viewModel.Providers.Single().Cost!.TodayCostUSD.Should().Be(10);
     }
 
     [TestMethod]
-    public async Task RefreshCoreAsync_ExpiredAttachedCost_DropsItDuringUsageRefresh()
+    public async Task RefreshCoreAsync_OldAttachedCost_RetainsItDuringUsageRefresh()
     {
         SetupImmediateUsage();
         await _viewModel.StartAsync();
         _viewModel.Providers[0] = _viewModel.Providers[0] with
         { Cost = new CostData { Provider = "claude", TodayCostUSD = 10, FetchedAt = DateTime.UtcNow.AddDays(-8) } };
         await PeriodicRefreshAsync();
-        _viewModel.Providers.Single().Cost.Should().BeNull();
+        _viewModel.Providers.Single().Cost.Should().NotBeNull();
+        _viewModel.Providers.Single().Cost!.TodayCostUSD.Should().Be(10);
         _usage.Verify(s => s.GetCostsAsync(It.IsAny<IReadOnlyList<string>>(), false, It.IsAny<CancellationToken>()), Times.Never);
     }
 

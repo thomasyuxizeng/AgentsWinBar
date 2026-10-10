@@ -296,9 +296,12 @@ for cost support: its older Claude cache also intercepted cost commands. Amounts
 and can omit unpriced or unmetered activity.
 
 The last complete totals per provider are kept in `cost-cache.json` beside `settings.json` and shown straight
-away at startup. A scan that fails or times out keeps showing them, and only a newer complete scan replaces
-them (results older than 7 days are dropped; "today" resets once that day has passed). Scans can take a
-while when logs are large, so each one gets up to 5 minutes.
+away at startup. Unlike usage limits which expire after 7 days, cost data is retained indefinitely. A permanent
+cost ledger is kept in `cost-ledger.json` beside `settings.json`, recording daily cost and token series across
+local log rotations. You can query lifetime or 30-day costs anytime with the read-only PowerShell report script:
+`powershell -ExecutionPolicy Bypass -File tools\cost-ledger-report.ps1` (supports optional `-Provider`, `-From`, and `-To`).
+A scan that fails or times out keeps showing last-known totals, and only a newer complete scan replaces them
+("today" resets once that day has passed). Scans can take a while when logs are large, so each one gets up to 5 minutes.
 
 Usage snapshots live in `usage-history.json` beside `settings.json`. The app records a sample when usage
 changes by at least half a percentage point, ten minutes pass, or a limit window resets. Each chart shows

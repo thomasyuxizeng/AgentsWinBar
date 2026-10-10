@@ -22,6 +22,7 @@ public sealed record DashboardInputs
     public IReadOnlyList<DashboardRefreshEntry> RecentRefreshes { get; init; } = [];
     public IReadOnlyList<DashboardAlertEntry> RecentAlerts { get; init; } = [];
     public IReadOnlyList<DashboardCostCacheEntry> CostCache { get; init; } = [];
+    public ICostLedger? CostLedger { get; init; }
 }
 
 public static class DashboardSnapshotBuilder
@@ -103,6 +104,37 @@ public static class DashboardSnapshotBuilder
                 Add(UsageHistoryStore.ExtraWindowKey(extra), DashboardWindowKind.Extra, extra.Title, extra.Window);
             var cost = CacheRetention.RetainedCost(data.Cost, now) is { } raw
                 ? raw with { Daily = (raw.Daily ?? []).OfType<DailyCost>().ToArray() } : null;
+            if (cost != null && cost.IsStale && inputs.CostLedger != null)
+            {
+                var ledger30 = inputs.CostLedger.GetLast30Days(id, today);
+                if (ledger30.DaysWithDataCount > 0 || ledger30.Days.Any(d => d.HasLedgerRecord))
+                {
+                    var ledgerDaily = ledger30.Days.Select(d => new DailyCost
+                    {
+                        Date = d.Date,
+                        TotalCost = d.CostUSD,
+                        TotalTokens = d.TotalTokens,
+                        InputTokens = d.InputTokens,
+                        OutputTokens = d.OutputTokens,
+                        CacheReadTokens = d.CacheReadTokens,
+                        CacheCreationTokens = d.CacheWriteTokens,
+                        ReasoningTokens = d.ReasoningTokens,
+                        ModelBreakdowns = d.Models.Select(m => new ModelCost
+                        {
+                            ModelName = m.ModelName,
+                            Cost = m.CostUSD,
+                            TotalTokens = m.TotalTokens
+                        }).ToArray()
+                    }).ToArray();
+
+                    cost = cost with
+                    {
+                        Last30DaysCostUSD = ledger30.TotalCostUSD,
+                        Last30DaysTokens = ledger30.TotalTokens,
+                        Daily = ledgerDaily
+                    };
+                }
+            }
             var oldReading = DataAge.OldReadingUtc(Utc(data.FetchedAt), data.DataUpdatedAt);
             var usageAt = Utc(data.LastSuccessfulFetch) ?? (data.HasUsage ? Utc(data.FetchedAt) : (DateTime?)null);
             var staleTimes = new List<DateTime>();

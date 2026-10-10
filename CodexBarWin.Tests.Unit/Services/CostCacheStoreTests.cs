@@ -59,7 +59,7 @@ public class CostCacheStoreTests
     }
 
     [TestMethod]
-    public async Task LoadAsync_RetainsOldEntriesButDropsFutureAndInvalidEntries()
+    public async Task LoadAsync_RetainsOldEntriesIndefinitelyButDropsFutureAndInvalidEntries()
     {
         await Store().SaveAsync(new Dictionary<string, CostData>
         {
@@ -71,7 +71,7 @@ public class CostCacheStoreTests
 
         var loaded = await Store().LoadAsync();
 
-        loaded.Keys.Should().BeEquivalentTo(["codex"]);
+        loaded.Keys.Should().BeEquivalentTo(["codex", "claude"]);
     }
 
     [TestMethod]

@@ -640,7 +640,7 @@ public class CodexBarServiceTests
     }
 
     [TestMethod]
-    public async Task GetCostAsync_LastGoodOlderThanSevenDays_IsDropped()
+    public async Task GetCostAsync_LastGoodOlderThanSevenDays_IsServedIndefinitelyAsStale()
     {
         var clock = new CostClock(); var service = CostService(clock);
         SetCostResponse();
@@ -648,7 +648,9 @@ public class CodexBarServiceTests
         clock.Now += TimeSpan.FromDays(8);
         SetCostResponse(success: false, json: "Command timed out");
         var stale = await service.GetCostAsync("claude");
-        stale.Should().BeNull();
+        stale.Should().NotBeNull();
+        stale!.Last30DaysTokens.Should().Be(123456);
+        stale.IsStale.Should().BeTrue();
     }
 
     [TestMethod]

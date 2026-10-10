@@ -105,6 +105,7 @@ public partial class App : Application
             await cacheService.LoadAsync();
 
             await Services.GetRequiredService<UsageHistoryPersistence>().LoadAsync();
+            await Services.GetRequiredService<ICostLedger>().LoadAsync();
 
             // A recent successful setup avoids waking WSL solely for launch validation.
             if (await Services.GetRequiredService<ISetupMemoService>().IsValidAsync())
@@ -251,6 +252,7 @@ public partial class App : Application
         services.AddSingleton<IWslService, WslService>();
         services.AddSingleton<ICacheService, CacheService>();
         services.AddSingleton<ICostCacheStore, CostCacheStore>();
+        services.AddSingleton<ICostLedger, CostLedger>();
         services.AddSingleton<IGeminiStatusFallback, GeminiStatusFallback>();
         services.AddSingleton<ICodexBarService, CodexBarService>();
         services.AddSingleton<ISettingsService, SettingsService>();
