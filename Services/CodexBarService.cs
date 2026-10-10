@@ -25,6 +25,7 @@ public class CodexBarService : ICodexBarService
     // a real machine), so they get their own deadline instead of the interactive usage timeout.
     internal static readonly TimeSpan CostScanTimeout = TimeSpan.FromMinutes(5);
     private readonly ICostCacheStore? _costStore;
+    private readonly IGeminiStatusFallback? _geminiStatusFallback;
     // The last complete result per provider (guarded by _costCache). A failed, empty or timed-out scan serves it
     // instead of blanking the totals; only a newer good result replaces it.
     private readonly Dictionary<string, CostData> _lastGoodCost = [];
@@ -44,9 +45,11 @@ public class CodexBarService : ICodexBarService
         Func<string>? userProfile = null,
         Func<string, bool>? directoryExists = null,
         IActivityLog? activityLog = null,
-        ICostCacheStore? costStore = null)
+        ICostCacheStore? costStore = null,
+        IGeminiStatusFallback? geminiStatusFallback = null)
     {
         _costStore = costStore;
+        _geminiStatusFallback = geminiStatusFallback;
         _wslService = wslService;
         _cacheService = cacheService;
         _settingsService = settingsService;
@@ -358,6 +361,7 @@ public class CodexBarService : ICodexBarService
 
             if (data != null)
             {
+                data = AttachGeminiStatus(data);
                 _cacheService.Set(provider, data);
             }
 
@@ -580,6 +584,7 @@ public class CodexBarService : ICodexBarService
         {
             var data = ParseUsageJsonArray(result.Output).FirstOrDefault();
             if (data == null) return ProviderError(provider, "No data available");
+            data = AttachGeminiStatus(data);
             _cacheService.Set(data.Provider, data);
             _logger.LogDebug("Fetched {Provider} successfully", provider);
             return data;
@@ -591,6 +596,13 @@ public class CodexBarService : ICodexBarService
             CommandNotFound = result.ExitCode == 127
         };
     }
+
+    private UsageData AttachGeminiStatus(UsageData data) =>
+        _geminiStatusFallback != null &&
+        string.Equals(data.Provider, "gemini", StringComparison.OrdinalIgnoreCase) &&
+        data.ServiceStatus == null
+            ? data with { ServiceStatus = _geminiStatusFallback.GetStatus() }
+            : data;
 
     private static UsageData ProviderError(string provider, string error) => new()
     {

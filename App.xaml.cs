@@ -251,6 +251,7 @@ public partial class App : Application
         services.AddSingleton<IWslService, WslService>();
         services.AddSingleton<ICacheService, CacheService>();
         services.AddSingleton<ICostCacheStore, CostCacheStore>();
+        services.AddSingleton<IGeminiStatusFallback, GeminiStatusFallback>();
         services.AddSingleton<ICodexBarService, CodexBarService>();
         services.AddSingleton<ISettingsService, SettingsService>();
         services.AddSingleton<ISetupChecker, SetupChecker>();

@@ -907,6 +907,57 @@ public class CodexBarServiceTests
     }
 
     [TestMethod]
+    public async Task GetAllUsageStreamAsync_WhenGeminiHasNoStatusAndFallbackProvided_AttachesFallbackStatus()
+    {
+        var fallbackStatus = new ProviderStatus
+        {
+            Indicator = ProviderStatusIndicator.Minor,
+            Description = "Minor disruption",
+            Url = "https://www.google.com/appsstatus/dashboard/products/npdyhgECDJ6tB66MxXyo/history"
+        };
+        var mockFallback = new Mock<IGeminiStatusFallback>();
+        mockFallback.Setup(f => f.GetStatus(It.IsAny<CancellationToken>())).Returns(fallbackStatus);
+
+        var serviceWithFallback = new CodexBarService(
+            _mockWslService, _mockCacheService, _mockSettingsService, _mockSampleDataLoader,
+            _mockLogger.Object, geminiStatusFallback: mockFallback.Object);
+
+        _mockSettingsService.SetProviders([new() { Id = "gemini", IsEnabled = true }]);
+        _mockWslService.SetCommandResult("codexbar usage --provider gemini --format json --source cli --status --verbose",
+            new WslResult { Success = true, Output = """[{"provider":"gemini","usage":{"primary":{"usedPercent":10}}}]""" });
+
+        var results = new List<UsageData>();
+        await foreach (var data in serviceWithFallback.GetAllUsageStreamAsync()) results.Add(data);
+
+        var result = results.Single();
+        result.Session!.Percent.Should().Be(10);
+        result.ServiceStatus.Should().Be(fallbackStatus);
+        mockFallback.Verify(f => f.GetStatus(It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [TestMethod]
+    public async Task GetAllUsageStreamAsync_WhenGeminiAlreadyHasStatus_DoesNotOverwriteWithFallback()
+    {
+        var mockFallback = new Mock<IGeminiStatusFallback>(MockBehavior.Strict);
+
+        var serviceWithFallback = new CodexBarService(
+            _mockWslService, _mockCacheService, _mockSettingsService, _mockSampleDataLoader,
+            _mockLogger.Object, geminiStatusFallback: mockFallback.Object);
+
+        _mockSettingsService.SetProviders([new() { Id = "gemini", IsEnabled = true }]);
+        _mockWslService.SetCommandResult("codexbar usage --provider gemini --format json --source cli --status --verbose",
+            new WslResult { Success = true, Output = """[{"provider":"gemini","usage":{"primary":{"usedPercent":10}},"status":{"indicator":"major","description":"CLI reported major","url":"https://status.gemini.com"}}]""" });
+
+        var results = new List<UsageData>();
+        await foreach (var data in serviceWithFallback.GetAllUsageStreamAsync()) results.Add(data);
+
+        var result = results.Single();
+        result.ServiceStatus!.Indicator.Should().Be(ProviderStatusIndicator.Major);
+        result.ServiceStatus.Description.Should().Be("CLI reported major");
+        mockFallback.Verify(f => f.GetStatus(It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [TestMethod]
     public async Task GetUsageAsync_InvalidProvider_ReturnsNull()
     {
         // The service catches all exceptions and returns cached/null data

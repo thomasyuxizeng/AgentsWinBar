@@ -75,6 +75,8 @@
     <Compile Include="..\Services\WslService.cs" Link="Linked\WslService.cs" />
     <Compile Include="..\Services\WslBatchProtocol.cs" Link="Linked\WslBatchProtocol.cs" />
     <Compile Include="..\Services\CodexBarService.cs" Link="Linked\CodexBarService.cs" />
+    <Compile Include="..\Services\IGeminiStatusFallback.cs" Link="Linked\IGeminiStatusFallback.cs" />
+    <Compile Include="..\Services\GeminiStatusFallback.cs" Link="Linked\GeminiStatusFallback.cs" />
     <Compile Include="..\Services\ICostCacheStore.cs" Link="Linked\ICostCacheStore.cs" />
     <Compile Include="..\Services\CostCacheStore.cs" Link="Linked\CostCacheStore.cs" />
     <Compile Include="..\Services\SettingsService.cs" Link="Linked\SettingsService.cs" />

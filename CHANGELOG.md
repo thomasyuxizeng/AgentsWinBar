@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Gemini service status fallback (`GeminiStatusFallback`): queries the Google Workspace Status incident feed directly with in-memory 5-minute caching when the CodexBar CLI returns no status object for Gemini.
+
 ## [1.0.2] - 2026-10-08
 
 ### Fixed
