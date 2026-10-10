@@ -102,23 +102,171 @@ public class ReleaseRetentionRegressionTests
     }
 
     [TestMethod]
-    public void GetLastKnownUsage_MixedWindowAges_FiltersExpiredWindowsAndUsesOldestRetainedTime()
+    public async Task GetUsageAsync_RealSuccessThenReplayOlderBy5Seconds_IsBenignSuccessAndNotStale()
+    {
+        // Live failure case: real success at T0, then replay 5m later whose observation time
+        // is 5s older than previous.LastSuccessfulFetch due to execution latency.
+        var service = Service();
+        var t0 = _clock.Now.UtcDateTime;
+        Respond(new() { Success = true, Output = $$$$"""
+            {"provider":"claude","source":"oauth","cached":false,
+             "usage":{"updatedAt":"{{{{t0.AddSeconds(-5):O}}}}","primary":{"usedPercent":70}}}
+            """ });
+        var fresh = (await service.GetUsageAsync("claude"))!;
+        fresh.UsageFetchOutcome.Should().Be(FetchOutcome.Success);
+        _history.Record(fresh, t0).Should().Be(1);
+
+        // 5 minutes later, replay arrives from shim with cached=true and same observation time
+        _clock.Now += TimeSpan.FromMinutes(5);
+        Respond(new() { Success = true, Output = $$$$"""
+            {"provider":"claude","source":"oauth","cached":true,
+             "cacheUpdatedAt":"{{{{t0.AddSeconds(-2):O}}}}",
+             "usage":{"updatedAt":"{{{{t0.AddSeconds(-5):O}}}}","primary":{"usedPercent":70}}}
+            """ });
+        var replay = (await service.GetUsageAsync("claude"))!;
+        replay.UsageFetchOutcome.Should().Be(FetchOutcome.Success);
+        replay.Error.Should().BeNull();
+        replay.UsageIsStale.Should().BeFalse();
+        replay.Session!.Percent.Should().Be(70);
+        _history.Record(replay, _clock.Now.UtcDateTime).Should().Be(0);
+        _history.Samples.Should().HaveCount(1);
+    }
+
+    [TestMethod]
+    public async Task GetUsageAsync_ReplayWithEqualTimestamp_IsBenignSuccessAndNotStale()
+    {
+        var service = Service();
+        var t0 = _clock.Now.UtcDateTime;
+        Respond(new() { Success = true, Output = $$$$"""
+            {"provider":"claude","source":"oauth","cached":false,
+             "usage":{"updatedAt":"{{{{t0:O}}}}","primary":{"usedPercent":55}}}
+            """ });
+        var fresh = (await service.GetUsageAsync("claude"))!;
+        fresh.UsageFetchOutcome.Should().Be(FetchOutcome.Success);
+
+        _clock.Now += TimeSpan.FromMinutes(4);
+        Respond(new() { Success = true, Output = $$$$"""
+            {"provider":"claude","source":"oauth","cached":true,
+             "usage":{"updatedAt":"{{{{t0:O}}}}","primary":{"usedPercent":55}}}
+            """ });
+        var replay = (await service.GetUsageAsync("claude"))!;
+        replay.UsageFetchOutcome.Should().Be(FetchOutcome.Success);
+        replay.Error.Should().BeNull();
+        replay.UsageIsStale.Should().BeFalse();
+        replay.Session!.Percent.Should().Be(55);
+    }
+
+    [TestMethod]
+    public async Task GetUsageAsync_ReplayOlderByHours_IsSuccessButStaleBeyondTtl()
+    {
+        var service = Service();
+        var t0 = _clock.Now.UtcDateTime;
+        Respond(new() { Success = true, Output = $$$$"""
+            {"provider":"claude","source":"oauth","cached":false,
+             "usage":{"updatedAt":"{{{{t0:O}}}}","primary":{"usedPercent":60}}}
+            """ });
+        await service.GetUsageAsync("claude");
+
+        // 2 hours later, CLI fails and shim serves stale cache from 2 hours ago
+        _clock.Now += TimeSpan.FromHours(2);
+        Respond(new() { Success = true, Output = $$$$"""
+            {"provider":"claude","source":"oauth","cached":true,
+             "usage":{"updatedAt":"{{{{t0:O}}}}","primary":{"usedPercent":60}}}
+            """ });
+        var replay = (await service.GetUsageAsync("claude"))!;
+        replay.UsageFetchOutcome.Should().Be(FetchOutcome.Success);
+        replay.Error.Should().BeNull();
+        replay.UsageIsStale.Should().BeTrue(); // Beyond 600s TTL, marked stale but not an error
+        replay.Session!.Percent.Should().Be(60);
+    }
+
+    [TestMethod]
+    public async Task GetUsageAsync_ReplayWhenPreviousIsNull_AcceptsObservationWithOriginalTime()
+    {
+        var service = Service();
+        var t0 = _clock.Now.UtcDateTime;
+        var obsTime = t0.AddMinutes(-3);
+        Respond(new() { Success = true, Output = $$$$"""
+            {"provider":"claude","source":"oauth","cached":true,
+             "usage":{"updatedAt":"{{{{obsTime:O}}}}","primary":{"usedPercent":45}}}
+            """ });
+        var replay = (await service.GetUsageAsync("claude"))!;
+        replay.UsageFetchOutcome.Should().Be(FetchOutcome.Success);
+        replay.Error.Should().BeNull();
+        replay.LastSuccessfulFetch.Should().Be(obsTime);
+        replay.FetchedAt.Should().Be(obsTime);
+        replay.UsageIsStale.Should().BeFalse();
+        replay.Session!.Percent.Should().Be(45);
+    }
+
+    [TestMethod]
+    public async Task GetUsageAsync_RepeatedReplays_RemainSuccessWithNoDuplicateHistory()
+    {
+        var service = Service();
+        var t0 = _clock.Now.UtcDateTime;
+        Respond(new() { Success = true, Output = $$$$"""
+            {"provider":"claude","source":"oauth","cached":false,
+             "usage":{"updatedAt":"{{{{t0:O}}}}","primary":{"usedPercent":80}}}
+            """ });
+        var fresh = (await service.GetUsageAsync("claude"))!;
+        _history.Record(fresh, t0).Should().Be(1);
+
+        for (int i = 1; i <= 3; i++)
+        {
+            _clock.Now = t0.AddMinutes(i * 2);
+            Respond(new() { Success = true, Output = $$$$"""
+                {"provider":"claude","source":"oauth","cached":true,
+                 "cacheUpdatedAt":"{{{{t0:O}}}}",
+                 "usage":{"updatedAt":"{{{{t0:O}}}}","primary":{"usedPercent":80}}}
+                """ });
+            var replay = (await service.GetUsageAsync("claude"))!;
+            replay.UsageFetchOutcome.Should().Be(FetchOutcome.Success);
+            replay.Error.Should().BeNull();
+            replay.UsageIsStale.Should().BeFalse();
+            _history.Record(replay, _clock.Now.UtcDateTime).Should().Be(0);
+        }
+        _history.Samples.Should().HaveCount(1);
+    }
+
+    [TestMethod]
+    public async Task GetUsageAsync_CachedMarkerAbsentOldShim_InfersReplayAndDoesNotRecordHistory()
+    {
+        var service = Service();
+        var t0 = _clock.Now.UtcDateTime;
+        var oldObs = t0.AddMinutes(-20); // > 15m threshold
+        Respond(new() { Success = true, Output = $$$$"""
+            {"provider":"claude","source":"oauth",
+             "usage":{"updatedAt":"{{{{oldObs:O}}}}","primary":{"usedPercent":35}}}
+            """ });
+        var result = (await service.GetUsageAsync("claude"))!;
+        result.UsageFetchOutcome.Should().Be(FetchOutcome.Success);
+        result.UsageIsCached.Should().BeTrue();
+        result.UsageIsStale.Should().BeTrue();
+        result.Error.Should().BeNull();
+        _history.Record(result, _clock.Now.UtcDateTime).Should().Be(0);
+    }
+
+    [TestMethod]
+    public async Task ResolveUsage_WhenNoCacheAndHistoryExists_NeverRestoresOrWritesHistoryUsageToCache()
     {
         var now = _clock.Now.UtcDateTime;
-        _history.Restore([
-            new() { Provider = "claude", WindowKey = "weekly", UsedPercent = 80, Timestamp = now.AddDays(-10) },
-            new() { Provider = "claude", WindowKey = "session", UsedPercent = 40, Timestamp = now.AddDays(-1) },
-            new() { Provider = "claude", WindowKey = "extra:retained", UsedPercent = 30, Timestamp = now.AddDays(-6) }
-        ], now);
-        var recovered = _history.GetLastKnownUsage("claude", now)!;
-        recovered.Weekly.Should().BeNull();
-        recovered.Session!.Percent.Should().Be(40);
-        recovered.LastSuccessfulFetch.Should().Be(now.AddDays(-6));
-        var snapshot = DashboardSnapshotBuilder.Build(new() { NowUtc = now, HistorySamples = _history.Samples,
-            Providers = [new() { Provider = "claude", Error = "offline" }] });
-        snapshot.Providers.Single().Windows.Select(w => w.Key).Should().Equal("session", "extra:retained");
-        snapshot.Providers.Single().LastSuccessfulUsageFetchUtc.Should().Be(now.AddDays(-6));
-        _history.GetLastKnownUsage("claude", now.AddDays(2))!.ExtraWindows.Should().BeEmpty();
+        _history.Add(new() { Provider = "gemini", WindowKey = "session", UsedPercent = 45, Timestamp = now.AddHours(-1) }, now);
+        var fallback = new Mock<IGeminiStatusFallback>();
+        fallback.Setup(s => s.GetStatusAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ProviderStatus { Indicator = ProviderStatusIndicator.None });
+        var service = Service(fallback.Object);
+        Respond(new() { Success = false, ExitCode = 1, Error = "network down" });
+
+        var result = (await service.GetUsageAsync("gemini"))!;
+        result.HasUsage.Should().BeFalse();
+        result.Session.Should().BeNull();
+        result.ServiceStatus.Should().NotBeNull();
+        result.ServiceStatus!.Indicator.Should().Be(ProviderStatusIndicator.None);
+
+        var cached = _cache.Get("gemini");
+        cached.Should().NotBeNull();
+        cached!.HasUsage.Should().BeFalse();
+        cached.Session.Should().BeNull();
     }
 
     [TestMethod]
@@ -222,6 +370,7 @@ public class ReleaseRetentionRegressionTests
     public async Task GetUsageAsync_HistoryOverQuota_RestoresLatest105Percent()
     {
         var now = _clock.Now.UtcDateTime;
+        _cache.PreloadCache("claude", new() { Provider = "claude", FetchedAt = now, Session = new() { ReportedPercent = 105, WindowMinutes = 300, ResetAt = now.AddHours(1) } });
         _history.Record(new() { Provider = "claude", Session = new() { ReportedPercent = 99 } }, now.AddMinutes(-20)).Should().Be(1);
         _history.Record(new() { Provider = "claude", Session = new() { ReportedPercent = 105 } }, now).Should().Be(1);
         _history.Get("claude", "session")[^1].UsedPercent.Should().Be(105);

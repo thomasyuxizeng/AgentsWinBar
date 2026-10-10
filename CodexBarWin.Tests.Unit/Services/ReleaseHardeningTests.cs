@@ -67,7 +67,7 @@ public class ReleaseHardeningTests
             else data = (await service.GetAllUsageAsync()).Single();
             watch.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(2));
             data.Session!.Percent.Should().Be(42);
-            token.IsCancellationRequested.Should().BeTrue();
+            token.IsCancellationRequested.Should().BeFalse();
             _fallback.Verify(f => f.GetStatusAsync(It.IsAny<CancellationToken>()), Times.Once);
         }
         finally { pending.TrySetResult(null); }
@@ -219,5 +219,73 @@ public class ReleaseHardeningTests
         var data = CacheRetention.PruneExpired(new() { Provider = "gemini", FetchedAt = now,
             ServiceStatus = new(), LastSuccessfulStatusFetch = now.AddDays(days) }, now);
         (data!.ServiceStatus != null).Should().Be(kept);
+    }
+
+    [TestMethod]
+    public async Task GetUsageAsync_WhenNewerGenerationIsStatusOnlySuccess_DoesNotSupersedeConcurrentOlderRealUsageSuccess()
+    {
+        var cache = Cache();
+        var service = Service(cache);
+
+        var call1Started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseCall1 = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var callCount = 0;
+        _wsl.CommandHandler = (cmd, ct) =>
+        {
+            var count = Interlocked.Increment(ref callCount);
+            if (count == 1)
+            {
+                call1Started.SetResult();
+                return releaseCall1.Task.ContinueWith(_ => new WslResult
+                {
+                    Success = true,
+                    Output = """{"provider":"gemini","usage":{"primary":{"usedPercent":75}}}"""
+                }, TaskScheduler.Default);
+            }
+            else
+            {
+                return Task.FromResult(new WslResult
+                {
+                    Success = false,
+                    Error = "CLI failed"
+                });
+            }
+        };
+
+        var status2 = new ProviderStatus { Indicator = ProviderStatusIndicator.Minor, Description = "Partial disruption" };
+        _fallback.Setup(f => f.GetStatusAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(status2);
+
+        // Start call 1 (older generation)
+        var task1 = service.GetUsageAsync("gemini");
+        await call1Started.Task;
+
+        // Start and finish call 2 (newer generation) while call 1 is in flight
+        var result2 = await service.GetUsageAsync("gemini");
+
+        result2.Should().NotBeNull();
+        result2!.HasUsage.Should().BeFalse();
+        result2.ServiceStatus.Should().NotBeNull();
+        result2.ServiceStatus!.Indicator.Should().Be(ProviderStatusIndicator.Minor);
+
+        // Release call 1
+        releaseCall1.SetResult();
+        var result1 = await task1;
+
+        // Assert: Call 1's real usage success must not be discarded
+        result1.Should().NotBeNull();
+        result1!.HasUsage.Should().BeTrue();
+        result1.UsageFetchOutcome.Should().Be(FetchOutcome.Success);
+        result1.Session!.Percent.Should().Be(75);
+        result1.UsageIsStale.Should().BeFalse();
+
+        // Cache must have call 1's usage and call 2's status
+        var cached = cache.GetLastKnown("gemini");
+        cached.Should().NotBeNull();
+        cached!.HasUsage.Should().BeTrue();
+        cached.Session!.Percent.Should().Be(75);
+        cached.ServiceStatus.Should().NotBeNull();
+        cached.ServiceStatus!.Indicator.Should().Be(ProviderStatusIndicator.Minor);
     }
 }

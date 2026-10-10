@@ -16,10 +16,5 @@ public static class DataAge
         return ToUtc(fetchedAtUtc) - reading > Threshold ? reading : null;
     }
 
-    public static DateTime ToUtc(DateTime value) => value.Kind switch
-    {
-        DateTimeKind.Local => value.ToUniversalTime(),
-        DateTimeKind.Unspecified => DateTime.SpecifyKind(value, DateTimeKind.Utc),
-        _ => value
-    };
+    public static DateTime ToUtc(DateTime value) => DashboardValues.Utc(value);
 }

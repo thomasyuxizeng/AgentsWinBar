@@ -16,6 +16,7 @@ public sealed class ProviderIncidentFetcher : IProviderIncidentFetcher, IDisposa
     public static readonly Uri GeminiFeedUri = GoogleIncidentParser.FeedUri;
 
     public static readonly TimeSpan CacheTtl = TimeSpan.FromMinutes(5);
+    public static readonly TimeSpan NegativeCacheTtl = TimeSpan.FromSeconds(60);
     public static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(5);
     public const int MaxFeedBytes = 2 * 1024 * 1024;
     public const string UserAgent = "CodexBarWin/1.0 (+https://github.com/steipete/CodexBar)";
@@ -92,7 +93,8 @@ public sealed class ProviderIncidentFetcher : IProviderIncidentFetcher, IDisposa
         if (_cache.TryGetValue(normalized, out var cached))
         {
             var age = now - cached.CachedAt;
-            if (age >= TimeSpan.Zero && age < CacheTtl)
+            var currentTtl = cached.Status != null ? CacheTtl : NegativeCacheTtl;
+            if (age >= TimeSpan.Zero && age < currentTtl)
             {
                 return cached.Status;
             }
@@ -110,25 +112,44 @@ public sealed class ProviderIncidentFetcher : IProviderIncidentFetcher, IDisposa
             if (_cache.TryGetValue(normalized, out cached))
             {
                 var age = now - cached.CachedAt;
-                if (age >= TimeSpan.Zero && age < CacheTtl)
+                var currentTtl = cached.Status != null ? CacheTtl : NegativeCacheTtl;
+                if (age >= TimeSpan.Zero && age < currentTtl)
                 {
                     return cached.Status;
                 }
             }
 
-            var status = await FetchHttpCoreAsync(normalized, deadline.Token).ConfigureAwait(false);
-            deadline.Token.ThrowIfCancellationRequested();
+            ProviderStatus? status = null;
+            try
+            {
+                status = await FetchHttpCoreAsync(normalized, deadline.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested || _disposed)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogWarning(ex, "Failed to retrieve incident status for {Provider}", normalized);
+                status = null;
+            }
 
             _cache[normalized] = (_timeProvider.GetUtcNow(), status);
             return status;
         }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            return null;
+        }
         catch (OperationCanceledException)
         {
+            _cache[normalized] = (_timeProvider.GetUtcNow(), null);
             return null;
         }
         catch (Exception ex)
         {
             _logger?.LogWarning(ex, "Failed to retrieve incident status for {Provider}", normalized);
+            _cache[normalized] = (_timeProvider.GetUtcNow(), null);
             return null;
         }
         finally

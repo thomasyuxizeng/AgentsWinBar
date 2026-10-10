@@ -119,18 +119,17 @@ public class LastKnownGoodTests
     }
 
     [TestMethod]
-    public async Task GetAllUsageAsync_WhenNoCacheButHistoryExists_RestoresLatestPerWindow()
+    public async Task GetAllUsageAsync_WhenNoCacheButHistoryExists_DoesNotRestoreUsageFromHistory()
     {
         _history.Add(new() { Provider = "gemini", WindowKey = "session", UsedPercent = 15, Timestamp = _clock.Now.UtcDateTime.AddMinutes(-20) }, _clock.Now.UtcDateTime);
         _history.Add(new() { Provider = "gemini", WindowKey = "session", UsedPercent = 25, Timestamp = _clock.Now.UtcDateTime.AddMinutes(-12) }, _clock.Now.UtcDateTime);
         _history.Add(new() { Provider = "gemini", WindowKey = "extra:flash", UsedPercent = 71, Timestamp = _clock.Now.UtcDateTime.AddMinutes(-12) }, _clock.Now.UtcDateTime);
         Response("", false);
-        var stale = (await Service().GetAllUsageAsync()).Single();
-        stale.Session!.Percent.Should().Be(25); stale.ExtraWindows.Single().Window.Percent.Should().Be(71);
-        stale.UsageIsStale.Should().BeTrue();
-        var snapshot = DashboardSnapshotBuilder.Build(new() { Providers = [stale], HistorySamples = _history.Samples, NowUtc = _clock.Now.UtcDateTime });
-        snapshot.Providers.Single().HistorySampleCount.Should().Be(3);
-        snapshot.Providers.Single().StaleAge.Should().Be(TimeSpan.FromMinutes(12));
+        var cache = Cache();
+        var result = (await Service(cache).GetAllUsageAsync()).Single();
+        result.HasUsage.Should().BeFalse();
+        result.UsageFetchOutcome.Should().Be(FetchOutcome.Failed);
+        cache.Get("gemini").Should().BeNull();
     }
 
     [TestMethod]

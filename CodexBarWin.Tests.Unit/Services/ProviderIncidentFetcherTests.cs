@@ -212,4 +212,34 @@ public class ProviderIncidentFetcherTests
         status.Should().BeNull();
         handler.Requests.Should().Be(0);
     }
+
+    [TestMethod]
+    public async Task GetIncidentAsync_FailureCachedBrieflyFor60Seconds()
+    {
+        var statusCode = HttpStatusCode.InternalServerError;
+        var handler = new DelegatingHandler((req, _) => Task.FromResult(new HttpResponseMessage(statusCode)
+        {
+            Content = new StringContent(statusCode == HttpStatusCode.OK ? ClaudeJson : "Server Error")
+        }));
+        var clock = new TestClock(InitialTime);
+        using var fetcher = new ProviderIncidentFetcher(handler, clock);
+
+        // Call 1: HTTP 500 failure
+        var status1 = await fetcher.GetIncidentAsync("claude");
+        status1.Should().BeNull();
+        handler.Requests.Should().Be(1);
+
+        // Call 2 (30s later): should be cached failure (negative cache hit, no new HTTP request)
+        clock.Current += TimeSpan.FromSeconds(30);
+        statusCode = HttpStatusCode.OK; // Even if server recovered, within 60s it should not be hit
+        var status2 = await fetcher.GetIncidentAsync("claude");
+        status2.Should().BeNull();
+        handler.Requests.Should().Be(1);
+
+        // Call 3 (61s after call 1): negative cache expired, should make HTTP request
+        clock.Current += TimeSpan.FromSeconds(31); // Total 61s elapsed
+        var status3 = await fetcher.GetIncidentAsync("claude");
+        status3.Should().NotBeNull();
+        handler.Requests.Should().Be(2);
+    }
 }

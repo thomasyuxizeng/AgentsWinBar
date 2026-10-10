@@ -27,8 +27,11 @@ public static class IncidentCaption
     /// <summary>
     /// Returns the incident title if non-empty, or <paramref name="fallback"/>.
     /// </summary>
-    public static string Title(string? incidentTitle, string fallback = DefaultFallbackTitle) =>
-        !string.IsNullOrWhiteSpace(incidentTitle) ? incidentTitle.Trim() : fallback;
+    public static string Title(string? incidentTitle, string fallback = DefaultFallbackTitle)
+    {
+        var sanitized = IncidentTextSanitizer.Sanitize(incidentTitle);
+        return !string.IsNullOrWhiteSpace(sanitized) ? sanitized : fallback;
+    }
 
     /// <summary>
     /// Returns the incident title from <paramref name="provider"/>, or <paramref name="fallback"/>.

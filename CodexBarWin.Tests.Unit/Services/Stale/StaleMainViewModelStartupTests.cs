@@ -97,7 +97,7 @@ public class StaleMainViewModelStartupTests
     }
 
     [TestMethod]
-    public void RestoreLastKnownUsage_StatusOnlyCacheAndUsageHistory_RestoresBothWithIndependentAges()
+    public void RestoreLastKnownUsage_StatusOnlyCacheAndUsageHistory_RestoresStatusWithoutUsageFromHistory()
     {
         var now = DateTime.UtcNow;
         _cache.Setup(c => c.GetLastKnown("claude")).Returns(new UsageData { Provider = "claude", FetchedAt = now.AddDays(-8),
@@ -105,11 +105,12 @@ public class StaleMainViewModelStartupTests
         _history.Add(new() { Provider = "claude", WindowKey = "session", UsedPercent = 42, Timestamp = now.AddHours(-2) }, now);
         _viewModel.RestoreLastKnownUsage();
         var restored = _viewModel.Providers.Single(p => p.Provider == "claude");
-        restored.Session!.Percent.Should().Be(42);
+        restored.HasUsage.Should().BeFalse();
+        restored.Session.Should().BeNull();
         restored.ServiceStatus!.Indicator.Should().Be(ProviderStatusIndicator.Minor);
-        restored.StatusIsStale.Should().BeTrue(); restored.UsageIsStale.Should().BeTrue();
+        restored.StatusIsStale.Should().BeTrue();
         restored.LastSuccessfulStatusFetch.Should().Be(now.AddHours(-1));
-        restored.LastSuccessfulFetch.Should().Be(now.AddHours(-2));
+        restored.LastSuccessfulFetch.Should().BeNull();
     }
 
     [TestMethod]
@@ -161,7 +162,7 @@ public class StaleMainViewModelStartupTests
     }
 
     [TestMethod]
-    public async Task StartAsync_WhenCacheHasNoUsageButHistoryExists_RestoresFromHistory()
+    public async Task StartAsync_WhenCacheHasNoUsageButHistoryExists_DoesNotRestoreFromHistory()
     {
         var pastTime = DateTime.UtcNow.AddMinutes(-30);
         // Cache has no usage reading
@@ -179,9 +180,10 @@ public class StaleMainViewModelStartupTests
         try
         {
             var claude = _viewModel.Providers.First(p => p.Provider == "claude");
-            claude.Session!.Percent.Should().Be(44);
-            claude.UsageIsStale.Should().BeTrue();
-            claude.LastSuccessfulFetch.Should().Be(pastTime);
+            claude.HasUsage.Should().BeFalse();
+            claude.Session.Should().BeNull();
+            claude.UsageIsStale.Should().BeFalse();
+            claude.LastSuccessfulFetch.Should().BeNull();
         }
         finally
         {

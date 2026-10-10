@@ -114,16 +114,26 @@ public class StaleTimestampsAndRetentionTests
     public async Task CacheService_GetLastKnown_WhenTimestampIsInFuture_ReturnsNull()
     {
         var cache = CreateCache();
-        var future = DateTime.UtcNow.AddMinutes(5);
+        var fourMinutesFuture = DateTime.UtcNow.AddMinutes(4);
+        var sixMinutesFuture = DateTime.UtcNow.AddMinutes(6);
+
         cache.Set("claude", new UsageData
         {
             Provider = "claude",
-            FetchedAt = future,
+            FetchedAt = fourMinutesFuture,
             Session = new UsageWindow { ReportedPercent = 30 }
         });
+        // Up to 5 minutes future clock skew is tolerated
+        cache.GetLastKnown("claude").Should().NotBeNull();
 
-        // GetLastKnown filters out records where Utc(FetchedAt) > DateTime.UtcNow
-        cache.GetLastKnown("claude").Should().BeNull();
+        cache.Set("codex", new UsageData
+        {
+            Provider = "codex",
+            FetchedAt = sixMinutesFuture,
+            Session = new UsageWindow { ReportedPercent = 30 }
+        });
+        // Beyond 5 minutes future clock skew returns null
+        cache.GetLastKnown("codex").Should().BeNull();
     }
 
     [TestMethod]
@@ -231,7 +241,6 @@ public class StaleTimestampsAndRetentionTests
 
         // Chart history is kept for fourteen days; usage fallback expires after seven.
         _history.Samples.Should().ContainSingle();
-        _history.GetLastKnownUsage("claude", now).Should().BeNull();
     }
 
     [TestMethod]
@@ -414,44 +423,7 @@ public class StaleTimestampsAndRetentionTests
         costExact!.IsStale.Should().BeTrue();
     }
 
-    [TestMethod]
-    public void HistoryFallback_BoundarySevenDays_KeepsAt6d23hAndDropsAt7d1m()
-    {
-        var age6d23h = TimeSpan.FromDays(7) - TimeSpan.FromHours(1);
-        var age7d1m = TimeSpan.FromDays(7) + TimeSpan.FromMinutes(1);
-        var ageExact7d = TimeSpan.FromDays(7);
 
-        // Case 1: 6d 23h kept
-        var history1 = new UsageHistoryStore();
-        var timeKept = DateTime.UtcNow - age6d23h;
-        history1.Add(new() { Provider = "claude", WindowKey = "session", UsedPercent = 55, Timestamp = timeKept }, DateTime.UtcNow);
-        var emptyCache1 = new Mock<ICacheService>();
-        var vm1 = CreateMainViewModelWithHistory(history1, emptyCache1.Object);
-        vm1.RestoreLastKnownUsage();
-        var claudeKept = vm1.Providers.First(p => p.Provider == "claude");
-        claudeKept.HasUsage.Should().BeTrue();
-        claudeKept.Session!.Percent.Should().Be(55);
-        claudeKept.UsageIsStale.Should().BeTrue();
-
-        // Case 2: Exact 7d kept
-        var historyExact = new UsageHistoryStore();
-        var timeExact = DateTime.UtcNow.AddSeconds(1) - ageExact7d;
-        historyExact.Add(new() { Provider = "claude", WindowKey = "session", UsedPercent = 55, Timestamp = timeExact }, DateTime.UtcNow);
-        var emptyCacheExact = new Mock<ICacheService>();
-        var vmExact = CreateMainViewModelWithHistory(historyExact, emptyCacheExact.Object);
-        vmExact.RestoreLastKnownUsage();
-        var claudeExact = vmExact.Providers.First(p => p.Provider == "claude");
-        claudeExact.HasUsage.Should().BeTrue();
-
-        // Case 3: 7d 1m dropped
-        var history2 = new UsageHistoryStore();
-        var timeDropped = DateTime.UtcNow - age7d1m;
-        history2.Add(new() { Provider = "claude", WindowKey = "session", UsedPercent = 55, Timestamp = timeDropped }, DateTime.UtcNow);
-        var emptyCache2 = new Mock<ICacheService>();
-        var vm2 = CreateMainViewModelWithHistory(history2, emptyCache2.Object);
-        vm2.RestoreLastKnownUsage();
-        vm2.Providers.Should().BeEmpty();
-    }
 
     [TestMethod]
     public async Task Regression_FreshDataUnaffectedAcrossAllCaches()
@@ -552,22 +524,19 @@ public class StaleTimestampsAndRetentionTests
 
 
 
-        // 4. MainViewModel History Fallback
-
-        var history = new UsageHistoryStore();
-
-        history.Add(new() { Provider = "claude", WindowKey = "session", UsedPercent = 25, Timestamp = freshTime }, now);
-
-        var vm = CreateMainViewModelWithHistory(history, new Mock<ICacheService>().Object);
-
+        // 4. MainViewModel Cache
+        var cacheService = new Mock<ICacheService>();
+        cacheService.Setup(c => c.GetLastKnown("claude")).Returns(new UsageData
+        {
+            Provider = "claude",
+            Session = new UsageWindow { ReportedPercent = 25 },
+            FetchedAt = freshTime
+        });
+        var vm = CreateMainViewModelWithHistory(new UsageHistoryStore(), cacheService.Object);
         vm.RestoreLastKnownUsage();
-
         var provider = vm.Providers.First(p => p.Provider == "claude");
-
         provider.HasUsage.Should().BeTrue();
-
         provider.Session!.Percent.Should().Be(25);
-
     }
 
 }

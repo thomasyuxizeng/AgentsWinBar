@@ -27,6 +27,10 @@ public static class CacheRetention
         return age >= -ClockSkewTolerance && age <= MaxAge;
     }
 
+    public static bool IsRetained(UsageData data, DateTime nowUtc) =>
+        IsRetained(data.LastSuccessfulFetch ?? data.FetchedAt, nowUtc) ||
+        (data.ServiceStatus != null && IsRetained(StatusFetchedAt(data), nowUtc));
+
     public static CostData? RetainedCost(CostData? data, DateTime nowUtc) =>
         data != null && IsRetained(data.LastSuccessfulFetch ?? data.FetchedAt, nowUtc) ? data : null;
 

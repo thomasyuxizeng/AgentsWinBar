@@ -30,6 +30,11 @@ public class CodexBarService : ICodexBarService
     private readonly IProviderIncidentFetcher? _incidentFetcher;
     internal static readonly TimeSpan StatusBudget = TimeSpan.FromMilliseconds(500);
     internal static readonly TimeSpan GeminiStatusBudget = StatusBudget;
+    /// <summary>
+    /// TTL of the WSL codexbar shim cache (600 seconds / 10 minutes), shared with tools/wsl/codexbar-shim.sh.
+    /// Replays younger than this TTL represent normal operation and are not considered stale.
+    /// </summary>
+    public static readonly TimeSpan ShimTtl = TimeSpan.FromSeconds(600);
     // The last complete result per provider (guarded by _costCache). A failed, empty or timed-out scan serves it
     // instead of blanking the totals; only a newer good result replaces it.
     private readonly Dictionary<string, CostData> _lastGoodCost = [];
@@ -40,7 +45,8 @@ public class CodexBarService : ICodexBarService
     private sealed class ProviderRefreshState
     {
         public long Issued;
-        public long Published;
+        public long PublishedUsage;
+        public long PublishedStatus;
     }
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, ProviderRefreshState> _providerRefreshes = new(StringComparer.Ordinal);
 
@@ -372,13 +378,13 @@ public class CodexBarService : ICodexBarService
         ProviderStatus? prefetchedStatus = null;
         try
         {
-            var prefetched = await PrefetchProviderStatusesAsync([normalizedProvider], ct);
-            prefetched.TryGetValue(normalizedProvider, out prefetchedStatus);
+            var prefetchTasks = StartProviderStatusPrefetches([normalizedProvider], ct);
+            ct.ThrowIfCancellationRequested();
+            prefetchedStatus = await AwaitPrefetchedStatusAsync(normalizedProvider, prefetchTasks, ct);
             ct.ThrowIfCancellationRequested();
             var source = ProviderConstants.GetSource(normalizedProvider);
             var result = await _wslService.ExecuteAsync($"codexbar --provider {normalizedProvider} --format json --source {source} --status", ct);
 
-            ct.ThrowIfCancellationRequested();
             return InterpretProviderResult(normalizedProvider, result, prefetchedStatus, generation);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
@@ -419,9 +425,12 @@ public class CodexBarService : ICodexBarService
         finally
         {
             // Disposing an enumeration early must also stop its WSL work.
-            lifetime.Cancel();
-            try { await producer; }
-            catch (OperationCanceledException) when (lifetime.IsCancellationRequested) { }
+            if (!producer.IsCompleted)
+            {
+                lifetime.Cancel();
+                try { await producer; }
+                catch (OperationCanceledException) when (lifetime.IsCancellationRequested) { }
+            }
         }
 
         async Task ProduceAsync()
@@ -500,7 +509,7 @@ public class CodexBarService : ICodexBarService
         else
         {
             var generations = providers.Select(BeginProviderRefresh).ToArray();
-            var prefetchedStatuses = await PrefetchProviderStatusesAsync(providers, ct);
+            var prefetchTasks = StartProviderStatusPrefetches(providers, ct);
             ct.ThrowIfCancellationRequested();
             var commands = providers.Select(BuildProviderCommand).ToArray();
             var retryInIndividualShell = new bool[providers.Count];
@@ -511,7 +520,7 @@ public class CodexBarService : ICodexBarService
                     _logger.LogInformation("WSL batch command not found for {Provider}; retrying individually", providers[index]);
                     RecordBatchFallback(providers[index], "Command failed (exit code 127)");
                 }
-                prefetchedStatuses.TryGetValue(providers[index], out var pStatus);
+                var pStatus = await AwaitPrefetchedStatusAsync(providers[index], prefetchTasks, ct);
                 Complete(index, await FetchProviderAsync(providers[index], commands[index], pStatus, generations[index], ct));
             }
             try
@@ -529,7 +538,24 @@ public class CodexBarService : ICodexBarService
                     }
                     if (results[index] == null)
                     {
-                        prefetchedStatuses.TryGetValue(providers[index], out var pStatus);
+                        ProviderStatus? pStatus = null;
+                        if (prefetchTasks.TryGetValue(providers[index], out var task))
+                        {
+                            if (task.IsCompleted)
+                            {
+                                pStatus = task.IsCompletedSuccessfully ? task.Result : null;
+                            }
+                            else
+                            {
+                                try
+                                {
+                                    task.Wait(StatusBudget, ct);
+                                    pStatus = task.IsCompletedSuccessfully ? task.Result : null;
+                                }
+                                catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+                                catch { }
+                            }
+                        }
                         Complete(index, InterpretProviderResult(providers[index], result, pStatus, generations[index]));
                     }
                 }, ct);
@@ -545,7 +571,7 @@ public class CodexBarService : ICodexBarService
                     }
                     else
                     {
-                        prefetchedStatuses.TryGetValue(providers[i], out var pStatus);
+                        var pStatus = await AwaitPrefetchedStatusAsync(providers[i], prefetchTasks, ct);
                         Complete(i, InterpretProviderResult(providers[i], batch[i], pStatus, generations[i]));
                     }
                 }
@@ -646,13 +672,13 @@ public class CodexBarService : ICodexBarService
         };
     }
 
-    private async Task<Dictionary<string, ProviderStatus?>> PrefetchProviderStatusesAsync(IReadOnlyList<string> providers, CancellationToken ct)
+    private Dictionary<string, Task<ProviderStatus?>> StartProviderStatusPrefetches(IReadOnlyList<string> providers, CancellationToken ct)
     {
-        var results = new Dictionary<string, ProviderStatus?>(StringComparer.OrdinalIgnoreCase);
+        var tasks = new Dictionary<string, Task<ProviderStatus?>>(StringComparer.OrdinalIgnoreCase);
         if (_settingsService.Settings.DeveloperModeEnabled || providers.Count == 0 ||
             (_incidentFetcher == null && _geminiStatusFallback == null))
         {
-            return results;
+            return tasks;
         }
 
         var distinct = providers
@@ -661,49 +687,39 @@ public class CodexBarService : ICodexBarService
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
 
-        if (distinct.Count == 0) return results;
-
-        var tasks = distinct.Select(async p =>
+        foreach (var p in distinct)
         {
-            var status = await PrefetchSingleStatusAsync(p, ct).ConfigureAwait(false);
-            return (Provider: p, Status: status);
-        }).ToArray();
-
-        var entries = await Task.WhenAll(tasks).ConfigureAwait(false);
-        foreach (var (p, status) in entries)
-        {
-            results[p] = status;
+            if (_incidentFetcher != null)
+            {
+                if (string.Equals(p, "claude", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(p, "codex", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(p, "gemini", StringComparison.OrdinalIgnoreCase))
+                {
+                    tasks[p] = FetchProviderStatusAsync(p, ct);
+                }
+            }
+            else if (_geminiStatusFallback != null && string.Equals(p, "gemini", StringComparison.OrdinalIgnoreCase))
+            {
+                tasks[p] = FetchProviderStatusAsync(p, ct);
+            }
         }
-        return results;
+        return tasks;
     }
 
-    private async Task<ProviderStatus?> PrefetchSingleStatusAsync(string provider, CancellationToken ct)
+    private async Task<ProviderStatus?> AwaitPrefetchedStatusAsync(string provider, Dictionary<string, Task<ProviderStatus?>> prefetchTasks, CancellationToken ct)
     {
-        if (_incidentFetcher == null && !string.Equals(provider, "gemini", StringComparison.OrdinalIgnoreCase))
-            return null;
-        if (_incidentFetcher == null && _geminiStatusFallback == null)
+        if (!prefetchTasks.TryGetValue(provider, out var task))
             return null;
 
-        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        deadline.CancelAfter(StatusBudget);
-        Task<ProviderStatus?>? pending = null;
         try
         {
-            pending = FetchProviderStatusAsync(provider, deadline.Token);
-            return await pending.WaitAsync(StatusBudget, ct).ConfigureAwait(false);
+            return await task.WaitAsync(StatusBudget, ct).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (Exception ex)
         {
             _logger.LogDebug(ex, "Provider status unavailable within refresh budget for {Provider}", provider);
             return null;
-        }
-        finally
-        {
-            deadline.Cancel();
-            if (pending != null)
-                Helpers.AsyncHelper.SafeFireAndForget(pending,
-                    onError: ex => _logger.LogDebug(ex, "Provider status fallback completed after refresh budget for {Provider}", provider));
         }
     }
 
@@ -836,42 +852,65 @@ public class CodexBarService : ICodexBarService
     private UsageData ResolveUsageCore(UsageData data, long generation, ProviderRefreshState state)
     {
         var now = _timeProvider.GetUtcNow().UtcDateTime;
-        var superseded = generation < state.Published;
+        bool usageSuperseded;
+        bool statusSuperseded;
+        lock (state)
+        {
+            usageSuperseded = generation < state.PublishedUsage;
+            statusSuperseded = generation < state.PublishedStatus;
+        }
         var cached = _cacheService.GetLastKnown(data.Provider);
         if (cached != null) cached = CacheRetention.PruneExpired(cached, now);
-        var previous = cached?.HasUsage == true ? cached : _history?.GetLastKnownUsage(data.Provider, now);
+        var previous = cached?.HasUsage == true ? cached : null;
         if (previous != null)
         {
             var prevSuccess = Helpers.DashboardValues.Utc(previous.LastSuccessfulFetch ?? previous.FetchedAt);
             if (now - prevSuccess > CacheRetention.MaxAge) previous = null;
         }
+
         var observationAt = data.DataUpdatedAt ?? data.CacheUpdatedAt;
-        var cachedReading = !superseded && data.UsageIsCached && data.HasUsage &&
-            observationAt.HasValue && CacheRetention.IsRetained(observationAt.Value, now) &&
-            (previous == null || Helpers.DashboardValues.Utc(observationAt.Value) >=
-                Helpers.DashboardValues.Utc(previous.LastSuccessfulFetch ?? previous.FetchedAt));
-        var success = !superseded && !data.UsageIsCached && data.UsageFetchOutcome == FetchOutcome.Success;
-        var acceptsUsage = success || cachedReading;
-        var usageAt = cachedReading ? Helpers.DashboardValues.Utc(observationAt!.Value) : now;
-        if (usageAt > now) usageAt = now;
-        var statusSuccess = !superseded && !data.UsageIsCached && data.StatusFetchOutcome == FetchOutcome.Success;
+        var obsAtUtc = observationAt.HasValue ? Helpers.DashboardValues.Utc(observationAt.Value) : (DateTime?)null;
+        DateTime? prevObsAt = previous != null
+            ? Helpers.DashboardValues.Utc(previous.DataUpdatedAt ?? previous.CacheUpdatedAt ?? previous.LastSuccessfulFetch ?? previous.FetchedAt)
+            : null;
+
+        var isCached = data.UsageIsCached || (!data.UsageIsCached && observationAt.HasValue && Helpers.DataAge.OldReadingUtc(data.FetchedAt, observationAt.Value) != null);
+        var isObservationRetained = obsAtUtc.HasValue && CacheRetention.IsRetained(obsAtUtc.Value, now);
+
+        var freshSuccess = !usageSuperseded && !isCached && data.UsageFetchOutcome == FetchOutcome.Success;
+        var isNewerCachedReading = !usageSuperseded && isCached && data.HasUsage && isObservationRetained &&
+            (previous == null || prevObsAt == null || obsAtUtc!.Value > prevObsAt.Value);
+        var isReplayOfHeld = !usageSuperseded && isCached && data.HasUsage && isObservationRetained &&
+            (previous != null && prevObsAt != null && obsAtUtc!.Value <= prevObsAt.Value);
+
+        var acceptsUsage = freshSuccess || isNewerCachedReading || isReplayOfHeld;
+        var usageAt = isNewerCachedReading ? (obsAtUtc!.Value > now ? now : obsAtUtc.Value) : now;
+
+        var statusSuccess = !statusSuperseded && !isCached && data.StatusFetchOutcome == FetchOutcome.Success;
         var cachedStatusAt = data.CacheUpdatedAt ?? observationAt;
-        var cachedStatus = !superseded && data.UsageIsCached && data.ServiceStatus != null &&
+        var cachedStatus = !statusSuperseded && isCached && data.ServiceStatus != null &&
             cached?.ServiceStatus == null && cachedStatusAt.HasValue && CacheRetention.IsRetained(cachedStatusAt.Value, now);
+
+        var isHeldStale = prevObsAt.HasValue && (now - prevObsAt.Value > ShimTtl);
+        var isNewerStale = obsAtUtc.HasValue && (now - obsAtUtc.Value > ShimTtl);
+        var isUsageStale = !freshSuccess && (isReplayOfHeld ? isHeldStale : (isNewerCachedReading ? isNewerStale : (acceptsUsage || previous?.HasUsage == true)));
+
         var resolved = data with
         {
-            Session = acceptsUsage ? data.Session : previous?.Session,
-            Weekly = acceptsUsage ? data.Weekly : previous?.Weekly,
-            Tertiary = acceptsUsage ? data.Tertiary : previous?.Tertiary,
-            ExtraWindows = acceptsUsage ? data.ExtraWindows : previous?.ExtraWindows ?? [],
-            Credits = acceptsUsage ? data.Credits : previous?.Credits,
-            Plan = acceptsUsage ? data.Plan : previous?.Plan,
-            Status = acceptsUsage ? data.Status : previous?.Status,
-            FetchedAt = acceptsUsage ? usageAt : previous?.FetchedAt ?? data.FetchedAt,
-            DataUpdatedAt = acceptsUsage ? data.DataUpdatedAt : previous?.DataUpdatedAt,
-            LastSuccessfulFetch = acceptsUsage ? usageAt : previous?.LastSuccessfulFetch ?? previous?.FetchedAt,
-            UsageFetchOutcome = superseded || (data.UsageIsCached && !cachedReading) ? FetchOutcome.Unavailable : data.UsageFetchOutcome,
-            UsageIsStale = !success && (cachedReading || previous?.HasUsage == true),
+            Session = acceptsUsage ? (isReplayOfHeld ? previous!.Session : data.Session) : previous?.Session,
+            Weekly = acceptsUsage ? (isReplayOfHeld ? previous!.Weekly : data.Weekly) : previous?.Weekly,
+            Tertiary = acceptsUsage ? (isReplayOfHeld ? previous!.Tertiary : data.Tertiary) : previous?.Tertiary,
+            ExtraWindows = acceptsUsage ? (isReplayOfHeld ? previous!.ExtraWindows : data.ExtraWindows) : previous?.ExtraWindows ?? [],
+            Credits = acceptsUsage ? (isReplayOfHeld ? previous!.Credits : data.Credits) : previous?.Credits,
+            Plan = acceptsUsage ? (isReplayOfHeld ? previous!.Plan : data.Plan) : previous?.Plan,
+            Status = acceptsUsage ? (isReplayOfHeld ? previous!.Status : data.Status) : previous?.Status,
+            FetchedAt = acceptsUsage ? (isReplayOfHeld ? previous!.FetchedAt : usageAt) : previous?.FetchedAt ?? data.FetchedAt,
+            DataUpdatedAt = acceptsUsage ? (isReplayOfHeld ? previous!.DataUpdatedAt : data.DataUpdatedAt) : previous?.DataUpdatedAt,
+            CacheUpdatedAt = acceptsUsage ? (isReplayOfHeld ? previous!.CacheUpdatedAt : data.CacheUpdatedAt) : previous?.CacheUpdatedAt,
+            LastSuccessfulFetch = acceptsUsage ? (isReplayOfHeld ? previous!.LastSuccessfulFetch : usageAt) : previous?.LastSuccessfulFetch ?? previous?.FetchedAt,
+            UsageFetchOutcome = acceptsUsage ? FetchOutcome.Success : (usageSuperseded || isCached ? FetchOutcome.Unavailable : data.UsageFetchOutcome),
+            UsageIsCached = isCached || isReplayOfHeld || (previous?.UsageIsCached == true && !freshSuccess),
+            UsageIsStale = isUsageStale,
             ServiceStatus = statusSuccess || cachedStatus ? data.ServiceStatus : cached?.ServiceStatus,
             LastSuccessfulStatusFetch = statusSuccess ? now : cachedStatus ? Helpers.DashboardValues.Utc(cachedStatusAt!.Value) : cached?.LastSuccessfulStatusFetch,
             StatusIsStale = !statusSuccess && (cachedStatus || cached?.ServiceStatus != null),
@@ -881,8 +920,18 @@ public class CodexBarService : ICodexBarService
         // Persist complete values independently: a status-only success must not discard the usage reading.
         if (acceptsUsage || statusSuccess || cachedStatus)
         {
-            state.Published = Math.Max(state.Published, generation);
-            _cacheService.Set(data.Provider, success ? resolved : resolved with
+            lock (state)
+            {
+                if (acceptsUsage)
+                {
+                    state.PublishedUsage = Math.Max(state.PublishedUsage, generation);
+                }
+                if (statusSuccess || cachedStatus)
+                {
+                    state.PublishedStatus = Math.Max(state.PublishedStatus, generation);
+                }
+            }
+            _cacheService.Set(data.Provider, freshSuccess ? resolved : resolved with
             {
                 Error = null, IsLoading = false, CommandNotFound = false,
                 UsageFetchOutcome = resolved.HasUsage ? FetchOutcome.Success : FetchOutcome.Unknown
@@ -926,16 +975,16 @@ public class CodexBarService : ICodexBarService
                 return [];
             }
 
-            // Try array first
+            var fetchTime = _timeProvider.GetUtcNow().UtcDateTime;
             if (json.TrimStart().StartsWith('['))
             {
                 var dtos = JsonSerializer.Deserialize(json, AppJsonSerializerContext.Default.ListUsageDataDto);
-                return dtos?.Select(d => d.ToUsageData()).ToList() ?? [];
+                return dtos?.Select(d => d.ToUsageData(fetchTime)).ToList() ?? [];
             }
 
             // Try single object
             var dto = JsonSerializer.Deserialize(json, AppJsonSerializerContext.Default.UsageDataDto);
-            return dto != null ? [dto.ToUsageData()] : [];
+            return dto != null ? [dto.ToUsageData(fetchTime)] : [];
         }
         catch (JsonException ex)
         {

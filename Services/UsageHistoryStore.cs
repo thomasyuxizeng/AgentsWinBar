@@ -53,30 +53,6 @@ public sealed class UsageHistoryStore
         return count;
     }
 
-    /// <summary>Recover the most recent observation of each window when a full cached reading is unavailable.</summary>
-    public UsageData? GetLastKnownUsage(string provider, DateTime? nowUtc = null)
-    {
-        var now = Utc(nowUtc ?? DateTime.UtcNow);
-        var samples = Samples.Where(s => s.Provider.Equals(provider, StringComparison.OrdinalIgnoreCase) &&
-                CacheRetention.IsRetained(s.Timestamp, now))
-            .GroupBy(s => s.WindowKey).Select(g => g.MaxBy(s => s.Timestamp)!).ToArray();
-        if (samples.Length == 0) return null;
-        UsageWindow Window(UsageHistorySample sample) => new()
-        { ReportedPercent = sample.UsedPercent, ResetAt = sample.ResetsAt };
-        UsageWindow? Named(string key) => samples.FirstOrDefault(s => s.WindowKey == key) is { } sample ? Window(sample) : null;
-        // UsageData has one retention timestamp. Use the oldest recovered window conservatively:
-        // a newer window must never extend an older window's retention deadline.
-        var fetchedAt = samples.Min(s => s.Timestamp);
-        return new UsageData
-        {
-            Provider = ProviderConstants.ValidateAndNormalize(provider), Session = Named("session"), Weekly = Named("weekly"),
-            Tertiary = Named("tertiary"), ExtraWindows = samples.Where(s => s.WindowKey.StartsWith("extra:", StringComparison.Ordinal))
-                .Select(s => new ExtraUsageWindow { Key = s.WindowKey[6..], Title = s.WindowKey[6..], Window = Window(s) }).ToArray(),
-            FetchedAt = fetchedAt, LastSuccessfulFetch = fetchedAt, UsageIsStale = true,
-            UsageFetchOutcome = FetchOutcome.Unavailable
-        };
-    }
-
     public IReadOnlyList<UsageHistorySample> Get(string provider, string windowKey)
     {
         lock (_gate) return _samples.Where(s => s.Provider.Equals(provider, StringComparison.OrdinalIgnoreCase) &&
@@ -103,6 +79,5 @@ public sealed class UsageHistoryStore
         }
     }
 
-    private static DateTime Utc(DateTime value) => value.Kind == DateTimeKind.Unspecified
-        ? DateTime.SpecifyKind(value, DateTimeKind.Utc) : value.ToUniversalTime();
+    private static DateTime Utc(DateTime value) => Helpers.DashboardValues.Utc(value);
 }

@@ -374,4 +374,111 @@ public class CodexBarServiceIncidentMergeTests
         var act = async () => await service.GetUsageAsync("claude", cts.Token);
         await act.Should().ThrowAsync<OperationCanceledException>();
     }
+
+    private sealed class DelegatingHandler(Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> send) : HttpMessageHandler
+    {
+        public int Requests;
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            Interlocked.Increment(ref Requests);
+            return send(request, ct);
+        }
+    }
+
+    [TestMethod]
+    public async Task BudgetExpires_ResultArrivesLater_NextCallIsCacheHitWithNoNewRequest()
+    {
+        var fetchCompletion = new TaskCompletionSource<HttpResponseMessage>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var handler = new DelegatingHandler((req, ct) => fetchCompletion.Task);
+        using var incidentFetcher = new ProviderIncidentFetcher(handler, _clock);
+        var service = new CodexBarService(_wsl, _cache, _settings, new MockSampleDataLoader(),
+            NullLogger<CodexBarService>.Instance, _clock, incidentFetcher: incidentFetcher);
+
+        _wsl.SetCommandResult(
+            "codexbar --provider claude --format json --source cli --status",
+            new WslResult
+            {
+                Success = true,
+                Output = """{"provider":"claude","usage":{"primary":{"usedPercent":45}},"status":{"indicator":"minor","description":"Degraded"}}"""
+            });
+
+        // Call 1: Status budget (500ms) expires while HTTP request is in-flight
+        var sw = Stopwatch.StartNew();
+        var result1 = await service.GetUsageAsync("claude");
+        sw.Stop();
+
+        // Must not be delayed significantly beyond the ~500ms budget
+        sw.ElapsedMilliseconds.Should().BeLessThan(1500);
+        result1.Should().NotBeNull();
+        result1!.ServiceStatus!.IncidentTitle.Should().BeNull(); // Not yet available
+        handler.Requests.Should().Be(1);
+
+        // Now HTTP response arrives in background
+        fetchCompletion.SetResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+        {
+            Content = new StringContent("""
+                {
+                  "page": { "url": "https://status.claude.com" },
+                  "status": { "indicator": "minor", "description": "Degraded" },
+                  "incidents": [
+                    {
+                      "name": "Incident Title",
+                      "status": "monitoring",
+                      "resolved_at": null,
+                      "incident_updates": [
+                        { "body": "Update body text", "display_at": "2026-10-11T10:00:00Z" }
+                      ]
+                    }
+                  ]
+                }
+                """)
+        });
+
+        // Small yield to let background task continue to completion and write to cache
+        await Task.Yield();
+        await Task.Delay(50);
+
+        // Call 2: Next refresh should be a cache hit with NO new HTTP request
+        var result2 = await service.GetUsageAsync("claude");
+        result2.Should().NotBeNull();
+        result2!.ServiceStatus!.IncidentTitle.Should().Be("Incident Title");
+        handler.Requests.Should().Be(1); // No new HTTP request was made!
+    }
+
+    [TestMethod]
+    public async Task CancellationOfRefreshCt_CancelsTheFetch()
+    {
+        var cancelledTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var handler = new DelegatingHandler(async (req, ct) =>
+        {
+            try
+            {
+                await Task.Delay(Timeout.Infinite, ct);
+            }
+            catch (OperationCanceledException)
+            {
+                cancelledTcs.TrySetResult(true);
+                throw;
+            }
+            return new HttpResponseMessage(System.Net.HttpStatusCode.OK);
+        });
+        using var incidentFetcher = new ProviderIncidentFetcher(handler, _clock);
+        var service = new CodexBarService(_wsl, _cache, _settings, new MockSampleDataLoader(),
+            NullLogger<CodexBarService>.Instance, _clock, incidentFetcher: incidentFetcher);
+
+        using var cts = new CancellationTokenSource();
+        _wsl.CommandHandler = async (cmd, ct) =>
+        {
+            cts.Cancel(); // Cancel refresh token while in flight
+            await Task.Yield();
+            throw new OperationCanceledException(ct);
+        };
+
+        var act = async () => await service.GetUsageAsync("claude", cts.Token);
+        await act.Should().ThrowAsync<OperationCanceledException>();
+
+        // Verify the incident fetch received cancellation
+        var wasCancelled = await Task.WhenAny(cancelledTcs.Task, Task.Delay(1000));
+        wasCancelled.Should().Be(cancelledTcs.Task);
+    }
 }

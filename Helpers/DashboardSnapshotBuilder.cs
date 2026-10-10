@@ -37,21 +37,6 @@ public static class DashboardSnapshotBuilder
         var providers = (inputs.Providers ?? []).OfType<UsageData>().Select(original =>
         {
             var data = original;
-            if (!data.HasUsage && data.UsageFetchOutcome != FetchOutcome.Success)
-            {
-                var store = new UsageHistoryStore();
-                store.Restore(byProvider[data.Provider], now);
-                if (store.GetLastKnownUsage(data.Provider, now) is { } restored)
-                {
-                    var successAt = Utc(restored.LastSuccessfulFetch ?? restored.FetchedAt);
-                    if (now - successAt <= Services.CacheRetention.MaxAge)
-                    {
-                        data = restored with { Error = data.Error, IsLoading = data.IsLoading, Cost = data.Cost,
-                            ServiceStatus = data.ServiceStatus, StatusIsStale = data.StatusIsStale,
-                            LastSuccessfulStatusFetch = data.LastSuccessfulStatusFetch };
-                    }
-                }
-            }
             // Attached status can outlive the service cache while the app remains open.
             if (data.ServiceStatus != null)
             {
@@ -214,7 +199,6 @@ public static class DashboardSnapshotBuilder
     private static DateTime? Oldest(IEnumerable<UsageHistorySample> samples) =>
         samples.Select(s => (DateTime?)Utc(s.Timestamp)).Min();
     private static TimeSpan Age(DateTime now, DateTime fetchedAt) => now > fetchedAt ? now - fetchedAt : TimeSpan.Zero;
-    private static DateTime? Utc(DateTime? value) => value.HasValue ? Utc(value.Value) : null;
-    private static DateTime Utc(DateTime value) => value.Kind == DateTimeKind.Unspecified
-        ? DateTime.SpecifyKind(value, DateTimeKind.Utc) : value.ToUniversalTime();
+    private static DateTime? Utc(DateTime? value) => value.HasValue ? DashboardValues.Utc(value.Value) : null;
+    private static DateTime Utc(DateTime value) => DashboardValues.Utc(value);
 }

@@ -235,18 +235,21 @@ public static class GoogleIncidentParser
 
     public static string CleanDescription(string? desc, ProviderStatusIndicator indicator)
     {
+        var fallback = indicator switch
+        {
+            ProviderStatusIndicator.Critical => "Critical service disruption",
+            ProviderStatusIndicator.Major => "Major service disruption",
+            ProviderStatusIndicator.Minor => "Minor service disruption",
+            ProviderStatusIndicator.Maintenance => "Scheduled maintenance",
+            _ => "All systems operational"
+        };
+
         if (string.IsNullOrWhiteSpace(desc))
         {
-            return indicator switch
-            {
-                ProviderStatusIndicator.Critical => "Critical service disruption",
-                ProviderStatusIndicator.Major => "Major service disruption",
-                ProviderStatusIndicator.Minor => "Minor service disruption",
-                ProviderStatusIndicator.Maintenance => "Scheduled maintenance",
-                _ => "All systems operational"
-            };
+            return fallback;
         }
 
+        string rawText = desc;
         var lines = desc.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         for (int i = 0; i < lines.Length; i++)
         {
@@ -258,22 +261,31 @@ public static class GoogleIncidentParser
             {
                 if (i + 1 < lines.Length)
                 {
-                    return lines[i + 1].Trim('*', ' ');
+                    rawText = lines[i + 1];
+                    break;
                 }
             }
 
             if (line.StartsWith("**Summary:**", StringComparison.OrdinalIgnoreCase))
             {
-                return line["**Summary:**".Length..].Trim('*', ' ');
+                rawText = line["**Summary:**".Length..];
+                break;
             }
 
             if (line.StartsWith("**Title:**", StringComparison.OrdinalIgnoreCase))
             {
-                return line["**Title:**".Length..].Trim('*', ' ');
+                rawText = line["**Title:**".Length..];
+                break;
             }
         }
 
-        return lines[0].Trim('*', ' ');
+        if (rawText == desc && lines.Length > 0)
+        {
+            rawText = lines[0];
+        }
+
+        var sanitized = IncidentTextSanitizer.Sanitize(rawText);
+        return !string.IsNullOrWhiteSpace(sanitized) ? sanitized : fallback;
     }
 
     public static string ExtractTitle(JsonElement incident, ProviderStatusIndicator indicator)
@@ -282,14 +294,16 @@ public static class GoogleIncidentParser
             nameEl.ValueKind == JsonValueKind.String &&
             !string.IsNullOrWhiteSpace(nameEl.GetString()))
         {
-            return nameEl.GetString()!.Trim();
+            var sanitized = IncidentTextSanitizer.Sanitize(nameEl.GetString());
+            if (!string.IsNullOrWhiteSpace(sanitized)) return sanitized;
         }
 
         if (incident.TryGetProperty("title", out var titleEl) &&
             titleEl.ValueKind == JsonValueKind.String &&
             !string.IsNullOrWhiteSpace(titleEl.GetString()))
         {
-            return titleEl.GetString()!.Trim();
+            var sanitized = IncidentTextSanitizer.Sanitize(titleEl.GetString());
+            if (!string.IsNullOrWhiteSpace(sanitized)) return sanitized;
         }
 
         return ExtractDescription(incident, indicator);

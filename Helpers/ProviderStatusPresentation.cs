@@ -39,8 +39,15 @@ public static class ProviderStatusPresentation
     public static bool ShowBanner(ProviderStatus? status) =>
         status != null && status.Indicator != ProviderStatusIndicator.None;
 
-    public static string Description(ProviderStatus? status) =>
-        !string.IsNullOrWhiteSpace(status?.Description) ? status.Description.Trim() : status?.Indicator switch
+    public static string Description(ProviderStatus? status)
+    {
+        if (!string.IsNullOrWhiteSpace(status?.Description))
+        {
+            var sanitized = IncidentTextSanitizer.Sanitize(status.Description);
+            if (!string.IsNullOrWhiteSpace(sanitized)) return sanitized;
+        }
+
+        return status?.Indicator switch
         {
             ProviderStatusIndicator.None => "All systems operational",
             ProviderStatusIndicator.Minor => "Minor service disruption",
@@ -49,6 +56,7 @@ public static class ProviderStatusPresentation
             ProviderStatusIndicator.Maintenance => "Scheduled maintenance",
             _ => "No status available"
         };
+    }
 
     public static Uri? StatusPageUri(ProviderStatus? status) =>
         Uri.TryCreate(status?.Url, UriKind.Absolute, out var uri) &&

@@ -395,4 +395,60 @@ public class GeminiStatusFallbackTests
         status!.Indicator.Should().Be(ProviderStatusIndicator.None);
         status.Description.Should().Be("All systems operational");
     }
+
+    [TestMethod]
+    public async Task GetStatusAsync_FailedRequest_NegativeCachedFor60Seconds()
+    {
+        var requests = 0;
+        var statusCode = HttpStatusCode.InternalServerError;
+        _mockHandler
+            .Protected()
+            .Setup<Task<HttpResponseMessage>>(
+                "SendAsync",
+                ItExpr.IsAny<HttpRequestMessage>(),
+                ItExpr.IsAny<CancellationToken>())
+            .Callback(() => requests++)
+            .Returns(() => Task.FromResult(new HttpResponseMessage
+            {
+                StatusCode = statusCode,
+                Content = new StringContent(statusCode == HttpStatusCode.OK ? "[]" : "Error")
+            }));
+
+        using var fallback = CreateFallback();
+
+        // Call 1: HTTP 500 failure
+        var status1 = await fallback.GetStatusAsync();
+        status1.Should().BeNull();
+        requests.Should().Be(1);
+
+        // Call 2 (30s later): negative cache hit
+        _clock.Current += TimeSpan.FromSeconds(30);
+        statusCode = HttpStatusCode.OK;
+        var status2 = await fallback.GetStatusAsync();
+        status2.Should().BeNull();
+        requests.Should().Be(1);
+
+        // Call 3 (61s after call 1): negative cache expired, retries HTTP
+        _clock.Current += TimeSpan.FromSeconds(31);
+        var status3 = await fallback.GetStatusAsync();
+        status3.Should().NotBeNull();
+        status3!.Indicator.Should().Be(ProviderStatusIndicator.None);
+        requests.Should().Be(2);
+    }
+
+    [TestMethod]
+    public async Task GetStatusAsync_CancelledToken_DoesNotNegativeCache()
+    {
+        using var fallback = CreateFallback();
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        var status = await fallback.GetStatusAsync(cts.Token);
+        status.Should().BeNull();
+
+        // Immediate subsequent call with valid token should not be blocked by negative cache
+        SetupHttpResponse(HttpStatusCode.OK, "[]");
+        var statusAfter = await fallback.GetStatusAsync();
+        statusAfter.Should().NotBeNull();
+    }
 }

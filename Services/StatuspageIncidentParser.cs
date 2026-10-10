@@ -58,7 +58,8 @@ public static class StatuspageIncidentParser
 
                 if (statusEl.TryGetProperty("description", out var descEl) && descEl.ValueKind == JsonValueKind.String)
                 {
-                    statusDesc = descEl.GetString();
+                    statusDesc = IncidentTextSanitizer.Sanitize(descEl.GetString());
+                    if (string.IsNullOrWhiteSpace(statusDesc)) statusDesc = null;
                 }
             }
 
@@ -111,8 +112,9 @@ public static class StatuspageIncidentParser
 
                     string? incidentTitle = winningIncident.TryGetProperty("name", out var nameEl) &&
                                            nameEl.ValueKind == JsonValueKind.String
-                        ? nameEl.GetString()
+                        ? IncidentTextSanitizer.Sanitize(nameEl.GetString())
                         : null;
+                    if (string.IsNullOrWhiteSpace(incidentTitle)) incidentTitle = null;
 
                     var (updateText, updateAt) = ExtractNewestUpdate(winningIncident, now);
 
@@ -178,8 +180,9 @@ public static class StatuspageIncidentParser
 
                     string? maintTitle = winningMaint.TryGetProperty("name", out var nameEl) &&
                                          nameEl.ValueKind == JsonValueKind.String
-                        ? nameEl.GetString()
+                        ? IncidentTextSanitizer.Sanitize(nameEl.GetString())
                         : null;
+                    if (string.IsNullOrWhiteSpace(maintTitle)) maintTitle = null;
 
                     var (updateText, updateAt) = ExtractNewestUpdate(winningMaint, now);
 

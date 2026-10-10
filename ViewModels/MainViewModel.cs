@@ -134,18 +134,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
         {
             var cached = _cacheService.GetLastKnown(provider);
             if (cached != null) cached = CacheRetention.PruneExpired(cached, DateTime.UtcNow);
-            if (cached?.HasUsage == true) return cached;
-            var fromHistory = _history.GetLastKnownUsage(provider);
-            if (fromHistory != null)
-            {
-                var successAt = Helpers.DashboardValues.Utc(fromHistory.LastSuccessfulFetch ?? fromHistory.FetchedAt);
-                if (CacheRetention.IsRetained(successAt, DateTime.UtcNow)) return fromHistory with
-                {
-                    ServiceStatus = cached?.ServiceStatus,
-                    LastSuccessfulStatusFetch = cached?.LastSuccessfulStatusFetch,
-                    StatusIsStale = cached?.ServiceStatus != null
-                };
-            }
             return cached;
         });
         if (Providers.Count == 0 && restoredByProvider.Values.All(data => data == null)) return;
@@ -190,10 +178,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         return true;
     }
 
-    // Cache files written before DateTime kinds were preserved contain UTC values without a suffix.
-    private static DateTime CacheTimestampUtc(DateTime timestamp) => timestamp.Kind == DateTimeKind.Unspecified
-        ? DateTime.SpecifyKind(timestamp, DateTimeKind.Utc)
-        : timestamp.ToUniversalTime();
+    private static DateTime CacheTimestampUtc(DateTime timestamp) => Helpers.DashboardValues.Utc(timestamp);
 
     /// <summary>
     /// Stops the periodic refresh.

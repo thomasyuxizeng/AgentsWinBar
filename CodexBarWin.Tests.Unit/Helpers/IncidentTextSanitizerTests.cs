@@ -140,4 +140,53 @@ public class IncidentTextSanitizerTests
         var result = IncidentTextSanitizer.Sanitize("Some text", maxLength: max);
         result.Should().BeEmpty();
     }
+
+    [TestMethod]
+    public void Sanitize_WhenControlCharactersPresent_StripsControlCharactersAndCollapsesWhitespace()
+    {
+        // Null byte, BEL (\x07), BS (\x08), ESC (\x1B), DEL (\x7F), C1 control (\x9B)
+        var input = "Incident\u0000 title\u0007 with\u0008 control\u001B characters\u007F and\u009B ansi codes.";
+        var result = IncidentTextSanitizer.Sanitize(input);
+
+        result.Should().Be("Incident title with control characters and ansi codes.");
+        result.Should().NotContain("\u0000");
+        result.Should().NotContain("\u0007");
+        result.Should().NotContain("\u0008");
+        result.Should().NotContain("\u001B");
+        result.Should().NotContain("\u007F");
+        result.Should().NotContain("\u009B");
+    }
+
+    [TestMethod]
+    public void Sanitize_WhenFiveKilobytesText_CapsAtDefaultMaxLengthOnWordBoundary()
+    {
+        // 5 KB of natural repeated text (~5120 chars)
+        var paragraph = "Elevated error rates observed across multiple model endpoints while performing inference. ";
+        var sb = new System.Text.StringBuilder();
+        while (sb.Length < 5120)
+        {
+            sb.Append(paragraph);
+        }
+        var input = sb.ToString();
+        input.Length.Should().BeGreaterThanOrEqualTo(5120);
+
+        var result = IncidentTextSanitizer.Sanitize(input);
+
+        result.Length.Should().BeLessThanOrEqualTo(IncidentTextSanitizer.DefaultMaxLength);
+        result.Should().EndWith("...");
+        // Ensure cut happened on a clean word boundary without trailing punctuation
+        result.Should().NotContain(" ...");
+        result.Should().NotContain(",...");
+        result.Should().NotContain(". ...");
+    }
+
+    [TestMethod]
+    public void Sanitize_WhenFiveKilobytesContinuousStringWithoutSpaces_CapsAtMaxLength()
+    {
+        var input = new string('X', 5120);
+        var result = IncidentTextSanitizer.Sanitize(input);
+
+        result.Length.Should().Be(IncidentTextSanitizer.DefaultMaxLength);
+        result.Should().Be(new string('X', IncidentTextSanitizer.DefaultMaxLength - 3) + "...");
+    }
 }

@@ -142,6 +142,10 @@ case " $* " in *" --provider claude "*)
   cached_output() {
     # Add provenance without changing source/usage or the cache file's observation time.
     # Non-JSON output from older/custom CLIs remains byte-compatible.
+    if ! command -v python3 >/dev/null 2>&1; then
+      cat "$1"
+      return 0
+    fi
     python3 - "$1" "$(stat -c %Y "$1")" <<'PY'
 import datetime, json, sys
 with open(sys.argv[1]) as f:

@@ -48,12 +48,15 @@ public static partial class IncidentTextSanitizer
     [GeneratedRegex(@"(\*{1,3}|_{1,3})(.*?)\1")]
     private static partial Regex MarkdownEmphasisRegex();
 
+    [GeneratedRegex(@"[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]")]
+    private static partial Regex ControlCharRegex();
+
     [GeneratedRegex(@"\s+")]
     private static partial Regex WhitespaceRegex();
 
     /// <summary>
-    /// Sanitizes untrusted incident text by stripping markdown, HTML, and entities, collapsing whitespace,
-    /// and capping the result to <paramref name="maxLength"/> characters with an ellipsis on a word boundary.
+    /// Sanitizes untrusted incident text by stripping markdown, HTML, control characters, and entities,
+    /// collapsing whitespace, and capping the result to <paramref name="maxLength"/> characters with an ellipsis on a word boundary.
     /// Returns an empty string for null, empty, or whitespace-only inputs.
     /// </summary>
     public static string Sanitize(string? text, int maxLength = DefaultMaxLength)
@@ -68,8 +71,11 @@ public static partial class IncidentTextSanitizer
             return string.Empty;
         }
 
-        // 1. Replace HTML breaks/paragraphs with spaces, then strip remaining HTML tags
-        var cleaned = HtmlBreakRegex().Replace(text, " ");
+        // 1. Strip control characters
+        var cleaned = ControlCharRegex().Replace(text, " ");
+
+        // 2. Replace HTML breaks/paragraphs with spaces, then strip remaining HTML tags
+        cleaned = HtmlBreakRegex().Replace(cleaned, " ");
         cleaned = HtmlTagRegex().Replace(cleaned, " ");
 
         // 2. Decode HTML entities (&amp;, &#39;, &quot;, etc.)

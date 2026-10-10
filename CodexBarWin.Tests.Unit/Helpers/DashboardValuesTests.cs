@@ -25,4 +25,36 @@ public class DashboardValuesTests
         DashboardValues.Utc(DateTime.SpecifyKind(utc, DateTimeKind.Unspecified)).Should().Be(utc);
         DashboardValues.Utc(utc.ToLocalTime()).Kind.Should().Be(DateTimeKind.Utc);
     }
+
+    [TestMethod]
+    public void Utc_KindUtc_ReturnsIdenticalUtcInstant()
+    {
+        var dt = new DateTime(2026, 5, 1, 8, 30, 0, DateTimeKind.Utc);
+        var result = DashboardValues.Utc(dt);
+        result.Kind.Should().Be(DateTimeKind.Utc);
+        result.Should().Be(dt);
+    }
+
+    [TestMethod]
+    public void Utc_KindLocal_ConvertsToUtcKindAndCorrectInstant()
+    {
+        var local = new DateTime(2026, 5, 1, 14, 0, 0, DateTimeKind.Local);
+        var result = DashboardValues.Utc(local);
+        result.Kind.Should().Be(DateTimeKind.Utc);
+        result.Should().Be(local.ToUniversalTime());
+    }
+
+    [TestMethod]
+    public void Utc_KindUnspecified_TreatedAsUtcWithoutTimeShift()
+    {
+        var unspec = new DateTime(2026, 5, 1, 14, 0, 0, DateTimeKind.Unspecified);
+        var result = DashboardValues.Utc(unspec);
+        result.Kind.Should().Be(DateTimeKind.Utc);
+        result.Year.Should().Be(2026);
+        result.Month.Should().Be(5);
+        result.Day.Should().Be(1);
+        result.Hour.Should().Be(14);
+        result.Minute.Should().Be(0);
+        result.Second.Should().Be(0);
+    }
 }

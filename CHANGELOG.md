@@ -17,6 +17,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Detail page: "Last fetched" keeps the absolute fetch time when data is stale and appends the stale caption.
 - The failed-fetch banner says "Showing last-known data from ..." when the usage shown is the last good reading.
 
+### Fixed
+- Claude no longer shows 'Fetch failed' on every other refresh when the WSL shim replays a cached reading within its 10-minute TTL.
+- Gemini and incident status feeds no longer re-download and abort on each refresh; the 500 ms refresh budget bounds waiting rather than canceling HTTP requests, slow fetches populate the cache in the background, and failures are cached for 60 seconds.
+- History no longer feeds the usage fallback or launders synthetic records into cache; `CacheService` (retained up to 7 days) serves as the sole last-known usage source.
+- Untrusted provider incident descriptions and titles are sanitized (control characters stripped, whitespace collapsed, length capped to 200 characters with word-boundary truncation).
+- Cache last-known recovery consistently tolerates up to 5 minutes of clock skew.
+- A status-only refresh success no longer advances the usage supersession generation, preventing concurrent in-flight usage successes from being discarded.
+- Inferred replay detection for legacy WSL shims missing the `cached` property, and fallback to `cat` in the shim when Python 3 is absent.
+
 ## [1.1.0] - 2026-10-11
 
 ### Changed

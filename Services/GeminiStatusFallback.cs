@@ -16,6 +16,7 @@ public sealed class GeminiStatusFallback : IGeminiStatusFallback, IDisposable
     public const string GeminiProductId = "npdyhgECDJ6tB66MxXyo";
     public const string HistoryUrl = "https://www.google.com/appsstatus/dashboard/products/npdyhgECDJ6tB66MxXyo/history";
     public static readonly TimeSpan CacheTtl = TimeSpan.FromMinutes(5);
+    public static readonly TimeSpan NegativeCacheTtl = TimeSpan.FromSeconds(60);
     public static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(5);
     public const int MaxFeedBytes = 2 * 1024 * 1024;
     public const string UserAgent = "CodexBarWin/1.0 (+https://github.com/steipete/CodexBar)";
@@ -85,25 +86,47 @@ public sealed class GeminiStatusFallback : IGeminiStatusFallback, IDisposable
             deadline.Token.ThrowIfCancellationRequested();
             var now = _timeProvider.GetUtcNow();
             var age = now - _cachedAt;
-            // Cache failures too, so a burst of callers cannot hammer a failing feed.
-            if (age >= TimeSpan.Zero && age < CacheTtl)
+            var currentTtl = _cachedStatus != null ? CacheTtl : NegativeCacheTtl;
+            if (age >= TimeSpan.Zero && age < currentTtl)
             {
                 return _cachedStatus;
             }
 
-            var status = await FetchStatusCoreAsync(deadline.Token).ConfigureAwait(false);
-            deadline.Token.ThrowIfCancellationRequested();
+            ProviderStatus? status = null;
+            try
+            {
+                status = await FetchStatusCoreAsync(deadline.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested || _disposed)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogWarning(ex, "Failed to retrieve Gemini status fallback");
+                status = null;
+            }
+
             _cachedStatus = status;
             _cachedAt = _timeProvider.GetUtcNow();
             return status;
         }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            return null;
+        }
         catch (OperationCanceledException)
         {
+            // Internal deadline/timeout expired without external caller cancellation: cache negative result
+            _cachedStatus = null;
+            _cachedAt = _timeProvider.GetUtcNow();
             return null;
         }
         catch (Exception ex)
         {
             _logger?.LogWarning(ex, "Failed to retrieve Gemini status fallback");
+            _cachedStatus = null;
+            _cachedAt = _timeProvider.GetUtcNow();
             return null;
         }
         finally

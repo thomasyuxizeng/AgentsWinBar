@@ -69,7 +69,7 @@ public class CacheService : ICacheService
 
     public UsageData? GetLastKnown(string provider) => !DeveloperMode && ProviderConstants.IsValidProvider(provider) &&
         _cache.TryGetValue(ProviderConstants.ValidateAndNormalize(provider), out var data) &&
-        Utc(data.FetchedAt) <= DateTime.UtcNow ? CacheRetention.PruneExpired(data, DateTime.UtcNow) : null;
+        CacheRetention.IsRetained(data, DateTime.UtcNow) ? CacheRetention.PruneExpired(data, DateTime.UtcNow) : null;
 
     public IReadOnlyDictionary<string, UsageData> GetAll()
     {
@@ -189,8 +189,7 @@ public class CacheService : ICacheService
 
     private bool IsFresh(DateTime timestamp)
     {
-        // Historical cache files without an offset contain UTC values.
-        var utc = timestamp.Kind == DateTimeKind.Local ? timestamp.ToUniversalTime() : timestamp;
+        var utc = DashboardValues.Utc(timestamp);
         var age = DateTime.UtcNow - utc;
         return age >= TimeSpan.Zero && age < Expiry;
     }

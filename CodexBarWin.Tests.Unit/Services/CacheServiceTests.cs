@@ -350,4 +350,33 @@ public class CacheServiceTests
         result.Should().HaveCount(3);
         result.Keys.Should().Contain(["claude", "codex", "gemini"]);
     }
+
+    [TestMethod]
+    [DataRow(2, true)]
+    [DataRow(4, true)]
+    [DataRow(6, false)]
+    public void GetLastKnown_WhenTimestampInFuture_ToleratesClockSkewUpToFiveMinutes(int futureMinutes, bool shouldRetain)
+    {
+        var futureTime = DateTime.UtcNow.AddMinutes(futureMinutes);
+        var data = new UsageData
+        {
+            Provider = "claude",
+            FetchedAt = futureTime,
+            Session = new() { ReportedPercent = 55 },
+            UsageFetchOutcome = FetchOutcome.Success
+        };
+
+        _cacheService.Set("claude", data);
+
+        var result = _cacheService.GetLastKnown("claude");
+        if (shouldRetain)
+        {
+            result.Should().NotBeNull();
+            result!.Session!.Percent.Should().Be(55);
+        }
+        else
+        {
+            result.Should().BeNull();
+        }
+    }
 }

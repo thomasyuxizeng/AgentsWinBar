@@ -115,6 +115,15 @@ check "$output" "$observed"
 check "$output" '"cacheUpdatedAt":'
 [[ "$(stat -c %Y "$cache_file")" = "$cache_stamp" ]]
 
+# When python3 is missing, cached_output falls back to `cat` without failing.
+mkdir -p "$TMP/nopy-bin"
+for cmd in bash id stat date cat md5sum cut mktemp mv rm grep; do
+  ln -sf "$(command -v "$cmd")" "$TMP/nopy-bin/$cmd"
+done
+output=$(PATH="$TMP/nopy-bin" OAUTH_OUT=$expired OAUTH_EXIT=3 CLI_OUT='[]' CLI_EXIT=1 bash "$TMP/claude-shim" usage --provider claude --format json --source cli)
+check "$output" "$observed"
+[[ "$output" != *'"cached": true'* ]]
+
 set +e
 output=$(OAUTH_OUT=$expired OAUTH_EXIT=3 CLI_OUT='[{"provider":"claude","error":{"message":"cli broke"}}]' CLI_EXIT=1 claude_run); rc=$?
 set -e

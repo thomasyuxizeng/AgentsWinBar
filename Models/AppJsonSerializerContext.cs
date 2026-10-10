@@ -51,31 +51,36 @@ public record UsageDataDto
     public UsageDto? Usage { get; init; }
     public string? Error { get; init; }
 
-    public UsageData ToUsageData() => new()
+    public UsageData ToUsageData(DateTime? fetchedAt = null)
     {
-        Provider = Provider,
-        Plan = Usage?.LoginMethod,
-        Session = Usage?.Primary?.ToUsageWindow(),
-        Weekly = Usage?.Secondary?.ToUsageWindow(),
-        Tertiary = Usage?.Tertiary?.ToUsageWindow(),
-        ExtraWindows = (Usage?.ExtraRateWindows ?? [])
-            .Where(x => x.Window?.HasReading == true && !string.IsNullOrWhiteSpace(x.Title))
-            .Select(x => new ExtraUsageWindow { Key = x.Id ?? string.Empty, Title = Helpers.WindowTitles.Short(x.Title), Window = x.Window!.ToUsageWindow()! })
-            .ToList(),
-        Status = Source,
-        UsageIsCached = Cached || string.Equals(Source, "cache", StringComparison.OrdinalIgnoreCase),
-        CacheUpdatedAt = CacheUpdatedAt,
-        ServiceStatus = Status?.ToProviderStatus(),
-        Error = Error,
-        UsageFetchOutcome = !string.IsNullOrWhiteSpace(Error) || string.Equals(Source, "offline", StringComparison.OrdinalIgnoreCase)
-            ? FetchOutcome.Failed
-            : Usage?.Primary?.HasReading == true || Usage?.Secondary?.HasReading == true || Usage?.Tertiary?.HasReading == true ||
-                Usage?.ExtraRateWindows?.Any(x => x.Window?.HasReading == true && !string.IsNullOrWhiteSpace(x.Title)) == true
-                ? FetchOutcome.Success : FetchOutcome.Unavailable,
-        StatusFetchOutcome = Status == null || string.IsNullOrWhiteSpace(Status.Indicator) ? FetchOutcome.Unavailable : FetchOutcome.Success,
-        FetchedAt = DateTime.UtcNow,
-        DataUpdatedAt = (Usage?.UpdatedAt ?? CacheUpdatedAt) is { } updated ? Helpers.DataAge.ToUtc(updated) : null
-    };
+        var fetched = fetchedAt ?? DateTime.UtcNow;
+        return new()
+        {
+            Provider = Provider,
+            Plan = Usage?.LoginMethod,
+            Session = Usage?.Primary?.ToUsageWindow(),
+            Weekly = Usage?.Secondary?.ToUsageWindow(),
+            Tertiary = Usage?.Tertiary?.ToUsageWindow(),
+            ExtraWindows = (Usage?.ExtraRateWindows ?? [])
+                .Where(x => x.Window?.HasReading == true && !string.IsNullOrWhiteSpace(x.Title))
+                .Select(x => new ExtraUsageWindow { Key = x.Id ?? string.Empty, Title = Helpers.WindowTitles.Short(x.Title), Window = x.Window!.ToUsageWindow()! })
+                .ToList(),
+            Status = Source,
+            UsageIsCached = Cached || string.Equals(Source, "cache", StringComparison.OrdinalIgnoreCase) ||
+                (!Cached && Helpers.DataAge.OldReadingUtc(fetched, Usage?.UpdatedAt ?? CacheUpdatedAt) != null),
+            CacheUpdatedAt = CacheUpdatedAt,
+            ServiceStatus = Status?.ToProviderStatus(),
+            Error = Error,
+            UsageFetchOutcome = !string.IsNullOrWhiteSpace(Error) || string.Equals(Source, "offline", StringComparison.OrdinalIgnoreCase)
+                ? FetchOutcome.Failed
+                : Usage?.Primary?.HasReading == true || Usage?.Secondary?.HasReading == true || Usage?.Tertiary?.HasReading == true ||
+                    Usage?.ExtraRateWindows?.Any(x => x.Window?.HasReading == true && !string.IsNullOrWhiteSpace(x.Title)) == true
+                    ? FetchOutcome.Success : FetchOutcome.Unavailable,
+            StatusFetchOutcome = Status == null || string.IsNullOrWhiteSpace(Status.Indicator) ? FetchOutcome.Unavailable : FetchOutcome.Success,
+            FetchedAt = fetched,
+            DataUpdatedAt = (Usage?.UpdatedAt ?? CacheUpdatedAt) is { } updated ? Helpers.DataAge.ToUtc(updated) : null
+        };
+    }
 }
 
 /// <summary>Raw status strings tolerate new or missing CLI indicators.</summary>

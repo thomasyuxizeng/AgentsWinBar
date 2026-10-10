@@ -59,6 +59,18 @@ public class ProviderStatusPresentationTests
         ProviderStatusPresentation.Description(new ProviderStatus { Description = "  Partial outage  " }).Should().Be("Partial outage");
 
     [TestMethod]
+    public void Description_WhenUntrustedTextHasControlCharsOr5Kb_SanitizesAndCaps()
+    {
+        var input = "Disruption\u0000 with\u001B control chars. " + new string('A', 5000);
+        var result = ProviderStatusPresentation.Description(new ProviderStatus { Description = input });
+
+        result.Length.Should().BeLessThanOrEqualTo(IncidentTextSanitizer.DefaultMaxLength);
+        result.Should().NotContain("\u0000");
+        result.Should().NotContain("\u001B");
+        result.Should().EndWith("...");
+    }
+
+    [TestMethod]
     [DataRow("https://status.claude.com/", true)]
     [DataRow("http://status.example.com/", true)]
     [DataRow("file:///C:/Windows/", false)]

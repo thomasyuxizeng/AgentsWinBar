@@ -101,6 +101,7 @@ public class MainViewModelTests
     public async Task StartAsync_OverQuotaHistory_RestoresLatest105WhileFetchIsPending()
     {
         var now = DateTime.UtcNow;
+        _cache.Setup(c => c.GetLastKnown("claude")).Returns(Data(105) with { FetchedAt = now.AddMinutes(-10) });
         _history.Add(new() { Provider = "claude", WindowKey = "session", UsedPercent = 99, Timestamp = now.AddMinutes(-20) }, now);
         _history.Add(new() { Provider = "claude", WindowKey = "session", UsedPercent = 105, Timestamp = now.AddMinutes(-10) }, now);
         var gate = Signal();
@@ -135,9 +136,16 @@ public class MainViewModelTests
         var starting = _viewModel.StartAsync();
         try
         {
-            _viewModel.Providers.Single().Session!.Percent.Should().Be(42);
-            _viewModel.Providers.Single().UsageIsStale.Should().BeTrue();
-            _viewModel.Providers.Single().LastSuccessfulFetch.Should().Be(fetchedAt);
+            if (historyOnly)
+            {
+                _viewModel.Providers.Single().HasUsage.Should().BeFalse();
+            }
+            else
+            {
+                _viewModel.Providers.Single().Session!.Percent.Should().Be(42);
+                _viewModel.Providers.Single().UsageIsStale.Should().BeTrue();
+                _viewModel.Providers.Single().LastSuccessfulFetch.Should().Be(fetchedAt);
+            }
         }
         finally { gate.TrySetResult(); await starting; }
         _viewModel.Providers.Single().Session!.Percent.Should().Be(50);
