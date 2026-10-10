@@ -30,10 +30,10 @@ internal static class DashboardFormat
     private static double FormatPercent(double value) => double.IsFinite(value) ? Math.Max(0, value) : 0;
     public static double Time(double? elapsedPercent) => elapsedPercent is { } value && double.IsFinite(value) ? DashboardValues.Percent(value) : -1;
 
-    /// <summary>"Near limit" / "At limit" chip (80% / 95%, the same thresholds as the bars); hidden below 80%.</summary>
-    public static string LimitLabel(double percent) => percent >= 95 ? "AT LIMIT" : percent >= 80 ? "NEAR LIMIT" : string.Empty;
-    public static Visibility LimitVis(double percent) => Vis(percent >= 80);
-    public static Brush LimitBrush(double percent) => percent >= 95 ? Red : Amber;
+    /// <summary>"Near limit" / "At limit" chip (75% / 90%, UsageThresholds, the same as the bars); hidden below 75%.</summary>
+    public static string LimitLabel(double percent) => percent >= UsageThresholds.Critical ? "AT LIMIT" : percent >= UsageThresholds.Warning ? "NEAR LIMIT" : string.Empty;
+    public static Visibility LimitVis(double percent) => Vis(percent >= UsageThresholds.Warning);
+    public static Brush LimitBrush(double percent) => percent >= UsageThresholds.Critical ? Red : Amber;
 
     public static string Money(decimal value, string currency) => CostFormatter.Money(value, currency);
     public static string Tokens(long tokens) => CostFormatter.Tokens(tokens);

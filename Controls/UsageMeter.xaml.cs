@@ -124,7 +124,7 @@ public sealed partial class UsageMeter : UserControl
         var honestPercent = double.IsFinite(Percent) ? Math.Max(0, Percent) : 0;
 
         UsageBar.Width = ActualWidth * (visualPercent / 100.0);
-        var key = (Accent, honestPercent >= 95 ? 2 : honestPercent >= 80 ? 1 : 0);
+        var key = (Accent, UsageThresholds.Level(honestPercent));
         if (!_barBrushes.TryGetValue(key, out var barBrush)) _barBrushes[key] = barBrush = GetBarBrush(honestPercent, Accent);
         if (!ReferenceEquals(UsageBar.Fill, barBrush)) UsageBar.Fill = barBrush;
 
@@ -172,8 +172,8 @@ public sealed partial class UsageMeter : UserControl
 
     internal static Brush GetBarBrush(double percent, WindowAccent accent)
     {
-        if (accent == WindowAccent.ClaudeAndOpenAi && percent < 80) return ClaudeToOpenAiGradient();
-        var key = (accent, percent >= 95 ? 2 : percent >= 80 ? 1 : 0);
+        if (accent == WindowAccent.ClaudeAndOpenAi && percent < UsageThresholds.Warning) return ClaudeToOpenAiGradient();
+        var key = (accent, UsageThresholds.Level(percent));
         if (!BarBrushes.TryGetValue(key, out var brush)) BarBrushes[key] = brush = CreateBarBrush(percent, accent);
         return brush;
     }
@@ -181,8 +181,8 @@ public sealed partial class UsageMeter : UserControl
     private static Brush CreateBarBrush(double percent, WindowAccent accent)
     {
         // Urgency colours are the same for every kind of bar
-        if (percent >= 95) return new SolidColorBrush(Color.FromArgb(255, 232, 17, 35));   // Red - Critical
-        if (percent >= 80) return new SolidColorBrush(Color.FromArgb(255, 255, 185, 0));   // Yellow - Warning
+        if (percent >= UsageThresholds.Critical) return new SolidColorBrush(Color.FromArgb(255, 232, 17, 35));   // Red - Critical
+        if (percent >= UsageThresholds.Warning) return new SolidColorBrush(Color.FromArgb(255, 255, 185, 0));   // Yellow - Warning
 
         return accent switch
         {

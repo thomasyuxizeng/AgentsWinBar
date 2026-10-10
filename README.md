@@ -167,7 +167,7 @@ Every bar has up to three layers:
 | **Blue** fill | Usage so far in this window. |
 | **Lavender** behind it | How much of the window's time has passed. Lavender sticking out past the blue means you're using the window slowly. |
 | **White marker line** | Only appears when you're *ahead* of schedule (blue has passed the time position): you're using it faster than the window refills. |
-| **Amber** (80%+), **red** (95%+) | Getting close to the limit. These override every other colour. |
+| **Amber** (75%+), **red** (90%+) | Getting close to the limit. These override every other colour. |
 
 Hover any bar for the exact numbers and a projection, for example *"At this pace you'll hit the limit in 1h 20m, 3h 10m before the reset"*.
 

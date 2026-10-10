@@ -17,8 +17,8 @@ public class DashboardSnapshotBuilderTests
     [TestMethod]
     public void Build_ThresholdBoundaries_CountsWindowsAndSelectsCallouts()
     {
-        var inputs = Inputs(Provider() with { Session = Window(95), Weekly = Window(94.99, 100),
-            Tertiary = Window(80, 200), ExtraWindows = [new() { Key = "low", Title = "GPT", Window = Window(79.99, -1) }] },
+        var inputs = Inputs(Provider() with { Session = Window(90), Weekly = Window(89.99, 100),
+            Tertiary = Window(75, 200), ExtraWindows = [new() { Key = "low", Title = "GPT", Window = Window(74.99, -1) }] },
             Provider("codex") with { Session = Window(100, 50) });
         inputs = inputs with { LastRefreshUtc = Now.AddSeconds(-20), NextRefreshUtc = Now.AddSeconds(100),
             Settings = new() { RefreshIntervalSeconds = 120 } };

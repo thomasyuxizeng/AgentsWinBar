@@ -35,8 +35,8 @@ public sealed record DashboardSummary
     public int IncidentCount { get; init; }
 
     public int WindowCount { get; init; }
-    public int WindowsAtLimit { get; init; }          // used >= 95
-    public int WindowsNearLimit { get; init; }        // 80 <= used < 95
+    public int WindowsAtLimit { get; init; }          // used >= UsageThresholds.Critical (90)
+    public int WindowsNearLimit { get; init; }        // 75 <= used < 90
     public int WindowsAheadOfPace { get; init; }      // pace says the limit is hit before the reset
 
     /// <summary>The window closest to its limit (highest used percent), if any.</summary>
