@@ -52,6 +52,10 @@ public class CacheService : ICacheService
     public void Set(string provider, UsageData data)
     {
         if (DeveloperMode) return;
+        provider = ProviderConstants.ValidateAndNormalize(provider);
+        if (!string.Equals(provider, data.Provider, StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(data.Status, "offline", StringComparison.OrdinalIgnoreCase) || data.HasError || data.CommandNotFound || data.IsLoading ||
+            data.UsageFetchOutcome is FetchOutcome.Failed or FetchOutcome.Unavailable) return;
         _cache[provider] = data;
         _logger.LogDebug("Cached data for {Provider}", provider);
     }
@@ -61,6 +65,10 @@ public class CacheService : ICacheService
         _cache.Clear();
         _logger.LogDebug("Cache cleared");
     }
+
+    public UsageData? GetLastKnown(string provider) => !DeveloperMode && ProviderConstants.IsValidProvider(provider) &&
+        _cache.TryGetValue(ProviderConstants.ValidateAndNormalize(provider), out var data) &&
+        Utc(data.FetchedAt) <= DateTime.UtcNow ? data : null;
 
     public IReadOnlyDictionary<string, UsageData> GetAll()
     {
@@ -115,9 +123,9 @@ public class CacheService : ICacheService
             if (document.RootElement.ValueKind != JsonValueKind.Object) return;
             var timestamp = FindProperty(document.RootElement, "timestamp");
             if (timestamp.ValueKind != JsonValueKind.String || !timestamp.TryGetDateTime(out var savedAt)) return;
-            if (!IsFresh(savedAt))
+            if (Utc(savedAt) > DateTime.UtcNow)
             {
-                _logger.LogDebug("Cache file expired, ignoring");
+                _logger.LogDebug("Cache file timestamp is in the future, ignoring");
                 return;
             }
 
@@ -141,7 +149,9 @@ public class CacheService : ICacheService
                 data = data with { ExtraWindows = data.ExtraWindows ?? [] };
                 if (!string.Equals(item.Name, data.Provider, StringComparison.OrdinalIgnoreCase)
                     || data.ExtraWindows.Any(window => window == null || window.Window == null)
-                    || data.HasError || data.CommandNotFound || data.IsLoading || !IsFresh(data.FetchedAt)) continue;
+                    || string.Equals(data.Status, "offline", StringComparison.OrdinalIgnoreCase)
+                    || data.HasError || data.CommandNotFound || data.IsLoading || Utc(data.FetchedAt) > DateTime.UtcNow
+                    || data.UsageFetchOutcome is FetchOutcome.Failed or FetchOutcome.Unavailable) continue;
                 _cache[ProviderConstants.ValidateAndNormalize(item.Name)] = data;
             }
 
@@ -161,6 +171,8 @@ public class CacheService : ICacheService
         var age = DateTime.UtcNow - utc;
         return age >= TimeSpan.Zero && age < Expiry;
     }
+
+    private static DateTime Utc(DateTime timestamp) => timestamp.Kind == DateTimeKind.Local ? timestamp.ToUniversalTime() : timestamp;
 
     private static JsonElement FindProperty(JsonElement element, string name)
     {

@@ -82,7 +82,8 @@ public sealed partial class ProviderDetailPage : Page
         CostModelsList.ItemsSource = Helpers.CostSeriesBuilder.TopModels(cost, today).Select(m =>
             $"{m.ModelName}: {(m.Cost.HasValue ? Helpers.CostFormatter.Money(m.Cost.Value, cost.CurrencyCode) : "Unpriced")} · {Helpers.CostFormatter.Tokens(m.TotalTokens)} tokens").ToList();
         CostNote.Text = $"Local logs · list-price estimates, not billing · captured {Helpers.TimestampFormatter.FormatLocal(cost.FetchedAt)}." +
-            (cost.Coverage.Unpriced > 0 || cost.Coverage.Unmetered > 0 ? " Some models or sessions are unpriced or unmetered." : "");
+            (cost.Coverage.Unpriced > 0 || cost.Coverage.Unmetered > 0 ? " Some models or sessions are unpriced or unmetered." : "") +
+            (cost.IsStale ? " " + Helpers.StaleCaption.Text(true, cost.LastSuccessfulFetch, DateTime.UtcNow) + "." : "");
     }
 
     private void OnBackClicked(object sender, RoutedEventArgs e)
@@ -198,7 +199,9 @@ public sealed partial class ProviderDetailPage : Page
             StatusRow.Visibility = Visibility.Collapsed;
         }
 
-        FetchedAtText.Text = Helpers.TimestampFormatter.FormatLocal(_data.FetchedAt);
+        FetchedAtText.Text = _data.UsageIsStale
+            ? Helpers.StaleCaption.Text(true, _data.LastSuccessfulFetch, DateTime.UtcNow)
+            : Helpers.TimestampFormatter.FormatLocal(_data.FetchedAt);
 
         // Error
         if (_data.HasError)

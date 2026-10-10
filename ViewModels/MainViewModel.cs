@@ -121,7 +121,31 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _stopped = false;
         ResetAdaptiveRefresh();
         if (TryRestoreFreshCache()) return;
+        RestoreLastKnownUsage();
         await RefreshCoreAsync();
+    }
+
+    private void RestoreLastKnownUsage()
+    {
+        if (_settingsService.Settings.DeveloperModeEnabled) return;
+        var enabled = _settingsService.Settings.Providers.Where(p => p.IsEnabled && ProviderConstants.IsValidProvider(p.Id))
+            .OrderBy(p => p.Order).Select(p => p.Id).ToList();
+        var restoredByProvider = enabled.ToDictionary(provider => provider, provider =>
+        {
+            var cached = _cacheService.GetLastKnown(provider);
+            return cached?.HasUsage == true ? cached : _history.GetLastKnownUsage(provider);
+        });
+        if (Providers.Count == 0 && restoredByProvider.Values.All(data => data == null)) return;
+        ProviderListSynchronizer.Sync(Providers, enabled);
+        for (var i = 0; i < Providers.Count; i++)
+        {
+            if (Providers[i].HasUsage) continue;
+            var restored = restoredByProvider[Providers[i].Provider];
+            if (restored == null) continue;
+            Providers[i] = restored with { IsLoading = false, UsageIsStale = true,
+                LastSuccessfulFetch = restored.LastSuccessfulFetch ?? restored.FetchedAt,
+                Cost = _settingsService.Settings.ShowCostTotals ? restored.Cost : null };
+        }
     }
 
     private bool TryRestoreFreshCache()

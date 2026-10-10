@@ -14,7 +14,11 @@ public record CostData
     public CostCoverage Coverage { get; init; } = new();
     public IReadOnlyList<DailyCost> Daily { get; init; } = [];
     public DateTime FetchedAt { get; init; } = DateTime.UtcNow;
-    public bool HasData => TodayTokens > 0 || TodayCostUSD > 0 || Last30DaysTokens > 0 || Last30DaysCostUSD > 0 ||
+    /// <summary>Outcome of the scan that produced these values. IsStale marks a later failed or pending scan.</summary>
+    public FetchOutcome FetchOutcome { get; init; }
+    public bool IsStale { get; init; }
+    public DateTime? LastSuccessfulFetch { get; init; }
+    public bool HasData => FetchOutcome == FetchOutcome.Success || TodayTokens > 0 || TodayCostUSD > 0 || Last30DaysTokens > 0 || Last30DaysCostUSD > 0 ||
         (Daily ?? []).OfType<DailyCost>().Any(d => d.TotalTokens > 0 || d.TotalCost > 0 ||
             d.InputTokens > 0 || d.OutputTokens > 0 || d.CacheReadTokens > 0 || d.CacheCreationTokens > 0 ||
             d.ReasoningTokens > 0 || (d.ModelBreakdowns ?? []).OfType<ModelCost>().Any(m => m.TotalTokens > 0 || m.Cost > 0));
@@ -59,10 +63,15 @@ public record CostCacheFile
 public record CostDataDto
 {
     public string Provider { get; init; } = string.Empty;
-    public decimal SessionCostUSD { get; init; }
-    public long SessionTokens { get; init; }
-    public decimal Last30DaysCostUSD { get; init; }
-    public long Last30DaysTokens { get; init; }
+    public decimal? SessionCostUSD { get; init; }
+    public long? SessionTokens { get; init; }
+    public decimal? Last30DaysCostUSD { get; init; }
+    public long? Last30DaysTokens { get; init; }
+    public string? Error { get; init; }
+    public string? Source { get; init; }
+    public bool HasReading => string.IsNullOrWhiteSpace(Error) && !string.Equals(Source, "offline", StringComparison.OrdinalIgnoreCase) &&
+        (SessionCostUSD.HasValue || SessionTokens.HasValue ||
+        Last30DaysCostUSD.HasValue || Last30DaysTokens.HasValue || Daily?.Count > 0);
     public string? CurrencyCode { get; init; }
     public int HistoryDays { get; init; } = 30;
     public string? Provenance { get; init; }
@@ -72,15 +81,17 @@ public record CostDataDto
     public CostData ToCostData(string provider, DateTime fetchedAt) => new()
     {
         Provider = ProviderConstants.ValidateAndNormalize(provider),
-        TodayCostUSD = SessionCostUSD,
-        TodayTokens = SessionTokens,
-        Last30DaysCostUSD = Last30DaysCostUSD,
-        Last30DaysTokens = Last30DaysTokens,
+        TodayCostUSD = SessionCostUSD ?? 0,
+        TodayTokens = SessionTokens ?? 0,
+        Last30DaysCostUSD = Last30DaysCostUSD ?? 0,
+        Last30DaysTokens = Last30DaysTokens ?? 0,
         CurrencyCode = string.IsNullOrWhiteSpace(CurrencyCode) ? "USD" : CurrencyCode,
         Provenance = Provenance,
         HistoryDays = HistoryDays,
         Coverage = Coverage ?? new(),
         Daily = Daily ?? [],
-        FetchedAt = fetchedAt
+        FetchedAt = fetchedAt,
+        FetchOutcome = HasReading ? FetchOutcome.Success : FetchOutcome.Unavailable,
+        LastSuccessfulFetch = HasReading ? fetchedAt : null
     };
 }

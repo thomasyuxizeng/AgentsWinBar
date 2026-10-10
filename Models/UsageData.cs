@@ -1,5 +1,8 @@
 namespace CodexBarWin.Models;
 
+/// <summary>Fetch validity is independent of numeric values: a successful zero is a real reading.</summary>
+public enum FetchOutcome { Unknown, Success, Unavailable, Failed }
+
 /// <summary>
 /// Represents usage data for a provider.
 /// </summary>
@@ -21,7 +24,14 @@ public record UsageData
     /// <summary>When the provider's numbers were read (the CLI's usage.updatedAt, UTC). Can be much older than
     /// <see cref="FetchedAt"/> when the shim serves a cached result.</summary>
     public DateTime? DataUpdatedAt { get; init; }
-    public bool IsStale => DateTime.UtcNow - FetchedAt > TimeSpan.FromMinutes(5);
+    public FetchOutcome UsageFetchOutcome { get; init; }
+    public FetchOutcome StatusFetchOutcome { get; init; }
+    public bool UsageIsStale { get; init; }
+    public bool StatusIsStale { get; init; }
+    public DateTime? LastSuccessfulFetch { get; init; }
+    public DateTime? LastSuccessfulStatusFetch { get; init; }
+    public bool HasUsage => Session != null || Weekly != null || Tertiary != null || ExtraWindows?.Count > 0 || Credits != null;
+    public bool IsStale => UsageIsStale || StatusIsStale || Cost?.IsStale == true || DateTime.UtcNow - FetchedAt > TimeSpan.FromMinutes(5);
     public string? Status { get; init; }
     public ProviderStatus? ServiceStatus { get; init; }
     public CostData? Cost { get; init; }

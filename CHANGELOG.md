@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Provider cards and the detail page show a quiet "Stale · last updated 12m ago" caption, including for cost and tokens, when the dashboard is showing last-known-good data.
+
+### Fixed
+- Failed, empty, offline, and timed-out provider refreshes retain the last successful usage windows, status, cost and token totals across restarts. Expired readings remain available as stale fallbacks, usage history recovers missing windows, and successful zero readings replace older values. Dashboard models now expose staleness and last-success timestamps per data kind.
+
 ## [1.0.2] - 2026-10-08
 
 ### Fixed

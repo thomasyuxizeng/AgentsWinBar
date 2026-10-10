@@ -39,7 +39,7 @@ public sealed class UsageHistoryStore
 
     public int Record(UsageData data, DateTime nowUtc)
     {
-        if (data.IsLoading || data.HasError) return 0;
+        if (data.IsLoading || data.HasError || data.UsageIsStale) return 0;
         var windows = new List<(string Key, UsageWindow Window)>();
         if (data.Session != null) windows.Add(("session", data.Session));
         if (data.Weekly != null) windows.Add(("weekly", data.Weekly));
@@ -51,6 +51,26 @@ public sealed class UsageHistoryStore
                 UsedPercent = window.Percent, ResetsAt = window.ResetAt }, nowUtc)) count++;
         Prune(nowUtc);
         return count;
+    }
+
+    /// <summary>Recover the most recent observation of each window when a full cached reading is unavailable.</summary>
+    public UsageData? GetLastKnownUsage(string provider)
+    {
+        var samples = Samples.Where(s => s.Provider.Equals(provider, StringComparison.OrdinalIgnoreCase))
+            .GroupBy(s => s.WindowKey).Select(g => g.MaxBy(s => s.Timestamp)!).ToArray();
+        if (samples.Length == 0) return null;
+        UsageWindow Window(UsageHistorySample sample) => new()
+        { ReportedPercent = sample.UsedPercent, ResetAt = sample.ResetsAt };
+        UsageWindow? Named(string key) => samples.FirstOrDefault(s => s.WindowKey == key) is { } sample ? Window(sample) : null;
+        var fetchedAt = samples.Max(s => s.Timestamp);
+        return new UsageData
+        {
+            Provider = ProviderConstants.ValidateAndNormalize(provider), Session = Named("session"), Weekly = Named("weekly"),
+            Tertiary = Named("tertiary"), ExtraWindows = samples.Where(s => s.WindowKey.StartsWith("extra:", StringComparison.Ordinal))
+                .Select(s => new ExtraUsageWindow { Key = s.WindowKey[6..], Title = s.WindowKey[6..], Window = Window(s) }).ToArray(),
+            FetchedAt = fetchedAt, LastSuccessfulFetch = fetchedAt, UsageIsStale = true,
+            UsageFetchOutcome = FetchOutcome.Unavailable
+        };
     }
 
     public IReadOnlyList<UsageHistorySample> Get(string provider, string windowKey)

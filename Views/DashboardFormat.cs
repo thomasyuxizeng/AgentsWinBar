@@ -106,9 +106,15 @@ internal static class DashboardFormat
 
     public static string Freshness(DashboardProvider? provider) => provider == null ? string.Empty
         : provider.IsLoading ? "Refreshing…"
+        : provider.UsageIsStale ? StaleCaption.Text(true, provider.LastSuccessfulUsageFetchUtc, DateTime.UtcNow)
         : provider.OldReadingUtc is { } reading
             ? $"Data from {Local(reading)} · {Ago(reading)} · fetched {Ago(provider.FetchedAtUtc)}"
             : $"Fetched {Local(provider.FetchedAtUtc)} · {Ago(provider.FetchedAtUtc)}";
+
+    /// <summary>Caption under the cost heading when totals are last-known-good; empty when fresh.</summary>
+    public static string CostStale(DashboardCost? cost) => cost == null ? string.Empty
+        : StaleCaption.Text(cost.IsStale, cost.LastSuccessfulFetchUtc, DateTime.UtcNow);
+    public static Visibility VisCostStale(DashboardCost? cost) => VisText(CostStale(cost));
 
     /// <summary>A short note for a provider card's header: what needs attention, or nothing.</summary>
     public static string CardNote(DashboardProvider? provider) => provider == null ? string.Empty

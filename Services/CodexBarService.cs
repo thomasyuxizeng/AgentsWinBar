@@ -25,6 +25,7 @@ public class CodexBarService : ICodexBarService
     // a real machine), so they get their own deadline instead of the interactive usage timeout.
     internal static readonly TimeSpan CostScanTimeout = TimeSpan.FromMinutes(5);
     private readonly ICostCacheStore? _costStore;
+    private readonly UsageHistoryStore? _history;
     // The last complete result per provider (guarded by _costCache). A failed, empty or timed-out scan serves it
     // instead of blanking the totals; only a newer good result replaces it.
     private readonly Dictionary<string, CostData> _lastGoodCost = [];
@@ -44,8 +45,10 @@ public class CodexBarService : ICodexBarService
         Func<string>? userProfile = null,
         Func<string, bool>? directoryExists = null,
         IActivityLog? activityLog = null,
-        ICostCacheStore? costStore = null)
+        ICostCacheStore? costStore = null,
+        UsageHistoryStore? history = null)
     {
+        _history = history;
         _costStore = costStore;
         _wslService = wslService;
         _cacheService = cacheService;
@@ -140,7 +143,7 @@ public class CodexBarService : ICodexBarService
                 lock (_costCache)
                 {
                     if (!forceRefresh && _costCache.TryGetValue(provider, out var cached) && now - cached.AttemptedAt < CostCacheTtl)
-                        published = cached.Data != null ? NormalizeTodayCost(cached.Data, now) : LastGoodCost(provider, now);
+                        published = cached.Data != null ? CachedCost(cached.Data, now) : LastGoodCost(provider, now);
                     else
                     {
                         previousAttempts[provider] = _costCache.TryGetValue(provider, out var prior) ? prior : null;
@@ -250,26 +253,11 @@ public class CodexBarService : ICodexBarService
         }
     }
 
-    /// <summary>The last complete result; its "today" totals are cleared once that calendar day has passed.</summary>
+    /// <summary>The last complete result, with its original totals and timestamp preserved.</summary>
     private CostData? LastGoodCost(string provider, DateTimeOffset now)
     {
         if (!_lastGoodCost.TryGetValue(provider, out var data)) return null;
-        var fetchedUtc = data.FetchedAt.Kind == DateTimeKind.Local
-            ? data.FetchedAt.ToUniversalTime()
-            : DateTime.SpecifyKind(data.FetchedAt, DateTimeKind.Utc);
-        // The same limit as on disk: week-old totals are no longer a useful stand-in.
-        if (now.UtcDateTime - fetchedUtc > CostCacheStore.MaxAge) return null;
-        return NormalizeTodayCost(data, now);
-    }
-
-    private CostData NormalizeTodayCost(CostData data, DateTimeOffset now)
-    {
-        var zone = _timeProvider.LocalTimeZone;
-        var fetchedUtc = data.FetchedAt.Kind == DateTimeKind.Local
-            ? data.FetchedAt.ToUniversalTime()
-            : DateTime.SpecifyKind(data.FetchedAt, DateTimeKind.Utc);
-        if (TimeZoneInfo.ConvertTimeFromUtc(fetchedUtc, zone).Date == TimeZoneInfo.ConvertTime(now, zone).Date) return data;
-        return data with { TodayCostUSD = 0, TodayTokens = 0 };
+        return data with { IsStale = true, LastSuccessfulFetch = data.LastSuccessfulFetch ?? data.FetchedAt };
     }
 
     private async Task SaveCostStoreAsync()
@@ -307,7 +295,7 @@ public class CodexBarService : ICodexBarService
             var dto = json.StartsWith('[')
                 ? JsonSerializer.Deserialize(json, AppJsonSerializerContext.Default.ListCostDataDto)?.FirstOrDefault()
                 : JsonSerializer.Deserialize(json, AppJsonSerializerContext.Default.CostDataDto);
-            if (dto == null || !string.Equals(dto.Provider, provider == "gemini" ? "antigravity" : provider,
+            if (dto == null || !dto.HasReading || !string.Equals(dto.Provider, provider == "gemini" ? "antigravity" : provider,
                 StringComparison.OrdinalIgnoreCase)) return null;
             var data = dto.ToCostData(provider, attemptedAt.UtcDateTime);
             lock (_costCache)
@@ -341,33 +329,23 @@ public class CodexBarService : ICodexBarService
 
     public async Task<UsageData?> GetUsageAsync(string provider, CancellationToken ct = default)
     {
+        if (!ProviderConstants.IsValidProvider(provider)) return null;
+        var normalizedProvider = ProviderConstants.ValidateAndNormalize(provider);
         try
         {
-            var normalizedProvider = ProviderConstants.ValidateAndNormalize(provider);
             var source = ProviderConstants.GetSource(normalizedProvider);
             var result = await _wslService.ExecuteAsync($"codexbar --provider {normalizedProvider} --format json --source {source} --status", ct);
 
-            if (!result.Success)
-            {
-                _logger.LogWarning("codexbar command failed for {Provider}: {Error}", provider, result.Error);
-                return _cacheService.Get(provider);
-            }
-
-            var data = ParseUsageJsonArray(result.Output).FirstOrDefault(data =>
-                string.Equals(data.Provider, normalizedProvider, StringComparison.OrdinalIgnoreCase));
-
-            if (data != null)
-            {
-                _cacheService.Set(provider, data);
-            }
-
-            return data ?? _cacheService.Get(provider);
+            ct.ThrowIfCancellationRequested();
+            return InterpretProviderResult(normalizedProvider, result);
         }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to get usage for {Provider}", provider);
-            return _cacheService.Get(provider);
+            return ProviderError(normalizedProvider, "Usage fetch unavailable");
         }
+        finally { await SaveUsageCacheAsync(); }
     }
 
     public async Task<IReadOnlyList<UsageData>> GetAllUsageAsync(CancellationToken ct = default)
@@ -440,6 +418,27 @@ public class CodexBarService : ICodexBarService
     }
 
     private async Task<IReadOnlyList<UsageData>> FetchAllProvidersAsync(IReadOnlyList<string> providers,
+        Action<UsageData>? onCompleted, CancellationToken ct)
+    {
+        try { return await FetchAllProvidersCoreAsync(providers, onCompleted, ct); }
+        finally { if (!_settingsService.Settings.DeveloperModeEnabled) await SaveUsageCacheAsync(); }
+    }
+
+    private CostData CachedCost(CostData data, DateTimeOffset now)
+    {
+        var fetchedAt = data.FetchedAt.Kind == DateTimeKind.Local ? data.FetchedAt.ToUniversalTime() : DateTime.SpecifyKind(data.FetchedAt, DateTimeKind.Utc);
+        // Crossing midnight cannot establish real zero totals. Preserve the reading and label its old calendar day.
+        return TimeZoneInfo.ConvertTimeFromUtc(fetchedAt, _timeProvider.LocalTimeZone).Date == TimeZoneInfo.ConvertTime(now, _timeProvider.LocalTimeZone).Date
+            ? data : data with { IsStale = true, LastSuccessfulFetch = data.LastSuccessfulFetch ?? data.FetchedAt };
+    }
+
+    private async Task SaveUsageCacheAsync()
+    {
+        try { await _cacheService.SaveAsync(); }
+        catch (Exception ex) { _logger.LogWarning(ex, "Usage cache could not be saved"); }
+    }
+
+    private async Task<IReadOnlyList<UsageData>> FetchAllProvidersCoreAsync(IReadOnlyList<string> providers,
         Action<UsageData>? onCompleted, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
@@ -578,9 +577,9 @@ public class CodexBarService : ICodexBarService
             return ProviderError(provider, "Request timed out");
         if (result.Success && !string.IsNullOrWhiteSpace(result.Output))
         {
-            var data = ParseUsageJsonArray(result.Output).FirstOrDefault();
+            var data = ParseUsageJsonArray(result.Output).FirstOrDefault(d => string.Equals(d.Provider, provider, StringComparison.OrdinalIgnoreCase));
             if (data == null) return ProviderError(provider, "No data available");
-            _cacheService.Set(data.Provider, data);
+            data = ResolveUsage(data with { Provider = provider });
             _logger.LogDebug("Fetched {Provider} successfully", provider);
             return data;
         }
@@ -592,10 +591,47 @@ public class CodexBarService : ICodexBarService
         };
     }
 
-    private static UsageData ProviderError(string provider, string error) => new()
+    private UsageData ProviderError(string provider, string error) => ResolveUsage(new UsageData
     {
-        Provider = provider, Error = error, FetchedAt = DateTime.UtcNow
-    };
+        Provider = provider, Error = error, FetchedAt = _timeProvider.GetUtcNow().UtcDateTime,
+        UsageFetchOutcome = FetchOutcome.Failed, StatusFetchOutcome = FetchOutcome.Failed
+    });
+
+    private UsageData ResolveUsage(UsageData data)
+    {
+        var cached = _cacheService.GetLastKnown(data.Provider);
+        var previous = cached?.HasUsage == true ? cached : _history?.GetLastKnownUsage(data.Provider);
+        var now = _timeProvider.GetUtcNow().UtcDateTime;
+        var success = data.UsageFetchOutcome == FetchOutcome.Success;
+        var statusSuccess = data.StatusFetchOutcome == FetchOutcome.Success;
+        var resolved = data with
+        {
+            Session = success ? data.Session : previous?.Session,
+            Weekly = success ? data.Weekly : previous?.Weekly,
+            Tertiary = success ? data.Tertiary : previous?.Tertiary,
+            ExtraWindows = success ? data.ExtraWindows : previous?.ExtraWindows ?? [],
+            Credits = success ? data.Credits : previous?.Credits,
+            Plan = success ? data.Plan : previous?.Plan,
+            Status = success ? data.Status : previous?.Status,
+            FetchedAt = success ? now : previous?.FetchedAt ?? data.FetchedAt,
+            DataUpdatedAt = success ? data.DataUpdatedAt : previous?.DataUpdatedAt,
+            LastSuccessfulFetch = success ? now : previous?.LastSuccessfulFetch ?? previous?.FetchedAt,
+            UsageIsStale = !success && previous?.HasUsage == true,
+            ServiceStatus = statusSuccess ? data.ServiceStatus : cached?.ServiceStatus,
+            LastSuccessfulStatusFetch = statusSuccess ? now : cached?.LastSuccessfulStatusFetch ??
+                cached?.ServiceStatus?.UpdatedAt ?? (cached?.ServiceStatus != null ? cached.FetchedAt : null),
+            StatusIsStale = !statusSuccess && cached?.ServiceStatus != null,
+            Error = success ? null : data.Error ?? "No usage reading available"
+        };
+        // Persist complete values independently: a status-only success must not discard the usage reading.
+        if (success || statusSuccess)
+            _cacheService.Set(data.Provider, success ? resolved : resolved with
+            {
+                Error = null, IsLoading = false, CommandNotFound = false,
+                UsageFetchOutcome = resolved.HasUsage ? FetchOutcome.Success : FetchOutcome.Unknown
+            });
+        return resolved;
+    }
     public async Task<string?> GetVersionAsync(CancellationToken ct = default)
     {
         try

@@ -5,13 +5,11 @@ using Microsoft.Extensions.Logging;
 namespace CodexBarWin.Services;
 
 /// <summary>
-/// Atomic cost-cache.json beside the settings file. Results older than <see cref="MaxAge"/> are dropped on load,
+/// Atomic cost-cache.json beside the settings file. Last-known values are retained regardless of age,
 /// and developer mode never reads or writes it.
 /// </summary>
 public sealed class CostCacheStore : ICostCacheStore
 {
-    public static readonly TimeSpan MaxAge = TimeSpan.FromDays(7);
-
     private readonly ISettingsService _settings;
     private readonly ILogger<CostCacheStore> _logger;
     private readonly TimeProvider _clock;
@@ -46,7 +44,7 @@ public sealed class CostCacheStore : ICostCacheStore
                 if (data == null || !ProviderConstants.IsValidProvider(key) || !data.HasData) continue;
                 var provider = ProviderConstants.ValidateAndNormalize(key);
                 var fetchedAt = data.FetchedAt.Kind == DateTimeKind.Local ? data.FetchedAt.ToUniversalTime() : data.FetchedAt;
-                if (now - fetchedAt > MaxAge || fetchedAt - now > TimeSpan.FromMinutes(5)) continue;
+                if (fetchedAt - now > TimeSpan.FromMinutes(5) || !string.Equals(data.Provider, provider, StringComparison.OrdinalIgnoreCase)) continue;
                 items[provider] = data with { Provider = provider, Daily = data.Daily ?? [] };
             }
         }
