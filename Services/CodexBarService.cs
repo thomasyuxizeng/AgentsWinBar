@@ -35,6 +35,18 @@ public class CodexBarService : ICodexBarService
     private readonly HashSet<string> _restoredCost = [];
     private bool _costStoreLoaded;
     private bool _costStoreDirty;
+    private sealed class ProviderRefreshState
+    {
+        public long Issued;
+        public long Published;
+    }
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, ProviderRefreshState> _providerRefreshes = new(StringComparer.Ordinal);
+
+    private long BeginProviderRefresh(string provider)
+    {
+        var state = _providerRefreshes.GetOrAdd(provider, _ => new());
+        lock (state) return ++state.Issued;
+    }
 
 
     public CodexBarService(
@@ -352,6 +364,7 @@ public class CodexBarService : ICodexBarService
     {
         if (!ProviderConstants.IsValidProvider(provider)) return null;
         var normalizedProvider = ProviderConstants.ValidateAndNormalize(provider);
+        var generation = BeginProviderRefresh(normalizedProvider);
         ProviderStatus? geminiStatus = null;
         try
         {
@@ -361,13 +374,13 @@ public class CodexBarService : ICodexBarService
             var result = await _wslService.ExecuteAsync($"codexbar --provider {normalizedProvider} --format json --source {source} --status", ct);
 
             ct.ThrowIfCancellationRequested();
-            return InterpretProviderResult(normalizedProvider, result, geminiStatus);
+            return InterpretProviderResult(normalizedProvider, result, geminiStatus, generation);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to get usage for {Provider}", provider);
-            return ProviderError(normalizedProvider, "Usage fetch unavailable", geminiStatus);
+            return ProviderError(normalizedProvider, "Usage fetch unavailable", geminiStatus, generation);
         }
         finally { await SaveUsageCacheAsync(); }
     }
@@ -481,6 +494,7 @@ public class CodexBarService : ICodexBarService
         }
         else
         {
+            var generations = providers.Select(BeginProviderRefresh).ToArray();
             var geminiStatus = await PrefetchGeminiStatusAsync(providers, ct);
             ct.ThrowIfCancellationRequested();
             var commands = providers.Select(BuildProviderCommand).ToArray();
@@ -492,7 +506,7 @@ public class CodexBarService : ICodexBarService
                     _logger.LogInformation("WSL batch command not found for {Provider}; retrying individually", providers[index]);
                     RecordBatchFallback(providers[index], "Command failed (exit code 127)");
                 }
-                Complete(index, await FetchProviderAsync(providers[index], commands[index], geminiStatus, ct));
+                Complete(index, await FetchProviderAsync(providers[index], commands[index], geminiStatus, generations[index], ct));
             }
             try
             {
@@ -507,7 +521,7 @@ public class CodexBarService : ICodexBarService
                         retryInIndividualShell[index] = true;
                         return;
                     }
-                    if (results[index] == null) Complete(index, InterpretProviderResult(providers[index], result, geminiStatus));
+                    if (results[index] == null) Complete(index, InterpretProviderResult(providers[index], result, geminiStatus, generations[index]));
                 }, ct);
                 ct.ThrowIfCancellationRequested();
                 if (batch == null || batch.Count != commands.Length)
@@ -519,7 +533,7 @@ public class CodexBarService : ICodexBarService
                     {
                         retryInIndividualShell[i] = true;
                     }
-                    else Complete(i, InterpretProviderResult(providers[i], batch[i], geminiStatus));
+                    else Complete(i, InterpretProviderResult(providers[i], batch[i], geminiStatus, generations[i]));
                 }
                 await Task.WhenAll(Enumerable.Range(0, providers.Count)
                     .Where(i => results[i] == null && retryInIndividualShell[i]).Select(RetryProviderAsync));
@@ -565,7 +579,7 @@ public class CodexBarService : ICodexBarService
         }
     }
 
-    private async Task<UsageData> FetchProviderAsync(string provider, WslBatchCommand command, ProviderStatus? geminiStatus, CancellationToken ct)
+    private async Task<UsageData> FetchProviderAsync(string provider, WslBatchCommand command, ProviderStatus? geminiStatus, long generation, CancellationToken ct)
     {
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
         deadline.CancelAfter(command.Timeout);
@@ -574,45 +588,45 @@ public class CodexBarService : ICodexBarService
             var result = await _wslService.ExecuteAsync(command.Command, deadline.Token);
             ct.ThrowIfCancellationRequested();
             return deadline.IsCancellationRequested
-                ? ProviderError(provider, "Request timed out", geminiStatus)
-                : InterpretProviderResult(provider, result, geminiStatus);
+                ? ProviderError(provider, "Request timed out", geminiStatus, generation)
+                : InterpretProviderResult(provider, result, geminiStatus, generation);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-        catch (OperationCanceledException) { return ProviderError(provider, "Request timed out", geminiStatus); }
+        catch (OperationCanceledException) { return ProviderError(provider, "Request timed out", geminiStatus, generation); }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Failed to fetch {Provider}", provider);
-            return ProviderError(provider, "Unexpected error occurred", geminiStatus);
+            return ProviderError(provider, "Unexpected error occurred", geminiStatus, generation);
         }
     }
 
-    private UsageData InterpretProviderResult(string provider, WslResult result, ProviderStatus? geminiStatus)
+    private UsageData InterpretProviderResult(string provider, WslResult result, ProviderStatus? geminiStatus, long generation)
     {
-        try { return InterpretProviderResultCore(provider, result, geminiStatus); }
+        try { return InterpretProviderResultCore(provider, result, geminiStatus, generation); }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Failed to interpret {Provider}", provider);
-            return ProviderError(provider, "Unexpected error occurred", geminiStatus);
+            return ProviderError(provider, "Unexpected error occurred", geminiStatus, generation);
         }
     }
 
-    private UsageData InterpretProviderResultCore(string provider, WslResult result, ProviderStatus? geminiStatus)
+    private UsageData InterpretProviderResultCore(string provider, WslResult result, ProviderStatus? geminiStatus, long generation)
     {
         if (!result.Success && (result.ExitCode == 124 ||
             (result.ExitCode == -1 && result.Error.Contains("timed out", StringComparison.OrdinalIgnoreCase))))
-            return ProviderError(provider, "Request timed out", geminiStatus);
+            return ProviderError(provider, "Request timed out", geminiStatus, generation);
         if (result.Success && !string.IsNullOrWhiteSpace(result.Output))
         {
             var data = ParseUsageJsonArray(result.Output).FirstOrDefault(d => string.Equals(d.Provider, provider, StringComparison.OrdinalIgnoreCase));
-            if (data == null) return ProviderError(provider, "No data available", geminiStatus);
+            if (data == null) return ProviderError(provider, "No data available", geminiStatus, generation);
             data = AttachGeminiStatus(data, geminiStatus);
-            data = ResolveUsage(data with { Provider = provider });
+            data = ResolveUsage(data with { Provider = provider }, generation);
             _logger.LogDebug("Fetched {Provider} successfully", provider);
             return data;
         }
         _logger.LogDebug("{Provider} failed: {Error}", provider, result.Error);
         return ProviderError(provider, string.IsNullOrWhiteSpace(result.Error)
-            ? $"Command failed (exit code {result.ExitCode})" : result.Error.Trim(), geminiStatus) with
+            ? $"Command failed (exit code {result.ExitCode})" : result.Error.Trim(), geminiStatus, generation) with
         {
             CommandNotFound = result.ExitCode == 127
         };
@@ -654,50 +668,75 @@ public class CodexBarService : ICodexBarService
         return status == null ? data : data with { ServiceStatus = status, StatusFetchOutcome = FetchOutcome.Success };
     }
 
-    private UsageData ProviderError(string provider, string error, ProviderStatus? geminiStatus = null) => ResolveUsage(AttachGeminiStatus(new UsageData
+    private UsageData ProviderError(string provider, string error, ProviderStatus? geminiStatus = null, long generation = 0) => ResolveUsage(AttachGeminiStatus(new UsageData
     {
         Provider = provider, Error = error, FetchedAt = _timeProvider.GetUtcNow().UtcDateTime,
         UsageFetchOutcome = FetchOutcome.Failed, StatusFetchOutcome = FetchOutcome.Failed
-    }, geminiStatus));
+    }, geminiStatus), generation);
 
-    private UsageData ResolveUsage(UsageData data)
+    private UsageData ResolveUsage(UsageData data, long generation)
+    {
+        var state = _providerRefreshes.GetOrAdd(data.Provider, _ => new());
+        // Keep the entire read/merge/write atomic. Requests are numbered before network work,
+        // so completion order cannot let a superseded result replace a newer success.
+        lock (state) return ResolveUsageCore(data, generation, state);
+    }
+
+    private UsageData ResolveUsageCore(UsageData data, long generation, ProviderRefreshState state)
     {
         var now = _timeProvider.GetUtcNow().UtcDateTime;
+        var superseded = generation < state.Published;
         var cached = _cacheService.GetLastKnown(data.Provider);
         if (cached != null) cached = CacheRetention.PruneExpired(cached, now);
-        var previous = cached?.HasUsage == true ? cached : _history?.GetLastKnownUsage(data.Provider);
+        var previous = cached?.HasUsage == true ? cached : _history?.GetLastKnownUsage(data.Provider, now);
         if (previous != null)
         {
             var prevSuccess = Helpers.DashboardValues.Utc(previous.LastSuccessfulFetch ?? previous.FetchedAt);
             if (now - prevSuccess > CacheRetention.MaxAge) previous = null;
         }
-        var success = data.UsageFetchOutcome == FetchOutcome.Success;
-        var statusSuccess = data.StatusFetchOutcome == FetchOutcome.Success;
+        var observationAt = data.DataUpdatedAt ?? data.CacheUpdatedAt;
+        var cachedReading = !superseded && data.UsageIsCached && data.HasUsage &&
+            observationAt.HasValue && CacheRetention.IsRetained(observationAt.Value, now) &&
+            (previous == null || Helpers.DashboardValues.Utc(observationAt.Value) >=
+                Helpers.DashboardValues.Utc(previous.LastSuccessfulFetch ?? previous.FetchedAt));
+        var success = !superseded && !data.UsageIsCached && data.UsageFetchOutcome == FetchOutcome.Success;
+        var acceptsUsage = success || cachedReading;
+        var usageAt = cachedReading ? Helpers.DashboardValues.Utc(observationAt!.Value) : now;
+        if (usageAt > now) usageAt = now;
+        var statusSuccess = !superseded && !data.UsageIsCached && data.StatusFetchOutcome == FetchOutcome.Success;
+        var cachedStatusAt = data.CacheUpdatedAt ?? observationAt;
+        var cachedStatus = !superseded && data.UsageIsCached && data.ServiceStatus != null &&
+            cached?.ServiceStatus == null && cachedStatusAt.HasValue && CacheRetention.IsRetained(cachedStatusAt.Value, now);
         var resolved = data with
         {
-            Session = success ? data.Session : previous?.Session,
-            Weekly = success ? data.Weekly : previous?.Weekly,
-            Tertiary = success ? data.Tertiary : previous?.Tertiary,
-            ExtraWindows = success ? data.ExtraWindows : previous?.ExtraWindows ?? [],
-            Credits = success ? data.Credits : previous?.Credits,
-            Plan = success ? data.Plan : previous?.Plan,
-            Status = success ? data.Status : previous?.Status,
-            FetchedAt = success ? now : previous?.FetchedAt ?? data.FetchedAt,
-            DataUpdatedAt = success ? data.DataUpdatedAt : previous?.DataUpdatedAt,
-            LastSuccessfulFetch = success ? now : previous?.LastSuccessfulFetch ?? previous?.FetchedAt,
-            UsageIsStale = !success && previous?.HasUsage == true,
-            ServiceStatus = statusSuccess ? data.ServiceStatus : cached?.ServiceStatus,
-            LastSuccessfulStatusFetch = statusSuccess ? now : cached?.LastSuccessfulStatusFetch,
-            StatusIsStale = !statusSuccess && cached?.ServiceStatus != null,
-            Error = success ? null : data.Error ?? "No usage reading available"
+            Session = acceptsUsage ? data.Session : previous?.Session,
+            Weekly = acceptsUsage ? data.Weekly : previous?.Weekly,
+            Tertiary = acceptsUsage ? data.Tertiary : previous?.Tertiary,
+            ExtraWindows = acceptsUsage ? data.ExtraWindows : previous?.ExtraWindows ?? [],
+            Credits = acceptsUsage ? data.Credits : previous?.Credits,
+            Plan = acceptsUsage ? data.Plan : previous?.Plan,
+            Status = acceptsUsage ? data.Status : previous?.Status,
+            FetchedAt = acceptsUsage ? usageAt : previous?.FetchedAt ?? data.FetchedAt,
+            DataUpdatedAt = acceptsUsage ? data.DataUpdatedAt : previous?.DataUpdatedAt,
+            LastSuccessfulFetch = acceptsUsage ? usageAt : previous?.LastSuccessfulFetch ?? previous?.FetchedAt,
+            UsageFetchOutcome = superseded || (data.UsageIsCached && !cachedReading) ? FetchOutcome.Unavailable : data.UsageFetchOutcome,
+            UsageIsStale = !success && (cachedReading || previous?.HasUsage == true),
+            ServiceStatus = statusSuccess || cachedStatus ? data.ServiceStatus : cached?.ServiceStatus,
+            LastSuccessfulStatusFetch = statusSuccess ? now : cachedStatus ? Helpers.DashboardValues.Utc(cachedStatusAt!.Value) : cached?.LastSuccessfulStatusFetch,
+            StatusIsStale = !statusSuccess && (cachedStatus || cached?.ServiceStatus != null),
+            Cost = CacheRetention.RetainedCost(previous?.Cost, now),
+            Error = acceptsUsage ? null : data.Error ?? "No usage reading available"
         };
         // Persist complete values independently: a status-only success must not discard the usage reading.
-        if (success || statusSuccess)
+        if (acceptsUsage || statusSuccess || cachedStatus)
+        {
+            state.Published = Math.Max(state.Published, generation);
             _cacheService.Set(data.Provider, success ? resolved : resolved with
             {
                 Error = null, IsLoading = false, CommandNotFound = false,
                 UsageFetchOutcome = resolved.HasUsage ? FetchOutcome.Success : FetchOutcome.Unknown
             });
+        }
         return resolved;
     }
     public async Task<string?> GetVersionAsync(CancellationToken ct = default)

@@ -171,7 +171,7 @@ public class DashboardSnapshotBuilderTests
                 new() { Date = Today.AddDays(-30), TotalCost = 999, InputTokens = 999 },
                 new() { Date = Today.AddDays(1), TotalCost = 999, InputTokens = 999 }] };
         var snapshot = DashboardSnapshotBuilder.Build(Inputs(Provider() with { Cost = cost },
-            Provider("codex") with { Cost = new() { TodayCostUSD = 3, TodayTokens = 30, Last30DaysCostUSD = 5, Last30DaysTokens = 50 } },
+            Provider("codex") with { Cost = new() { FetchedAt = Now, TodayCostUSD = 3, TodayTokens = 30, Last30DaysCostUSD = 5, Last30DaysTokens = 50 } },
             Provider("gemini") with { Cost = new() }));
         snapshot.Summary.CostAvailable.Should().BeTrue();
         snapshot.Summary.TotalCostToday.Should().Be(7);
@@ -199,7 +199,7 @@ public class DashboardSnapshotBuilderTests
     [TestMethod]
     public void Build_MoreThanEightModels_CapsTopModels()
     {
-        var cost = new CostData { Last30DaysTokens = 10, Daily = [new() { Date = Today,
+        var cost = new CostData { FetchedAt = Now, Last30DaysTokens = 10, Daily = [new() { Date = Today,
             ModelBreakdowns = Enumerable.Range(0, 12).Select(i => new ModelCost { ModelName = "m" + i, Cost = i }).ToArray() }] };
         DashboardSnapshotBuilder.Build(Inputs(Provider() with { Cost = cost })).Providers.Single().Cost!.TopModels.Should().HaveCount(8);
     }
@@ -220,7 +220,7 @@ public class DashboardSnapshotBuilderTests
     [TestMethod]
     public void Build_CostTotalsWithoutDailyUsage_LeavesAverageAndPeakUnknown()
     {
-        var cost = DashboardSnapshotBuilder.Build(Inputs(Provider() with { Cost = new() { Last30DaysTokens = 1 } })).Providers.Single().Cost!;
+        var cost = DashboardSnapshotBuilder.Build(Inputs(Provider() with { Cost = new() { FetchedAt = Now, Last30DaysTokens = 1 } })).Providers.Single().Cost!;
         cost.Daily.Should().HaveCount(30); cost.AverageDailyCost.Should().BeNull(); cost.PeakDay.Should().BeNull();
     }
 
@@ -318,12 +318,12 @@ public class DashboardSnapshotBuilderTests
     [TestMethod]
     public void Build_TodayOnlyAndUnpricedModelUsage_PreservesCostAvailability()
     {
-        var input = Inputs(Provider() with { Cost = new() { TodayTokens = 12, TodayCostUSD = 1 } });
+        var input = Inputs(Provider() with { Cost = new() { FetchedAt = Now, TodayTokens = 12, TodayCostUSD = 1 } });
         input = input with { Settings = new() { ShowCostTotals = true } };
         var snapshot = DashboardSnapshotBuilder.Build(input);
         snapshot.Summary.TotalCostToday.Should().Be(1);
         snapshot.Providers[0].Cost!.TopModels.Should().BeEmpty();
-        input = input with { Providers = [Provider() with { Cost = new() { Daily = [new() {
+        input = input with { Providers = [Provider() with { Cost = new() { FetchedAt = Now, Daily = [new() {
             Date = Today, ModelBreakdowns = [new() { ModelName = "unpriced", TotalTokens = 10 }] }] } }] };
         var cost = DashboardSnapshotBuilder.Build(input).Providers[0].Cost!;
         cost.TopModels.Single().Cost.Should().BeNull();

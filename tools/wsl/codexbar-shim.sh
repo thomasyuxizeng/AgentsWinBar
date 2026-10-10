@@ -139,8 +139,31 @@ case " $* " in *" --provider claude "*)
     rm -f "$staged"; return 1
   }
   age() { echo $(( $(date +%s) - $(stat -c %Y "$1") )); }
+  cached_output() {
+    # Add provenance without changing source/usage or the cache file's observation time.
+    # Non-JSON output from older/custom CLIs remains byte-compatible.
+    python3 - "$1" "$(stat -c %Y "$1")" <<'PY'
+import datetime, json, sys
+with open(sys.argv[1]) as f:
+    raw = f.read()
+try:
+    data = json.loads(raw)
+except ValueError:
+    sys.stdout.write(raw)
+    sys.exit(0)
+rows = data if isinstance(data, list) else [data]
+if not all(isinstance(row, dict) for row in rows):
+    sys.stdout.write(raw)
+    sys.exit(0)
+stamp = datetime.datetime.fromtimestamp(int(sys.argv[2]), datetime.timezone.utc).isoformat()
+for row in rows:
+    row['cached'] = True
+    row['cacheUpdatedAt'] = stamp
+print(json.dumps(data))
+PY
+  }
 
-  if [ -n "$cache_read" ] && [ -s "$cache_read" ] && [ "$(age "$cache_read")" -lt 600 ]; then cat "$cache_read"; exit 0; fi
+  if [ -n "$cache_read" ] && [ -s "$cache_read" ] && [ "$(age "$cache_read")" -lt 600 ]; then cached_output "$cache_read"; exit $?; fi
 
   oauth=(); cli=()
   for a in "${out[@]}"; do
@@ -171,7 +194,7 @@ case " $* " in *" --provider claude "*)
   fi
 
   if [ $rc -eq 0 ]; then write_state "$C" "$o"; printf '%s\n' "$o"; exit 0; fi
-  if [ -n "$cache_read" ] && [ -s "$cache_read" ]; then cat "$cache_read"; exit 0; fi
+  if [ -n "$cache_read" ] && [ -s "$cache_read" ]; then cached_output "$cache_read"; exit $?; fi
   printf '%s\n' "$o"; exit $rc ;;
 esac
 

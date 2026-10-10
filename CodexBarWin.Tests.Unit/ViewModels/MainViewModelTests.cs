@@ -98,6 +98,28 @@ public class MainViewModelTests
             BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(_viewModel)!).Task;
 
     [TestMethod]
+    public async Task StartAsync_OverQuotaHistory_RestoresLatest105WhileFetchIsPending()
+    {
+        var now = DateTime.UtcNow;
+        _history.Add(new() { Provider = "claude", WindowKey = "session", UsedPercent = 99, Timestamp = now.AddMinutes(-20) }, now);
+        _history.Add(new() { Provider = "claude", WindowKey = "session", UsedPercent = 105, Timestamp = now.AddMinutes(-10) }, now);
+        var gate = Signal();
+        _usage.Setup(s => s.GetAllUsageStreamAsync(It.IsAny<CancellationToken>()))
+            .Returns((CancellationToken ct) => Stream(gate.Task, Data(106), ct));
+        var start = _viewModel.StartAsync();
+        try
+        {
+            _viewModel.Providers.Single().Session!.Percent.Should().Be(105);
+            _viewModel.Providers.Single().UsageIsStale.Should().BeTrue();
+        }
+        finally
+        {
+            gate.SetResult();
+            await start.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+    }
+
+    [TestMethod]
     [DataRow(false)]
     [DataRow(true)]
     public async Task StartAsync_WhenOnlyStaleCacheOrHistoryExists_ShowsReadingWhileFetchIsPending(bool historyOnly)
@@ -581,7 +603,7 @@ public class MainViewModelTests
     }
 
     [TestMethod]
-    public async Task AcquireCostDemand_ExpiredCostAlreadyPresent_WaitsForUsageRefresh()
+    public async Task AcquireCostDemand_RetainedCostAlreadyPresent_WaitsForUsageRefresh()
     {
         SetupImmediateUsage();
         await _viewModel.StartAsync();
@@ -591,6 +613,37 @@ public class MainViewModelTests
         _usage.Verify(s => s.GetCostsAsync(It.IsAny<IReadOnlyList<string>>(), false, It.IsAny<CancellationToken>()), Times.Never);
         await PeriodicRefreshAsync();
         _usage.Verify(s => s.GetCostsAsync(It.IsAny<IReadOnlyList<string>>(), false, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [TestMethod]
+    public async Task AcquireCostDemand_ExpiredAttachedCost_RequestsScanOnReopen()
+    {
+        SetupImmediateUsage();
+        await _viewModel.StartAsync();
+        _viewModel.Providers[0] = _viewModel.Providers[0] with
+        { Cost = new CostData { Provider = "claude", TodayCostUSD = 10, FetchedAt = DateTime.UtcNow,
+            LastSuccessfulFetch = DateTime.UtcNow.AddDays(-8) } };
+        var scan = new TaskCompletionSource<CostData?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _usage.Setup(s => s.GetCostAsync("claude", false, It.IsAny<CancellationToken>())).Returns(scan.Task);
+        using var demand = _viewModel.AcquireCostDemand();
+        var completion = CostScanCompletion(background: false);
+        _usage.Verify(s => s.GetCostsAsync(It.Is<IReadOnlyList<string>>(p => p.Count == 1 && p[0] == "claude"),
+            false, It.IsAny<CancellationToken>()), Times.Once);
+        scan.SetResult(new CostData { Provider = "claude", TodayCostUSD = 2 });
+        await completion.WaitAsync(TimeSpan.FromSeconds(5));
+        _viewModel.Providers.Single().Cost!.TodayCostUSD.Should().Be(2);
+    }
+
+    [TestMethod]
+    public async Task RefreshCoreAsync_ExpiredAttachedCost_DropsItDuringUsageRefresh()
+    {
+        SetupImmediateUsage();
+        await _viewModel.StartAsync();
+        _viewModel.Providers[0] = _viewModel.Providers[0] with
+        { Cost = new CostData { Provider = "claude", TodayCostUSD = 10, FetchedAt = DateTime.UtcNow.AddDays(-8) } };
+        await PeriodicRefreshAsync();
+        _viewModel.Providers.Single().Cost.Should().BeNull();
+        _usage.Verify(s => s.GetCostsAsync(It.IsAny<IReadOnlyList<string>>(), false, It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [TestMethod]

@@ -77,10 +77,12 @@ public sealed record DashboardProvider
     public bool IsLoading { get; init; }
     public bool IsStale { get; init; }
     public bool UsageIsStale { get; init; }
+    /// <summary>Whether the retained service status came from an earlier fetch, independent of usage.</summary>
     public bool StatusIsStale { get; init; }
     /// <summary>The oldest last-success timestamp among stale kinds, or the usage timestamp when fresh.</summary>
     public DateTime? LastSuccessfulFetchUtc { get; init; }
     public DateTime? LastSuccessfulUsageFetchUtc { get; init; }
+    /// <summary>The original status fetch time; null when status is missing or beyond seven-day retention.</summary>
     public DateTime? LastSuccessfulStatusFetchUtc { get; init; }
     public TimeSpan? StaleAge { get; init; }
     public string? Error { get; init; }

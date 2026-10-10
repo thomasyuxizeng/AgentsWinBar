@@ -27,6 +27,9 @@ public static class CacheRetention
         return age >= -ClockSkewTolerance && age <= MaxAge;
     }
 
+    public static CostData? RetainedCost(CostData? data, DateTime nowUtc) =>
+        data != null && IsRetained(data.LastSuccessfulFetch ?? data.FetchedAt, nowUtc) ? data : null;
+
     /// <summary>Expire usage and status independently; a fresh status cannot extend old usage.</summary>
     public static UsageData? PruneExpired(UsageData data, DateTime nowUtc)
     {

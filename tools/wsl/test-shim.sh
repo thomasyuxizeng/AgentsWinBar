@@ -98,6 +98,23 @@ output=$(OAUTH_OUT=$expired OAUTH_EXIT=3 CLI_OUT=$good CLI_EXIT=0 claude_run)
 [[ ! -e "$TMP/claude-cache/codexbar-claude-$uid-oauth-cooldown" ]]
 
 # Expired token and a failing CLI, nothing cached: the real OAuth error is returned, not "rate limited".
+observed='2026-10-01T10:00:00Z'
+cache_file="$TMP/claude-cache/codexbar-claude-$uid-$(printf '%s' 'usage --provider claude --format json --source cli' | md5sum | cut -c1-8).json"
+printf '%s\n' "[{\"provider\":\"claude\",\"source\":\"oauth\",\"usage\":{\"updatedAt\":\"$observed\",\"primary\":{\"usedPercent\":30}}}]" > "$cache_file"
+cache_stamp=$(stat -c %Y "$cache_file")
+output=$(OAUTH_OUT=$expired OAUTH_EXIT=3 CLI_OUT='[]' CLI_EXIT=1 bash "$TMP/claude-shim" usage --provider claude --format json --source cli)
+check "$output" '"cached": true'
+check "$output" "$observed"
+[[ -z "$(cat "$CALLS")" || "$(cat "$CALLS")" = $'oauth\ncli' ]]
+[[ "$(stat -c %Y "$cache_file")" = "$cache_stamp" ]]
+touch -d '8 days ago' "$cache_file"
+cache_stamp=$(stat -c %Y "$cache_file")
+output=$(OAUTH_OUT=$expired OAUTH_EXIT=3 CLI_OUT='[]' CLI_EXIT=1 bash "$TMP/claude-shim" usage --provider claude --format json --source cli)
+check "$output" '"cached": true'
+check "$output" "$observed"
+check "$output" '"cacheUpdatedAt":'
+[[ "$(stat -c %Y "$cache_file")" = "$cache_stamp" ]]
+
 set +e
 output=$(OAUTH_OUT=$expired OAUTH_EXIT=3 CLI_OUT='[{"provider":"claude","error":{"message":"cli broke"}}]' CLI_EXIT=1 claude_run); rc=$?
 set -e

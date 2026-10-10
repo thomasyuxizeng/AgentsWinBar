@@ -229,10 +229,9 @@ public class StaleTimestampsAndRetentionTests
         }, now);
         added15.Should().BeFalse();
 
-        // Recovering last known usage from history gets the 10-day-old reading
-        var restored = _history.GetLastKnownUsage("claude");
-        restored.Should().NotBeNull();
-        restored!.Session!.Percent.Should().Be(30);
+        // Chart history is kept for fourteen days; usage fallback expires after seven.
+        _history.Samples.Should().ContainSingle();
+        _history.GetLastKnownUsage("claude", now).Should().BeNull();
     }
 
     [TestMethod]

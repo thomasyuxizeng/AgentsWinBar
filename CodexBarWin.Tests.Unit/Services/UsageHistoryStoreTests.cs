@@ -45,7 +45,6 @@ public class UsageHistoryStoreTests
 
     [TestMethod]
     [DataRow(-1d)]
-    [DataRow(101d)]
     [DataRow(double.NaN)]
     [DataRow(double.PositiveInfinity)]
     public void Add_WhenPercentInvalid_Rejects(double value) =>

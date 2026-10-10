@@ -66,7 +66,7 @@ public class BurndownBuilderTests
     [TestMethod]
     public void Build_WhenDuplicateTimestampsOrInvalidPercents_UsesLastValidPointWithoutZeroDurationRate()
     {
-        var series = BurndownBuilder.Build([Sample(60, 10), Sample(60, 15), Sample(90, double.NaN), Sample(100, 101)], Window, Start.AddMinutes(120));
+        var series = BurndownBuilder.Build([Sample(60, 10), Sample(60, 15), Sample(90, double.NaN), Sample(100, -1)], Window, Start.AddMinutes(120));
         series.SampleCount.Should().Be(1);
         series.Usage[0].UsedPercent.Should().Be(15);
         series.Projection.Should().BeEmpty();

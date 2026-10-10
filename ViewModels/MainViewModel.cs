@@ -363,7 +363,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
             _backgroundCostRefreshCts != null || _forceCostRefreshPending) return;
         var enabled = _settingsService.Settings.Providers.Where(p => p.IsEnabled)
             .Select(p => p.Id).Where(provider => Providers.FirstOrDefault(p =>
-                p.Provider.Equals(provider, StringComparison.OrdinalIgnoreCase))?.Cost == null).ToList();
+                p.Provider.Equals(provider, StringComparison.OrdinalIgnoreCase))?.Cost is not { } cost ||
+                CacheRetention.RetainedCost(cost, DateTime.UtcNow) == null).ToList();
         if (enabled.Count == 0) return;
         using var scanCts = new CancellationTokenSource();
         _costRefreshCts = scanCts;
@@ -607,7 +608,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     var previous = Providers[index];
                     Providers[index] = UsageChangeTracker.Annotate(data, previous, DateTime.UtcNow) with
                     {
-                        Cost = _settingsService.Settings.ShowCostTotals ? previous.Cost : null
+                        Cost = _settingsService.Settings.ShowCostTotals
+                            ? CacheRetention.RetainedCost(previous.Cost, DateTime.UtcNow) : null
                     };
                 }
             }

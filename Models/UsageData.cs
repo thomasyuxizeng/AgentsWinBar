@@ -24,6 +24,9 @@ public record UsageData
     /// <summary>When the provider's numbers were read (the CLI's usage.updatedAt, UTC). Can be much older than
     /// <see cref="FetchedAt"/> when the shim serves a cached result.</summary>
     public DateTime? DataUpdatedAt { get; init; }
+    /// <summary>The shim served an existing observation rather than fetching a new one.</summary>
+    public bool UsageIsCached { get; init; }
+    public DateTime? CacheUpdatedAt { get; init; }
     public FetchOutcome UsageFetchOutcome { get; init; }
     public FetchOutcome StatusFetchOutcome { get; init; }
     public bool UsageIsStale { get; init; }

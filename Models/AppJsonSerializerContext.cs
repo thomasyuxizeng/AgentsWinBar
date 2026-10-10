@@ -45,6 +45,8 @@ public record UsageDataDto
 {
     public string Provider { get; init; } = string.Empty;
     public string? Source { get; init; }
+    public bool Cached { get; init; }
+    public DateTime? CacheUpdatedAt { get; init; }
     public ProviderStatusDto? Status { get; init; }
     public UsageDto? Usage { get; init; }
     public string? Error { get; init; }
@@ -61,6 +63,8 @@ public record UsageDataDto
             .Select(x => new ExtraUsageWindow { Key = x.Id ?? string.Empty, Title = Helpers.WindowTitles.Short(x.Title), Window = x.Window!.ToUsageWindow()! })
             .ToList(),
         Status = Source,
+        UsageIsCached = Cached || string.Equals(Source, "cache", StringComparison.OrdinalIgnoreCase),
+        CacheUpdatedAt = CacheUpdatedAt,
         ServiceStatus = Status?.ToProviderStatus(),
         Error = Error,
         UsageFetchOutcome = !string.IsNullOrWhiteSpace(Error) || string.Equals(Source, "offline", StringComparison.OrdinalIgnoreCase)
@@ -70,7 +74,7 @@ public record UsageDataDto
                 ? FetchOutcome.Success : FetchOutcome.Unavailable,
         StatusFetchOutcome = Status == null || string.IsNullOrWhiteSpace(Status.Indicator) ? FetchOutcome.Unavailable : FetchOutcome.Success,
         FetchedAt = DateTime.UtcNow,
-        DataUpdatedAt = Usage?.UpdatedAt is { } updated ? Helpers.DataAge.ToUtc(updated) : null
+        DataUpdatedAt = (Usage?.UpdatedAt ?? CacheUpdatedAt) is { } updated ? Helpers.DataAge.ToUtc(updated) : null
     };
 }
 

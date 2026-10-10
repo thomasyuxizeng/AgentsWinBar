@@ -41,7 +41,7 @@ public static class DashboardSnapshotBuilder
             {
                 var store = new UsageHistoryStore();
                 store.Restore(byProvider[data.Provider], now);
-                if (store.GetLastKnownUsage(data.Provider) is { } restored)
+                if (store.GetLastKnownUsage(data.Provider, now) is { } restored)
                 {
                     var successAt = Utc(restored.LastSuccessfulFetch ?? restored.FetchedAt);
                     if (now - successAt <= Services.CacheRetention.MaxAge)
@@ -51,6 +51,14 @@ public static class DashboardSnapshotBuilder
                             LastSuccessfulStatusFetch = data.LastSuccessfulStatusFetch };
                     }
                 }
+            }
+            // Attached status can outlive the service cache while the app remains open.
+            if (data.ServiceStatus != null)
+            {
+                var statusAt = CacheRetention.StatusFetchedAt(data);
+                data = CacheRetention.IsRetained(statusAt, now)
+                    ? data with { LastSuccessfulStatusFetch = statusAt > now ? now : statusAt }
+                    : data with { ServiceStatus = null, LastSuccessfulStatusFetch = null, StatusIsStale = false };
             }
             var id = data.Provider ?? string.Empty;
             var history = byProvider[id].ToArray();
@@ -93,7 +101,8 @@ public static class DashboardSnapshotBuilder
             Add("tertiary", DashboardWindowKind.Tertiary, labeled.TertiaryLabel, data.Tertiary);
             foreach (var extra in extras)
                 Add(UsageHistoryStore.ExtraWindowKey(extra), DashboardWindowKind.Extra, extra.Title, extra.Window);
-            var cost = data.Cost is { } raw ? raw with { Daily = (raw.Daily ?? []).OfType<DailyCost>().ToArray() } : null;
+            var cost = CacheRetention.RetainedCost(data.Cost, now) is { } raw
+                ? raw with { Daily = (raw.Daily ?? []).OfType<DailyCost>().ToArray() } : null;
             var oldReading = DataAge.OldReadingUtc(Utc(data.FetchedAt), data.DataUpdatedAt);
             var usageAt = Utc(data.LastSuccessfulFetch) ?? (data.HasUsage ? Utc(data.FetchedAt) : (DateTime?)null);
             var staleTimes = new List<DateTime>();

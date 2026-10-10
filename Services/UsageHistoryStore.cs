@@ -17,7 +17,7 @@ public sealed class UsageHistoryStore
     public bool Add(UsageHistorySample sample, DateTime nowUtc)
     {
         if (!ProviderConstants.IsValidProvider(sample.Provider) || string.IsNullOrWhiteSpace(sample.WindowKey) ||
-            !double.IsFinite(sample.UsedPercent) || sample.UsedPercent is < 0 or > 100) return false;
+            !double.IsFinite(sample.UsedPercent) || sample.UsedPercent < 0) return false;
         sample = sample with { Provider = ProviderConstants.ValidateAndNormalize(sample.Provider),
             Timestamp = Utc(sample.Timestamp), ResetsAt = sample.ResetsAt.HasValue ? Utc(sample.ResetsAt.Value) : null };
         nowUtc = Utc(nowUtc);
@@ -39,7 +39,7 @@ public sealed class UsageHistoryStore
 
     public int Record(UsageData data, DateTime nowUtc)
     {
-        if (data.IsLoading || data.HasError || data.UsageIsStale) return 0;
+        if (data.IsLoading || data.HasError || data.UsageIsStale || data.UsageIsCached) return 0;
         var windows = new List<(string Key, UsageWindow Window)>();
         if (data.Session != null) windows.Add(("session", data.Session));
         if (data.Weekly != null) windows.Add(("weekly", data.Weekly));
@@ -54,15 +54,19 @@ public sealed class UsageHistoryStore
     }
 
     /// <summary>Recover the most recent observation of each window when a full cached reading is unavailable.</summary>
-    public UsageData? GetLastKnownUsage(string provider)
+    public UsageData? GetLastKnownUsage(string provider, DateTime? nowUtc = null)
     {
-        var samples = Samples.Where(s => s.Provider.Equals(provider, StringComparison.OrdinalIgnoreCase))
+        var now = Utc(nowUtc ?? DateTime.UtcNow);
+        var samples = Samples.Where(s => s.Provider.Equals(provider, StringComparison.OrdinalIgnoreCase) &&
+                CacheRetention.IsRetained(s.Timestamp, now))
             .GroupBy(s => s.WindowKey).Select(g => g.MaxBy(s => s.Timestamp)!).ToArray();
         if (samples.Length == 0) return null;
         UsageWindow Window(UsageHistorySample sample) => new()
         { ReportedPercent = sample.UsedPercent, ResetAt = sample.ResetsAt };
         UsageWindow? Named(string key) => samples.FirstOrDefault(s => s.WindowKey == key) is { } sample ? Window(sample) : null;
-        var fetchedAt = samples.Max(s => s.Timestamp);
+        // UsageData has one retention timestamp. Use the oldest recovered window conservatively:
+        // a newer window must never extend an older window's retention deadline.
+        var fetchedAt = samples.Min(s => s.Timestamp);
         return new UsageData
         {
             Provider = ProviderConstants.ValidateAndNormalize(provider), Session = Named("session"), Weekly = Named("weekly"),

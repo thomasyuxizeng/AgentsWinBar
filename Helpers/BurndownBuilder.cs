@@ -32,7 +32,7 @@ public static class BurndownBuilder
         if (nowUtc >= end) return new() { Message = "Waiting for window reset" };
         var current = samples.Where(s => s.ResetsAt.HasValue && Utc(s.ResetsAt.Value) == end &&
                 Utc(s.Timestamp) >= start && Utc(s.Timestamp) <= nowUtc &&
-                double.IsFinite(s.UsedPercent) && s.UsedPercent is >= 0 and <= 100)
+                double.IsFinite(s.UsedPercent) && s.UsedPercent >= 0)
             .OrderBy(s => Utc(s.Timestamp)).GroupBy(s => Utc(s.Timestamp)).Select(g => g.Last()).ToList();
         var duration = (end - start).TotalSeconds;
         var points = current.Select(s => new BurndownPoint((Utc(s.Timestamp) - start).TotalSeconds / duration, s.UsedPercent)).ToList();
