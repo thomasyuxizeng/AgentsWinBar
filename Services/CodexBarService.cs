@@ -742,6 +742,15 @@ public class CodexBarService : ICodexBarService
         // Case 2: CLI SUPPLIED a status (e.g. Claude, Codex, etc.)
         var cliStatus = data.ServiceStatus;
 
+        // MERGE rule 0: a replayed (cached) CLI status is older than the status page the app just fetched. When the
+        // replay says healthy but the fetched page reports an open incident, trust the fetched page.
+        if (cliStatus.Indicator == ProviderStatusIndicator.None && data.UsageIsCached && status != null &&
+            status.Indicator != ProviderStatusIndicator.None &&
+            (!string.IsNullOrWhiteSpace(status.IncidentTitle) || !string.IsNullOrWhiteSpace(status.LatestUpdateText)))
+        {
+            return data with { ServiceStatus = status };
+        }
+
         // MERGE rule 1: If CLI returned an indicator of 'None' (healthy), clear any old incident detail
         // (no stale incident text on a healthy provider).
         if (cliStatus.Indicator == ProviderStatusIndicator.None)

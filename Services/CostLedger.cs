@@ -247,6 +247,9 @@ public sealed class CostLedger : ICostLedger
             return;
         }
 
+        // Leave the caller thread before any file IO (the scan callback may run on the UI thread).
+        await Task.Yield();
+
         var acquired = false;
         try
         {

@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-10-11
+
 ### Added
 - Provider incident fetcher (`ProviderIncidentFetcher`) and status text sanitizer (`IncidentTextSanitizer`) for provider outage and degradation details across Claude, Codex, and Gemini feeds.
 - Service status incident detail integration in `CodexBarService`, dashboard snapshot models (`DashboardProvider`), and caption presentation helpers (`IncidentCaption`).
@@ -205,7 +207,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Window slide-in animation from system tray
 - Setup wizard for first-time configuration
 
-[Unreleased]: https://github.com/Wave-OCE/CodexBarWin/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/Wave-OCE/CodexBarWin/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/Wave-OCE/CodexBarWin/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/Wave-OCE/CodexBarWin/compare/v1.0.2...v1.1.0
 [1.0.2]: https://github.com/Wave-OCE/CodexBarWin/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/Wave-OCE/CodexBarWin/compare/v1.0.0...v1.0.1

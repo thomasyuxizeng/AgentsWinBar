@@ -197,9 +197,24 @@ public class CodexBarServiceReviewRegressionTests
     }
 
     [TestMethod]
-    [DataRow(false)]
+    public async Task GetUsageAsync_ReplayCliHealthy_FetchedOpenIncidentWins()
+    {
+        var observation = _clock.Now.UtcDateTime;
+        var service = Service();
+        _fetcher.Setup(f => f.GetIncidentAsync("claude", It.IsAny<CancellationToken>())).ReturnsAsync(Incident("Live outage"));
+        Respond(Reading("claude", observation));
+        await service.GetUsageAsync("claude");
+        _clock.Now += TimeSpan.FromMinutes(1);
+        Respond(Reading("claude", observation, cached: true, indicator: "none"));
+        var replay = (await service.GetUsageAsync("claude"))!;
+        replay.ServiceStatus!.Indicator.Should().NotBe(ProviderStatusIndicator.None);
+        replay.ServiceStatus.IncidentTitle.Should().Be("Live outage");
+        replay.StatusIsStale.Should().BeFalse();
+    }
+
+    [TestMethod]
     [DataRow(true)]
-    public async Task GetUsageAsync_ReplayCliHealthy_ClearsIncidentEvenWhenFetcherHasIncidentOrFails(bool fetcherFails)
+    public async Task GetUsageAsync_ReplayCliHealthy_ClearsIncidentWhenFetcherFails(bool fetcherFails)
     {
         var observation = _clock.Now.UtcDateTime;
         var service = Service();
