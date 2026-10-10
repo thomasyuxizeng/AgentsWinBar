@@ -161,7 +161,7 @@ public class StaleTimestampsAndRetentionTests
     [DataRow(30, "30d ago")]
     [DataRow(180, "180d ago")]
     [DataRow(365, "365d ago")]
-    public async Task VeryOldData_CacheServiceAndCostStoreExpireAfterSevenDays(int daysOld, string expectedAge)
+    public async Task VeryOldData_CacheServiceExpiresAfterSevenDaysWhileCostStoreRetainsIndefinitely(int daysOld, string expectedAge)
     {
         var now = DateTime.UtcNow;
         var oldDate = now.AddDays(-daysOld);
@@ -191,7 +191,7 @@ public class StaleTimestampsAndRetentionTests
         var restoredUsage = cache.GetLastKnown("claude");
         restoredUsage.Should().BeNull();
 
-        // 2. CostCacheStore persists and restores very old costs
+        // 2. CostCacheStore persists and restores very old costs (retained indefinitely)
         var costPath = Path.Combine(_directory, $"cost-{daysOld}.json");
         var store = CreateCosts(costPath);
         await store.SaveAsync(new Dictionary<string, CostData>
@@ -206,7 +206,8 @@ public class StaleTimestampsAndRetentionTests
         });
 
         var loadedCosts = await store.LoadAsync();
-        loadedCosts.ContainsKey("claude").Should().BeFalse();
+        loadedCosts.ContainsKey("claude").Should().BeTrue();
+        loadedCosts["claude"].Last30DaysCostUSD.Should().Be(150m);
 
         // 3. StaleCaption formats the age string accurately
         StaleCaption.Text(true, oldDate, now).Should().Be($"Stale · last updated {expectedAge}");
@@ -316,7 +317,7 @@ public class StaleTimestampsAndRetentionTests
     }
 
     [TestMethod]
-    public async Task CostStore_BoundarySevenDays_KeepsAt6d23hAndDropsAt7d1m()
+    public async Task CostStore_BoundarySevenDays_KeepsAt6d23hAndRetainsAt7d1m()
     {
         var now = _clock.CurrentTime.UtcDateTime;
         var age6d23h = TimeSpan.FromDays(7) - TimeSpan.FromHours(1);
@@ -355,7 +356,7 @@ public class StaleTimestampsAndRetentionTests
         var loadedExact = await storeExact.LoadAsync();
         loadedExact.ContainsKey("claude").Should().BeTrue();
 
-        // 7d 1m: dropped
+        // 7d 1m: retained (cost data exempt from 7-day expiry)
         var store2 = CreateCosts(Path.Combine(_directory, "cost-dropped.json"));
         await store2.SaveAsync(new Dictionary<string, CostData>
         {
@@ -369,11 +370,11 @@ public class StaleTimestampsAndRetentionTests
             }
         });
         var loaded2 = await store2.LoadAsync();
-        loaded2.ContainsKey("claude").Should().BeFalse();
+        loaded2.ContainsKey("claude").Should().BeTrue();
     }
 
     [TestMethod]
-    public async Task LastGoodCost_BoundarySevenDays_KeepsAt6d23hAndDropsAt7d1m()
+    public async Task LastGoodCost_BoundarySevenDays_KeepsAt6d23hAndRetainsAt7d1m()
     {
         var wsl = new MockWslService();
         var service = CreateCodexBarService(wsl);
@@ -397,10 +398,12 @@ public class StaleTimestampsAndRetentionTests
         costKept.Should().NotBeNull();
         costKept!.IsStale.Should().BeTrue();
 
-        // At 7d 1m (advance by 1h 2m from 6d23h): dropped (returns null)
+        // At 7d 1m (advance by 1h 2m from 6d23h): still retained indefinitely as stale!
         _clock.CurrentTime += TimeSpan.FromHours(1) + TimeSpan.FromMinutes(2);
-        var costDropped = await service.GetCostAsync("claude", forceRefresh: true);
-        costDropped.Should().BeNull();
+        var costPast7d = await service.GetCostAsync("claude", forceRefresh: true);
+        costPast7d.Should().NotBeNull();
+        costPast7d!.IsStale.Should().BeTrue();
+        costPast7d.TodayCostUSD.Should().Be(5.0m);
     }
 
     [TestMethod]

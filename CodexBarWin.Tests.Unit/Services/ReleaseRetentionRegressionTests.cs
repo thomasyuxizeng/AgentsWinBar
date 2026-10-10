@@ -386,8 +386,10 @@ public class ReleaseRetentionRegressionTests
 
     [TestMethod]
     [DataRow(7, true)]
-    [DataRow(8, false)]
-    public async Task GetUsageAsync_AttachedCost_ExpiresWhenCarriedForward(int ageDays, bool retained)
+    [DataRow(8, true)]
+    [DataRow(30, true)]
+    [DataRow(365, true)]
+    public async Task GetUsageAsync_AttachedCost_RetainedIndefinitelyWhenCarriedForward(int ageDays, bool retained)
     {
         var now = _clock.Now.UtcDateTime;
         _cache.PreloadCache("claude", new() { Provider = "claude", FetchedAt = now,
@@ -401,8 +403,10 @@ public class ReleaseRetentionRegressionTests
 
     [TestMethod]
     [DataRow(7, true)]
-    [DataRow(8, false)]
-    public void Build_AttachedCost_ExpiresIndependentlyOfFreshUsage(int ageDays, bool retained)
+    [DataRow(8, true)]
+    [DataRow(30, true)]
+    [DataRow(365, true)]
+    public void Build_AttachedCost_RetainedIndefinitelyWhileUsageExpires(int ageDays, bool retained)
     {
         var now = _clock.Now.UtcDateTime;
         var snapshot = DashboardSnapshotBuilder.Build(new() { NowUtc = now, Settings = new() { ShowCostTotals = true },

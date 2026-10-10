@@ -22,6 +22,7 @@ public sealed record DashboardInputs
     public IReadOnlyList<DashboardRefreshEntry> RecentRefreshes { get; init; } = [];
     public IReadOnlyList<DashboardAlertEntry> RecentAlerts { get; init; } = [];
     public IReadOnlyList<DashboardCostCacheEntry> CostCache { get; init; } = [];
+    public ICostLedger? CostLedger { get; init; }
 }
 
 public static class DashboardSnapshotBuilder
@@ -88,6 +89,11 @@ public static class DashboardSnapshotBuilder
                 Add(UsageHistoryStore.ExtraWindowKey(extra), DashboardWindowKind.Extra, extra.Title, extra.Window);
             var cost = CacheRetention.RetainedCost(data.Cost, now) is { } raw
                 ? raw with { Daily = (raw.Daily ?? []).OfType<DailyCost>().ToArray() } : null;
+            if (cost != null && cost.IsStale && inputs.CostLedger != null)
+            {
+                var ledger30 = inputs.CostLedger.GetLast30Days(id, today);
+                cost = cost.WithLedgerLast30Days(ledger30);
+            }
             var oldReading = DataAge.OldReadingUtc(Utc(data.FetchedAt), data.DataUpdatedAt);
             var usageAt = Utc(data.LastSuccessfulFetch) ?? (data.HasUsage ? Utc(data.FetchedAt) : (DateTime?)null);
             var staleTimes = new List<DateTime>();

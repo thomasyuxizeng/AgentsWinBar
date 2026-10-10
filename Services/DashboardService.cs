@@ -14,6 +14,7 @@ public sealed class DashboardService : IDashboardService
     private readonly ICodexBarService _cli;
     private readonly ILogger<DashboardService> _logger;
     private readonly TimeProvider _clock;
+    private readonly ICostLedger? _costLedger;
     private readonly object _gate = new();
     private readonly string? _appVersion = typeof(DashboardService).Assembly
         .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
@@ -24,10 +25,12 @@ public sealed class DashboardService : IDashboardService
     private bool? _cliAvailable;
 
     public DashboardService(ISettingsService settings, UsageHistoryStore history, UsageHistoryPersistence persistence,
-        IActivityLog activity, ICodexBarService cli, ILogger<DashboardService> logger, TimeProvider? timeProvider = null)
+        IActivityLog activity, ICodexBarService cli, ILogger<DashboardService> logger, TimeProvider? timeProvider = null,
+        ICostLedger? costLedger = null)
     {
         _settings = settings; _history = history; _persistence = persistence;
         _activity = activity; _cli = cli; _logger = logger; _clock = timeProvider ?? TimeProvider.System;
+        _costLedger = costLedger;
     }
 
     public DashboardSnapshot GetSnapshot(IReadOnlyList<UsageData> providers, DateTime? lastRefreshUtc,
@@ -46,7 +49,8 @@ public sealed class DashboardService : IDashboardService
             NextRefreshUtc = nextRefreshUtc, EffectiveRefreshInterval = effectiveRefreshInterval,
             CliVersion = version, CliAvailable = available, AppVersion = _appVersion,
             SettingsPath = _settings.SettingsFilePath, RecentRefreshes = _activity.RecentRefreshes,
-            RecentAlerts = _activity.RecentAlerts, CostCache = _cli.GetCostCacheInfo()
+            RecentAlerts = _activity.RecentAlerts, CostCache = _cli.GetCostCacheInfo(),
+            CostLedger = _costLedger
         });
     }
 

@@ -5,7 +5,7 @@ using Microsoft.Extensions.Logging;
 namespace CodexBarWin.Services;
 
 /// <summary>
-/// Atomic cost-cache.json beside the settings file. Last-known values are retained for up to seven days,
+/// Atomic cost-cache.json beside the settings file. Last-known cost values are retained indefinitely,
 /// and developer mode never reads or writes it.
 /// </summary>
 public sealed class CostCacheStore : ICostCacheStore
@@ -54,7 +54,6 @@ public sealed class CostCacheStore : ICostCacheStore
                     if (lastSuccessUtc > now) currentData = currentData with { LastSuccessfulFetch = now };
                 }
                 var successAt = (currentData.LastSuccessfulFetch ?? currentData.FetchedAt).ToUniversalTime();
-                if (now - successAt > CacheRetention.MaxAge) continue;
                 items[provider] = currentData with { Provider = provider, Daily = currentData.Daily ?? [] };
             }
         }
@@ -75,8 +74,7 @@ public sealed class CostCacheStore : ICostCacheStore
             var now = _clock.GetUtcNow().UtcDateTime;
             var file = new CostCacheFile
             {
-                Items = items.Where(pair => pair.Value.HasData &&
-                    now - (pair.Value.LastSuccessfulFetch ?? pair.Value.FetchedAt).ToUniversalTime() <= CacheRetention.MaxAge)
+                Items = items.Where(pair => pair.Value.HasData)
                     .ToDictionary(pair => pair.Key, pair => pair.Value)
             };
             var json = JsonSerializer.Serialize(file, AppJsonSerializerContext.Default.CostCacheFile);

@@ -25,6 +25,7 @@ public class CodexBarService : ICodexBarService
     // a real machine), so they get their own deadline instead of the interactive usage timeout.
     internal static readonly TimeSpan CostScanTimeout = TimeSpan.FromMinutes(5);
     private readonly ICostCacheStore? _costStore;
+    private readonly ICostLedger? _costLedger;
     private readonly UsageHistoryStore? _history;
     private readonly IGeminiStatusFallback? _geminiStatusFallback;
     private readonly IProviderIncidentFetcher? _incidentFetcher;
@@ -70,10 +71,12 @@ public class CodexBarService : ICodexBarService
         ICostCacheStore? costStore = null,
         UsageHistoryStore? history = null,
         IGeminiStatusFallback? geminiStatusFallback = null,
-        IProviderIncidentFetcher? incidentFetcher = null)
+        IProviderIncidentFetcher? incidentFetcher = null,
+        ICostLedger? costLedger = null)
     {
         _history = history;
         _costStore = costStore;
+        _costLedger = costLedger;
         _geminiStatusFallback = geminiStatusFallback;
         _incidentFetcher = incidentFetcher;
         _wslService = wslService;
@@ -283,14 +286,14 @@ public class CodexBarService : ICodexBarService
     private CostData? LastGoodCost(string provider, DateTimeOffset now)
     {
         if (!_lastGoodCost.TryGetValue(provider, out var data)) return null;
-        var successAt = (data.LastSuccessfulFetch ?? data.FetchedAt).ToUniversalTime();
-        if (now.UtcDateTime - successAt > CacheRetention.MaxAge)
+        var staleCost = data with { IsStale = true, LastSuccessfulFetch = data.LastSuccessfulFetch ?? data.FetchedAt };
+        if (_costLedger != null)
         {
-            _lastGoodCost.Remove(provider);
-            _costStoreDirty = true;
-            return null;
+            var today = DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(now.UtcDateTime, _timeProvider.LocalTimeZone));
+            var ledger30 = _costLedger.GetLast30Days(provider, today);
+            staleCost = staleCost.WithLedgerLast30Days(ledger30);
         }
-        return data with { IsStale = true, LastSuccessfulFetch = data.LastSuccessfulFetch ?? data.FetchedAt };
+        return staleCost;
     }
 
     private async Task SaveCostStoreAsync()
@@ -299,16 +302,6 @@ public class CodexBarService : ICodexBarService
         Dictionary<string, CostData>? snapshot = null;
         lock (_costCache)
         {
-            var nowUtc = _timeProvider.GetUtcNow().UtcDateTime;
-            foreach (var (k, v) in _lastGoodCost.ToList())
-            {
-                var successAt = (v.LastSuccessfulFetch ?? v.FetchedAt).ToUniversalTime();
-                if (nowUtc - successAt > CacheRetention.MaxAge)
-                {
-                    _lastGoodCost.Remove(k);
-                    _costStoreDirty = true;
-                }
-            }
             if (!_costStoreDirty) return;
             snapshot = new Dictionary<string, CostData>(_lastGoodCost, StringComparer.Ordinal);
             _costStoreDirty = false;
@@ -350,6 +343,12 @@ public class CodexBarService : ICodexBarService
                     _restoredCost.Remove(provider);
                     _costStoreDirty = true;
                 }
+            }
+            if (data.HasData && _costLedger != null)
+            {
+                Helpers.AsyncHelper.SafeFireAndForget(
+                    _costLedger.RecordScanAsync(data, attemptedAt.UtcDateTime),
+                    onError: ex => _logger.LogDebug(ex, "Cost ledger update failed for {Provider}", provider));
             }
             return data.HasData ? data : null;
         }

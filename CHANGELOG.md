@@ -11,11 +11,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Provider incident fetcher (`ProviderIncidentFetcher`) and status text sanitizer (`IncidentTextSanitizer`) for provider outage and degradation details across Claude, Codex, and Gemini feeds.
 - Service status incident detail integration in `CodexBarService`, dashboard snapshot models (`DashboardProvider`), and caption presentation helpers (`IncidentCaption`).
 - Incident detail (title, latest update, update age) is shown in the service status banner on the dashboard and the provider detail page, and in the status dot tooltips.
+- Permanent cost ledger (`Services/CostLedger.cs`, `ICostLedger`) persisting daily cost and token series to `cost-ledger.json` across local CLI log rotations, with atomic writes, rolling `.bak` backup, resilient corrupt file rotation, and automatic first-run backfill from `cost-cache.json`.
+- Query API on `ICostLedger` for pure lifetime totals (`GetLifetime`), daily date ranges (`GetRange`), and 30 calendar day series (`GetLast30Days`) with distinct 'no data' vs recorded zero indication.
+- Standalone read-only PowerShell report script `tools/cost-ledger-report.ps1` to query lifetime and last-30-days totals per provider or custom date ranges.
 
 ### Changed
 - Detail page: the stale service status line now sits with the status instead of under the Source row.
 - Detail page: "Last fetched" keeps the absolute fetch time when data is stale and appends the stale caption.
 - The failed-fetch banner says "Showing last-known data from ..." when the usage shown is the last good reading.
+- Cost data is now retained indefinitely in cache and memory, exempt from the 7-day retention limit that continues to apply to usage meters and service status.
+- Stale dashboard cost displays and trailing 30-day totals now recompute reliably from the permanent cost ledger when a fresh CLI scan is unavailable or covers fewer than 30 days.
 
 ### Fixed
 - Claude no longer shows 'Fetch failed' on every other refresh when the WSL shim replays a cached reading within its 10-minute TTL.
