@@ -197,6 +197,39 @@ public class CodexBarServiceReviewRegressionTests
     }
 
     [TestMethod]
+    public async Task GetUsageAsync_ReplayInsideShimTtl_CountsAsFetchedNow_AndKeepsObservationTime()
+    {
+        var observation = _clock.Now.UtcDateTime;
+        var service = Service();
+        Respond(Reading("claude", observation));
+        var first = (await service.GetUsageAsync("claude"))!;
+        _clock.Now += TimeSpan.FromMinutes(6);
+        Respond(Reading("claude", observation, cached: true));
+        var replay = (await service.GetUsageAsync("claude"))!;
+        replay.UsageIsStale.Should().BeFalse();
+        replay.Error.Should().BeNull();
+        // The replay is a current answer: it must not age the card past the 5-minute "Stale data" rule.
+        replay.FetchedAt.Should().Be(_clock.Now.UtcDateTime);
+        // ...but the original observation time is preserved, so a replay can never renew its own expiry.
+        replay.LastSuccessfulFetch.Should().Be(first.LastSuccessfulFetch);
+    }
+
+    [TestMethod]
+    public async Task GetUsageAsync_ReplayBeyondShimTtl_KeepsOriginalFetchedAt_AndIsStale()
+    {
+        var observation = _clock.Now.UtcDateTime;
+        var service = Service();
+        Respond(Reading("claude", observation));
+        var first = (await service.GetUsageAsync("claude"))!;
+        _clock.Now += TimeSpan.FromMinutes(12);
+        Respond(Reading("claude", observation, cached: true));
+        var replay = (await service.GetUsageAsync("claude"))!;
+        replay.UsageIsStale.Should().BeTrue();
+        replay.FetchedAt.Should().Be(first.FetchedAt);
+        replay.LastSuccessfulFetch.Should().Be(first.LastSuccessfulFetch);
+    }
+
+    [TestMethod]
     public async Task GetUsageAsync_ReplayCliHealthy_FetchedOpenIncidentWins()
     {
         var observation = _clock.Now.UtcDateTime;

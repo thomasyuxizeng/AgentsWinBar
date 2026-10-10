@@ -896,7 +896,10 @@ public class CodexBarService : ICodexBarService
             Credits = acceptsUsage ? (isReplayOfHeld ? previous!.Credits : data.Credits) : previous?.Credits,
             Plan = acceptsUsage ? (isReplayOfHeld ? previous!.Plan : data.Plan) : previous?.Plan,
             Status = acceptsUsage ? (isReplayOfHeld ? previous!.Status : data.Status) : previous?.Status,
-            FetchedAt = acceptsUsage ? (isReplayOfHeld ? previous!.FetchedAt : usageAt) : previous?.FetchedAt ?? data.FetchedAt,
+            // A replay inside the shim TTL is a current answer (the shim vouches for it for ShimTtl): the app fetched it now, so it is
+            // not "stale" just because the observation is a few minutes old. Beyond the TTL the original time is kept so a replay
+            // can never renew its own expiry. LastSuccessfulFetch (below) always keeps the original observation time.
+            FetchedAt = acceptsUsage ? (isReplayOfHeld ? (isHeldStale ? previous!.FetchedAt : now) : usageAt) : previous?.FetchedAt ?? data.FetchedAt,
             DataUpdatedAt = acceptsUsage ? (isReplayOfHeld ? previous!.DataUpdatedAt : data.DataUpdatedAt) : previous?.DataUpdatedAt,
             CacheUpdatedAt = acceptsUsage ? (isReplayOfHeld ? previous!.CacheUpdatedAt : data.CacheUpdatedAt) : previous?.CacheUpdatedAt,
             LastSuccessfulFetch = acceptsUsage ? (isReplayOfHeld ? previous!.LastSuccessfulFetch : usageAt) : previous?.LastSuccessfulFetch ?? previous?.FetchedAt,
