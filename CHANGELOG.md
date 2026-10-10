@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Provider cards and the detail page show a quiet "Stale · last updated 12m ago" caption, including for cost and tokens, when the dashboard is showing last-known-good data.
+- Added a 7-day expiry on all last-known-good cache data across usage and cost caches, in-memory cost tracking, and history restore fallback; expired entries are purged on load/save and treated as absent.
+
+### Fixed
+- Failed, empty, offline, and timed-out provider refreshes retain the last successful usage windows, status, cost and token totals across restarts. Expired readings remain available as stale fallbacks within 7 days, usage history recovers missing windows, and successful zero readings replace older values. Dashboard models now expose staleness and last-success timestamps per data kind.
+- Over-quota readings exceeding 100% (e.g. 105%) are accepted as valid readings rather than treated as failed fetches, showing honest percentages in the UI while clamping visual bar fills to 100%.
+- Clock skew tolerance of up to 5 minutes is shared and clamped across cache loading instead of discarding entire cache entries.
+- Cache loading now treats explicitly null `extraWindows` JSON fields as empty instead of skipping the provider.
+- `CostCacheStore` and `UsageData.IsStale` normalize timestamps to UTC, preventing false future/stale classifications with Local or Unspecified DateTimeKind.
+
 ## [1.0.2] - 2026-10-08
 
 ### Fixed

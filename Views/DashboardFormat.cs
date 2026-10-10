@@ -25,8 +25,9 @@ internal static class DashboardFormat
     public static Visibility VisCount(int count) => count > 0 ? Visibility.Visible : Visibility.Collapsed;
     public static Visibility VisEmpty(int count) => count == 0 ? Visibility.Visible : Visibility.Collapsed;
 
-    public static string Percent(double value) => $"{DashboardValues.Percent(value):F0}%";
-    public static string Used(double value) => $"{DashboardValues.Percent(value):F0}% used";
+    public static string Percent(double value) => $"{FormatPercent(value):F0}%";
+    public static string Used(double value) => $"{FormatPercent(value):F0}% used";
+    private static double FormatPercent(double value) => double.IsFinite(value) ? Math.Max(0, value) : 0;
     public static double Time(double? elapsedPercent) => elapsedPercent is { } value && double.IsFinite(value) ? DashboardValues.Percent(value) : -1;
 
     /// <summary>"Near limit" / "At limit" chip (80% / 95%, the same thresholds as the bars); hidden below 80%.</summary>
@@ -106,9 +107,15 @@ internal static class DashboardFormat
 
     public static string Freshness(DashboardProvider? provider) => provider == null ? string.Empty
         : provider.IsLoading ? "Refreshing…"
+        : provider.UsageIsStale ? StaleCaption.Text(true, provider.LastSuccessfulUsageFetchUtc, DateTime.UtcNow)
         : provider.OldReadingUtc is { } reading
             ? $"Data from {Local(reading)} · {Ago(reading)} · fetched {Ago(provider.FetchedAtUtc)}"
             : $"Fetched {Local(provider.FetchedAtUtc)} · {Ago(provider.FetchedAtUtc)}";
+
+    /// <summary>Caption under the cost heading when totals are last-known-good; empty when fresh.</summary>
+    public static string CostStale(DashboardCost? cost) => cost == null ? string.Empty
+        : StaleCaption.Text(cost.IsStale, cost.LastSuccessfulFetchUtc, DateTime.UtcNow);
+    public static Visibility VisCostStale(DashboardCost? cost) => VisText(CostStale(cost));
 
     /// <summary>A short note for a provider card's header: what needs attention, or nothing.</summary>
     public static string CardNote(DashboardProvider? provider) => provider == null ? string.Empty
@@ -120,7 +127,7 @@ internal static class DashboardFormat
     public static string MiniTip(DashboardWindow? window) => window == null ? string.Empty
         : string.Join('\n', new[]
         {
-            $"{window.Title}: {DashboardValues.Percent(window.UsedPercent):F0}% used",
+            $"{window.Title}: {FormatPercent(window.UsedPercent):F0}% used",
             ResetLine(window.ResetText, window.ResetsAtUtc),
             window.PaceSummary
         }.Where(line => !string.IsNullOrWhiteSpace(line)));

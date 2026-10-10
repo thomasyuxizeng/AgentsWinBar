@@ -83,19 +83,21 @@ public class CodexBarServiceTests
     [TestMethod]
     public async Task GetUsageAsync_ArrayMissingRequestedProvider_UsesCacheWithoutCachingOtherProvider()
     {
-        var cached = new UsageData { Provider = "claude", Plan = "Cached" };
+        var cached = new UsageData { Provider = "claude", Plan = "Cached", Session = new() { ReportedPercent = 42 } };
         _mockCacheService.Set("claude", cached);
         _mockWslService.SetCommandResult("codexbar --provider claude --format json --source cli --status",
             new WslResult { Success = true, Output = "[{\"provider\":\"codex\"}]" });
 
-        (await _service.GetUsageAsync("claude")).Should().BeSameAs(cached);
+        var result = await _service.GetUsageAsync("claude");
+        result!.Session.Should().BeEquivalentTo(cached.Session);
+        result.UsageIsStale.Should().BeTrue();
         _mockCacheService.Get("codex").Should().BeNull();
     }
 
     [TestMethod]
     [DataRow(9)]
     [DataRow(-7)]
-    public async Task GetCostAsync_CacheHitCrossesLocalMidnight_ClearsTodayWithoutMutatingCachedResult(int offsetHours)
+    public async Task GetCostAsync_CacheHitCrossesLocalMidnight_RetainsTodayAsStaleWithoutMutatingCachedResult(int offsetHours)
     {
         var offset = TimeSpan.FromHours(offsetHours);
         var clock = new CostClock
@@ -111,7 +113,7 @@ public class CodexBarServiceTests
         clock.Now += TimeSpan.FromMinutes(10);
         var normalized = await service.GetCostAsync("claude");
 
-        normalized.Should().BeEquivalentTo(original! with { TodayCostUSD = 0, TodayTokens = 0 });
+        normalized.Should().BeEquivalentTo(original! with { IsStale = true });
         original!.TodayCostUSD.Should().Be(1.5m);
         original.TodayTokens.Should().Be(20);
         normalized!.Daily.Should().BeSameAs(original.Daily);
@@ -541,16 +543,16 @@ public class CodexBarServiceTests
         var good = await service.GetCostAsync("claude");
         good!.Last30DaysCostUSD.Should().Be(5m);
         SetCostResponse(success: false, json: "Command timed out");
-        (await service.GetCostAsync("claude", forceRefresh: true)).Should().BeSameAs(good);
+        (await service.GetCostAsync("claude", forceRefresh: true)).Should().BeEquivalentTo(good! with { IsStale = true });
         // The failure still backs off; the cached answer during backoff is the last good result, not nothing.
         clock.Now += TimeSpan.FromMinutes(10);
-        (await service.GetCostAsync("claude")).Should().BeSameAs(good);
+        (await service.GetCostAsync("claude")).Should().BeEquivalentTo(good! with { IsStale = true });
         _mockWslService.ExecutedCommands.Should().HaveCount(2);
         service.GetCostCacheInfo().Single().HasData.Should().BeFalse();
     }
 
     [TestMethod]
-    public async Task GetCostAsync_LastGoodFromEarlierDay_ClearsTodayButKeepsThirtyDayTotals()
+    public async Task GetCostAsync_LastGoodFromEarlierDay_RetainsTodayAndThirtyDayTotalsAsStale()
     {
         var clock = new CostClock(); var service = CostService(clock);
         SetCostResponse();
@@ -558,7 +560,8 @@ public class CodexBarServiceTests
         clock.Now += TimeSpan.FromDays(1);
         SetCostResponse(success: false, json: "Command timed out");
         var stale = await service.GetCostAsync("claude");
-        stale!.TodayCostUSD.Should().Be(0m);
+        stale!.TodayCostUSD.Should().Be(1.5m);
+        stale.IsStale.Should().BeTrue();
         stale.TodayTokens.Should().Be(0);
         stale.Last30DaysCostUSD.Should().Be(5m);
         stale.Last30DaysTokens.Should().Be(123456);
@@ -605,7 +608,9 @@ public class CodexBarServiceTests
 
         var results = await CollectCostsAsync(StoredCostService(store, clock), ["codex"]);
 
-        results.Should().HaveCount(2).And.OnlyContain(r => ReferenceEquals(r.Cost, stored));
+        results.Should().HaveCount(2);
+        foreach (var result in results)
+            result.Cost.Should().BeEquivalentTo(stored with { IsStale = true, LastSuccessfulFetch = stored.FetchedAt });
         store.Saves.Should().BeEmpty();
     }
 
@@ -635,14 +640,28 @@ public class CodexBarServiceTests
     }
 
     [TestMethod]
-    public async Task GetCostAsync_LastGoodOlderThanSevenDays_IsNoLongerServed()
+    public async Task GetCostAsync_LastGoodOlderThanSevenDays_IsDropped()
     {
         var clock = new CostClock(); var service = CostService(clock);
         SetCostResponse();
         await service.GetCostAsync("claude");
         clock.Now += TimeSpan.FromDays(8);
         SetCostResponse(success: false, json: "Command timed out");
-        (await service.GetCostAsync("claude")).Should().BeNull();
+        var stale = await service.GetCostAsync("claude");
+        stale.Should().BeNull();
+    }
+
+    [TestMethod]
+    public async Task GetCostAsync_LastGoodWithinSevenDays_IsStillServedAsStale()
+    {
+        var clock = new CostClock(); var service = CostService(clock);
+        SetCostResponse();
+        await service.GetCostAsync("claude");
+        clock.Now += TimeSpan.FromDays(3);
+        SetCostResponse(success: false, json: "Command timed out");
+        var stale = await service.GetCostAsync("claude");
+        stale!.Last30DaysTokens.Should().Be(123456);
+        stale.IsStale.Should().BeTrue();
     }
 
     [TestMethod]

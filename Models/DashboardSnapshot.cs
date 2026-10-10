@@ -76,6 +76,13 @@ public sealed record DashboardProvider
     public ProviderStatus? ServiceStatus { get; init; }
     public bool IsLoading { get; init; }
     public bool IsStale { get; init; }
+    public bool UsageIsStale { get; init; }
+    public bool StatusIsStale { get; init; }
+    /// <summary>The oldest last-success timestamp among stale kinds, or the usage timestamp when fresh.</summary>
+    public DateTime? LastSuccessfulFetchUtc { get; init; }
+    public DateTime? LastSuccessfulUsageFetchUtc { get; init; }
+    public DateTime? LastSuccessfulStatusFetchUtc { get; init; }
+    public TimeSpan? StaleAge { get; init; }
     public string? Error { get; init; }
     public DateTime FetchedAtUtc { get; init; }
     /// <summary>The reading's own time when it is much older than the fetch (a cached result); otherwise null.</summary>
@@ -129,6 +136,9 @@ public sealed record DashboardWindow
 /// <summary>Local-log cost and token totals for one provider, plus derived figures.</summary>
 public sealed record DashboardCost
 {
+    public bool IsStale { get; init; }
+    public DateTime? LastSuccessfulFetchUtc { get; init; }
+    public TimeSpan? StaleAge { get; init; }
     public string Currency { get; init; } = "USD";
     public decimal TodayCost { get; init; }
     public long TodayTokens { get; init; }

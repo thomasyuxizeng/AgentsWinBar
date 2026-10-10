@@ -34,8 +34,24 @@ public static class DashboardSnapshotBuilder
         var samples = (inputs.HistorySamples ?? []).OfType<UsageHistorySample>().ToArray();
         var byProvider = samples.ToLookup(s => s.Provider, StringComparer.OrdinalIgnoreCase);
         var today = DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(now, TimeZoneInfo.Local));
-        var providers = (inputs.Providers ?? []).OfType<UsageData>().Select(data =>
+        var providers = (inputs.Providers ?? []).OfType<UsageData>().Select(original =>
         {
+            var data = original;
+            if (!data.HasUsage && data.UsageFetchOutcome != FetchOutcome.Success)
+            {
+                var store = new UsageHistoryStore();
+                store.Restore(byProvider[data.Provider], now);
+                if (store.GetLastKnownUsage(data.Provider) is { } restored)
+                {
+                    var successAt = Utc(restored.LastSuccessfulFetch ?? restored.FetchedAt);
+                    if (now - successAt <= Services.CacheRetention.MaxAge)
+                    {
+                        data = restored with { Error = data.Error, IsLoading = data.IsLoading, Cost = data.Cost,
+                            ServiceStatus = data.ServiceStatus, StatusIsStale = data.StatusIsStale,
+                            LastSuccessfulStatusFetch = data.LastSuccessfulStatusFetch };
+                    }
+                }
+            }
             var id = data.Provider ?? string.Empty;
             var history = byProvider[id].ToArray();
             var extras = (data.ExtraWindows ?? []).OfType<ExtraUsageWindow>()
@@ -50,7 +66,7 @@ public static class DashboardSnapshotBuilder
                 var historyKey = key;
                 var suffix = 2;
                 while (!keys.Add(key)) key = $"{historyKey}#{suffix++}";
-                var percent = DashboardValues.Percent(window.Percent);
+                var percent = double.IsFinite(window.Percent) ? Math.Max(0, window.Percent) : 0;
                 var pace = double.IsFinite(window.Percent)
                     ? PaceCalculator.Project(percent, window.WindowMinutes, window.ResetAt, now)
                     : new PaceProjection(PaceKind.Unknown);
@@ -79,15 +95,25 @@ public static class DashboardSnapshotBuilder
                 Add(UsageHistoryStore.ExtraWindowKey(extra), DashboardWindowKind.Extra, extra.Title, extra.Window);
             var cost = data.Cost is { } raw ? raw with { Daily = (raw.Daily ?? []).OfType<DailyCost>().ToArray() } : null;
             var oldReading = DataAge.OldReadingUtc(Utc(data.FetchedAt), data.DataUpdatedAt);
+            var usageAt = Utc(data.LastSuccessfulFetch) ?? (data.HasUsage ? Utc(data.FetchedAt) : (DateTime?)null);
+            var staleTimes = new List<DateTime>();
+            if (data.UsageIsStale && usageAt.HasValue) staleTimes.Add(usageAt.Value);
+            if (data.StatusIsStale && data.LastSuccessfulStatusFetch.HasValue) staleTimes.Add(Utc(data.LastSuccessfulStatusFetch.Value));
+            if (cost?.IsStale == true) staleTimes.Add(Utc(cost.LastSuccessfulFetch ?? cost.FetchedAt));
+            var lastSuccess = staleTimes.Count > 0 ? staleTimes.Min() : oldReading ?? usageAt;
             return new DashboardProvider
             {
                 Id = id, DisplayName = id.ToLowerInvariant() switch
                 { "claude" => "Claude", "codex" => "Codex", "gemini" => "Gemini", _ => id },
                 Plan = data.Plan, Source = data.Status, ServiceStatus = data.ServiceStatus,
                 IsLoading = data.IsLoading,
-                IsStale = now - Utc(data.FetchedAt) > TimeSpan.FromMinutes(5) || oldReading != null,
+                IsStale = data.UsageIsStale || data.StatusIsStale || cost?.IsStale == true || now - Utc(data.FetchedAt) > TimeSpan.FromMinutes(5) || oldReading != null,
+                UsageIsStale = data.UsageIsStale, StatusIsStale = data.StatusIsStale,
+                LastSuccessfulFetchUtc = lastSuccess, LastSuccessfulUsageFetchUtc = usageAt,
+                LastSuccessfulStatusFetchUtc = Utc(data.LastSuccessfulStatusFetch),
+                StaleAge = lastSuccess.HasValue ? Age(now, lastSuccess.Value) : null,
                 Error = data.Error, FetchedAtUtc = Utc(data.FetchedAt), OldReadingUtc = oldReading, Credits = data.Credits,
-                Windows = windows, Cost = settings.ShowCostTotals && cost?.HasData == true ? BuildCost(cost, today) : null,
+                Windows = windows, Cost = settings.ShowCostTotals && cost?.HasData == true ? BuildCost(cost, today, now) : null,
                 HistorySampleCount = history.Length, HistoryOldestUtc = Oldest(history)
             };
         }).ToArray();
@@ -147,7 +173,7 @@ public static class DashboardSnapshotBuilder
         };
     }
 
-    private static DashboardCost BuildCost(CostData cost, DateOnly today)
+    private static DashboardCost BuildCost(CostData cost, DateOnly today, DateTime now)
     {
         var daily = CostSeriesBuilder.Daily(cost, today, 30);
         var active = daily.Where(d => d.TotalTokens > 0 || d.TotalCost > 0 || d.InputTokens > 0 ||
@@ -155,6 +181,8 @@ public static class DashboardSnapshotBuilder
             d.ModelBreakdowns.Any(m => m.TotalTokens > 0 || m.Cost > 0)).ToArray();
         return new DashboardCost
         {
+            IsStale = cost.IsStale, LastSuccessfulFetchUtc = Utc(cost.LastSuccessfulFetch ?? cost.FetchedAt),
+            StaleAge = Age(now, Utc(cost.LastSuccessfulFetch ?? cost.FetchedAt)),
             Currency = cost.CurrencyCode, TodayCost = Math.Max(0, cost.TodayCostUSD), TodayTokens = Math.Max(0, cost.TodayTokens),
             Last30DaysCost = Math.Max(0, cost.Last30DaysCostUSD), Last30DaysTokens = Math.Max(0, cost.Last30DaysTokens),
             Provenance = cost.Provenance, CapturedAtUtc = Utc(cost.FetchedAt), Coverage = cost.Coverage,
@@ -169,6 +197,7 @@ public static class DashboardSnapshotBuilder
 
     private static DateTime? Oldest(IEnumerable<UsageHistorySample> samples) =>
         samples.Select(s => (DateTime?)Utc(s.Timestamp)).Min();
+    private static TimeSpan Age(DateTime now, DateTime fetchedAt) => now > fetchedAt ? now - fetchedAt : TimeSpan.Zero;
     private static DateTime? Utc(DateTime? value) => value.HasValue ? Utc(value.Value) : null;
     private static DateTime Utc(DateTime value) => value.Kind == DateTimeKind.Unspecified
         ? DateTime.SpecifyKind(value, DateTimeKind.Utc) : value.ToUniversalTime();

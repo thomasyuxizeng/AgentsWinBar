@@ -95,7 +95,7 @@ public class ResetTimeFormatterTests
     {
         var dto = new UsageWindowDto { UsedPercent = 40, WindowMinutes = 300, ResetsAt = DateTime.UtcNow.AddHours(1) };
 
-        var window = dto.ToUsageWindow();
+        var window = dto.ToUsageWindow()!;
 
         window.WindowMinutes.Should().Be(300);
         window.ElapsedPercent.Should().BeInRange(79, 81);   // about 1h of 5h left

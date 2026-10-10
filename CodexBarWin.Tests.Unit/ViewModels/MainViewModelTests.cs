@@ -100,6 +100,30 @@ public class MainViewModelTests
     [TestMethod]
     [DataRow(false)]
     [DataRow(true)]
+    public async Task StartAsync_WhenOnlyStaleCacheOrHistoryExists_ShowsReadingWhileFetchIsPending(bool historyOnly)
+    {
+        var fetchedAt = DateTime.UtcNow.AddHours(-2);
+        if (historyOnly)
+            _history.Add(new() { Provider = "claude", WindowKey = "session", UsedPercent = 42, Timestamp = fetchedAt }, DateTime.UtcNow);
+        else
+            _cache.Setup(c => c.GetLastKnown("claude")).Returns(Data(42) with { FetchedAt = fetchedAt });
+        var gate = Signal();
+        _usage.Setup(s => s.GetAllUsageStreamAsync(It.IsAny<CancellationToken>()))
+            .Returns((CancellationToken ct) => Stream(gate.Task, Data(50), ct));
+        var starting = _viewModel.StartAsync();
+        try
+        {
+            _viewModel.Providers.Single().Session!.Percent.Should().Be(42);
+            _viewModel.Providers.Single().UsageIsStale.Should().BeTrue();
+            _viewModel.Providers.Single().LastSuccessfulFetch.Should().Be(fetchedAt);
+        }
+        finally { gate.TrySetResult(); await starting; }
+        _viewModel.Providers.Single().Session!.Percent.Should().Be(50);
+    }
+
+    [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
     public async Task RefreshCommand_PeriodicRefreshLoading_CancelsExistingScanAndForcesCostsAfterUsageCompletes(bool existingBackground)
     {
         SetupImmediateUsage();

@@ -5,13 +5,11 @@ using Microsoft.Extensions.Logging;
 namespace CodexBarWin.Services;
 
 /// <summary>
-/// Atomic cost-cache.json beside the settings file. Results older than <see cref="MaxAge"/> are dropped on load,
+/// Atomic cost-cache.json beside the settings file. Last-known values are retained regardless of age,
 /// and developer mode never reads or writes it.
 /// </summary>
 public sealed class CostCacheStore : ICostCacheStore
 {
-    public static readonly TimeSpan MaxAge = TimeSpan.FromDays(7);
-
     private readonly ISettingsService _settings;
     private readonly ILogger<CostCacheStore> _logger;
     private readonly TimeProvider _clock;
@@ -41,13 +39,23 @@ public sealed class CostCacheStore : ICostCacheStore
             var json = await File.ReadAllTextAsync(FilePath, ct);
             var file = JsonSerializer.Deserialize(json, AppJsonSerializerContext.Default.CostCacheFile);
             var now = _clock.GetUtcNow().UtcDateTime;
-            foreach (var (key, data) in file?.Items ?? [])
+            foreach (var (key, rawData) in file?.Items ?? [])
             {
-                if (data == null || !ProviderConstants.IsValidProvider(key) || !data.HasData) continue;
+                if (rawData == null || !ProviderConstants.IsValidProvider(key) || !rawData.HasData) continue;
                 var provider = ProviderConstants.ValidateAndNormalize(key);
-                var fetchedAt = data.FetchedAt.Kind == DateTimeKind.Local ? data.FetchedAt.ToUniversalTime() : data.FetchedAt;
-                if (now - fetchedAt > MaxAge || fetchedAt - now > TimeSpan.FromMinutes(5)) continue;
-                items[provider] = data with { Provider = provider, Daily = data.Daily ?? [] };
+                var currentData = rawData;
+                var fetchedAt = currentData.FetchedAt.ToUniversalTime();
+                if (fetchedAt - now > CacheRetention.ClockSkewTolerance || !string.Equals(currentData.Provider, provider, StringComparison.OrdinalIgnoreCase)) continue;
+                if (fetchedAt > now) currentData = currentData with { FetchedAt = now };
+                if (currentData.LastSuccessfulFetch.HasValue)
+                {
+                    var lastSuccessUtc = currentData.LastSuccessfulFetch.Value.ToUniversalTime();
+                    if (lastSuccessUtc - now > CacheRetention.ClockSkewTolerance) continue;
+                    if (lastSuccessUtc > now) currentData = currentData with { LastSuccessfulFetch = now };
+                }
+                var successAt = (currentData.LastSuccessfulFetch ?? currentData.FetchedAt).ToUniversalTime();
+                if (now - successAt > CacheRetention.MaxAge) continue;
+                items[provider] = currentData with { Provider = provider, Daily = currentData.Daily ?? [] };
             }
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
@@ -64,7 +72,13 @@ public sealed class CostCacheStore : ICostCacheStore
         {
             await _ioGate.WaitAsync(ct); acquired = true;
             if (DeveloperMode) return false;
-            var file = new CostCacheFile { Items = items.Where(pair => pair.Value.HasData).ToDictionary(pair => pair.Key, pair => pair.Value) };
+            var now = _clock.GetUtcNow().UtcDateTime;
+            var file = new CostCacheFile
+            {
+                Items = items.Where(pair => pair.Value.HasData &&
+                    now - (pair.Value.LastSuccessfulFetch ?? pair.Value.FetchedAt).ToUniversalTime() <= CacheRetention.MaxAge)
+                    .ToDictionary(pair => pair.Key, pair => pair.Value)
+            };
             var json = JsonSerializer.Serialize(file, AppJsonSerializerContext.Default.CostCacheFile);
             Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(FilePath))!);
             var temporaryPath = FilePath + ".tmp";

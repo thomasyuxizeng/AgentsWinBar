@@ -304,7 +304,7 @@ public class DashboardSnapshotBuilderTests
     [DataRow(double.NaN, 0d)]
     [DataRow(double.PositiveInfinity, 0d)]
     [DataRow(-10d, 0d)]
-    [DataRow(140d, 100d)]
+    [DataRow(140d, 140d)]
     public void Build_InvalidPercent_ReturnsFiniteBoundedUsageAndPace(double percent, double expected)
     {
         var snapshot = DashboardSnapshotBuilder.Build(Inputs(Provider() with { Session = Window(percent) }));

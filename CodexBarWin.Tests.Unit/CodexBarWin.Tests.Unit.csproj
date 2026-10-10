@@ -35,6 +35,7 @@
     <Compile Include="..\Helpers\DashboardContent.cs" Link="Linked\DashboardContent.cs" />
     <Compile Include="..\Helpers\DashboardSnapshotBuilder.cs" Link="Linked\DashboardSnapshotBuilder.cs" />
     <Compile Include="..\Helpers\DataAge.cs" Link="Linked\DataAge.cs" />
+    <Compile Include="..\Helpers\StaleCaption.cs" Link="Linked\StaleCaption.cs" />
     <Compile Include="..\Services\IActivityLog.cs" Link="Linked\IActivityLog.cs" />
     <Compile Include="..\Services\ActivityLog.cs" Link="Linked\ActivityLog.cs" />
     <Compile Include="..\Services\IDashboardService.cs" Link="Linked\IDashboardService.cs" />
@@ -78,6 +79,7 @@
     <Compile Include="..\Services\ICostCacheStore.cs" Link="Linked\ICostCacheStore.cs" />
     <Compile Include="..\Services\CostCacheStore.cs" Link="Linked\CostCacheStore.cs" />
     <Compile Include="..\Services\SettingsService.cs" Link="Linked\SettingsService.cs" />
+    <Compile Include="..\Services\CacheRetention.cs" Link="Linked\CacheRetention.cs" />
     <Compile Include="..\Services\CacheService.cs" Link="Linked\CacheService.cs" />
     <Compile Include="..\Services\SetupChecker.cs" Link="Linked\SetupChecker.cs" />
     <Compile Include="..\Services\SampleDataLoader.cs" Link="Linked\SampleDataLoader.cs" />

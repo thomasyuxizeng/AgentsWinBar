@@ -12,6 +12,9 @@ public interface ICacheService
     /// </summary>
     UsageData? Get(string provider);
 
+    /// <summary>Gets the last known reading even after the ordinary freshness TTL expires.</summary>
+    UsageData? GetLastKnown(string provider) => Get(provider);
+
     /// <summary>
     /// Sets cached usage data for a provider.
     /// </summary>

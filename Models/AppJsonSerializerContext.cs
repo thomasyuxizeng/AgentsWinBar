@@ -57,12 +57,18 @@ public record UsageDataDto
         Weekly = Usage?.Secondary?.ToUsageWindow(),
         Tertiary = Usage?.Tertiary?.ToUsageWindow(),
         ExtraWindows = (Usage?.ExtraRateWindows ?? [])
-            .Where(x => x.Window != null && !string.IsNullOrWhiteSpace(x.Title))
-            .Select(x => new ExtraUsageWindow { Key = x.Id ?? string.Empty, Title = Helpers.WindowTitles.Short(x.Title), Window = x.Window!.ToUsageWindow() })
+            .Where(x => x.Window?.HasReading == true && !string.IsNullOrWhiteSpace(x.Title))
+            .Select(x => new ExtraUsageWindow { Key = x.Id ?? string.Empty, Title = Helpers.WindowTitles.Short(x.Title), Window = x.Window!.ToUsageWindow()! })
             .ToList(),
         Status = Source,
         ServiceStatus = Status?.ToProviderStatus(),
         Error = Error,
+        UsageFetchOutcome = !string.IsNullOrWhiteSpace(Error) || string.Equals(Source, "offline", StringComparison.OrdinalIgnoreCase)
+            ? FetchOutcome.Failed
+            : Usage?.Primary?.HasReading == true || Usage?.Secondary?.HasReading == true || Usage?.Tertiary?.HasReading == true ||
+                Usage?.ExtraRateWindows?.Any(x => x.Window?.HasReading == true && !string.IsNullOrWhiteSpace(x.Title)) == true
+                ? FetchOutcome.Success : FetchOutcome.Unavailable,
+        StatusFetchOutcome = Status == null || string.IsNullOrWhiteSpace(Status.Indicator) ? FetchOutcome.Unavailable : FetchOutcome.Success,
         FetchedAt = DateTime.UtcNow,
         DataUpdatedAt = Usage?.UpdatedAt is { } updated ? Helpers.DataAge.ToUtc(updated) : null
     };
@@ -113,14 +119,15 @@ public record ExtraRateWindowDto
 /// </summary>
 public record UsageWindowDto
 {
-    public double UsedPercent { get; init; }
+    public double? UsedPercent { get; init; }
+    public bool HasReading => UsedPercent is { } percent && double.IsFinite(percent) && percent >= 0;
     public int WindowMinutes { get; init; }
     public DateTime? ResetsAt { get; init; }
     public string? ResetDescription { get; init; }
 
-    public UsageWindow ToUsageWindow() => new()
+    public UsageWindow? ToUsageWindow() => !HasReading ? null : new()
     {
-        Used = (int)UsedPercent,
+        Used = (int)UsedPercent!.Value,
         ReportedPercent = UsedPercent,
         Limit = 100,
         WindowMinutes = WindowMinutes,

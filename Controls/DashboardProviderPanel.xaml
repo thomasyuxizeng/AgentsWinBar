@@ -117,6 +117,9 @@
             <StackPanel Spacing="12" x:Name="CostSection"
                         Visibility="{x:Bind views:DashboardFormat.VisNotNull(Data.Cost), Mode=OneWay}">
                 <TextBlock Text="COST AND TOKENS · ESTIMATED FROM LOCAL LOGS" Style="{StaticResource SectionCaption}"/>
+                <TextBlock Style="{StaticResource Meta}"
+                           Text="{x:Bind views:DashboardFormat.CostStale(Data.Cost), Mode=OneWay}"
+                           Visibility="{x:Bind views:DashboardFormat.VisCostStale(Data.Cost), Mode=OneWay}"/>
 
                 <Grid ColumnSpacing="16">
                     <Grid.ColumnDefinitions>

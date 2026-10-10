@@ -47,6 +47,30 @@ public class CacheServiceTests
     }
 
     [TestMethod]
+    public async Task GetLastKnown_WhenFileAndReadingExpired_RestoresReadingWithoutTreatingItAsFresh()
+    {
+        var old = DateTime.UtcNow.AddDays(-2);
+        Directory.CreateDirectory(Path.GetDirectoryName(_cachePath)!);
+        await File.WriteAllTextAsync(_cachePath, System.Text.Json.JsonSerializer.Serialize(new CacheData
+        {
+            Timestamp = old, Items = new() { ["claude"] = new UsageData
+                { Provider = "claude", FetchedAt = old, Session = new() { ReportedPercent = 42 } } }
+        }, AppJsonSerializerContext.Default.CacheData));
+        await _cacheService.LoadAsync();
+        _cacheService.Get("claude").Should().BeNull();
+        _cacheService.GetLastKnown("CLAUDE")!.Session!.Percent.Should().Be(42);
+    }
+
+    [TestMethod]
+    public void Set_WhenFailedReading_DoesNotReplaceSuccessfulZero()
+    {
+        var zero = new UsageData { Provider = "claude", Session = new() { ReportedPercent = 0 }, UsageFetchOutcome = FetchOutcome.Success };
+        _cacheService.Set("claude", zero);
+        _cacheService.Set("claude", new() { Provider = "claude", UsageFetchOutcome = FetchOutcome.Failed });
+        _cacheService.GetLastKnown("claude").Should().BeSameAs(zero);
+    }
+
+    [TestMethod]
     public async Task SaveAsync_ConcurrentSaves_PreservesCompleteCache()
     {
         _cacheService.Set("claude", new UsageData { Provider = "claude" });
@@ -78,7 +102,6 @@ public class CacheServiceTests
     [DataRow("null")]
     [DataRow("{\"provider\":\"claude\"}")]
     [DataRow("{\"provider\":\"codex\",\"fetchedAt\":\"$now\"}")]
-    [DataRow("{\"provider\":\"claude\",\"fetchedAt\":\"$now\",\"extraWindows\":null}")]
     [DataRow("{\"provider\":\"claude\",\"fetchedAt\":\"$now\",\"error\":\"failed\"}")]
     [DataRow("{\"provider\":\"claude\",\"fetchedAt\":\"$now\",\"commandNotFound\":true}")]
     public async Task LoadAsync_PartialOrInvalidEntry_SkipsEntry(string item)
