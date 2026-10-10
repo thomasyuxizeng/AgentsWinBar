@@ -27,6 +27,7 @@ public class CodexBarService : ICodexBarService
     private readonly ICostCacheStore? _costStore;
     private readonly UsageHistoryStore? _history;
     private readonly IGeminiStatusFallback? _geminiStatusFallback;
+    internal static readonly TimeSpan GeminiStatusBudget = TimeSpan.FromMilliseconds(500);
     // The last complete result per provider (guarded by _costCache). A failed, empty or timed-out scan serves it
     // instead of blanking the totals; only a newer good result replaces it.
     private readonly Dictionary<string, CostData> _lastGoodCost = [];
@@ -351,19 +352,22 @@ public class CodexBarService : ICodexBarService
     {
         if (!ProviderConstants.IsValidProvider(provider)) return null;
         var normalizedProvider = ProviderConstants.ValidateAndNormalize(provider);
+        ProviderStatus? geminiStatus = null;
         try
         {
+            geminiStatus = await PrefetchGeminiStatusAsync([normalizedProvider], ct);
+            ct.ThrowIfCancellationRequested();
             var source = ProviderConstants.GetSource(normalizedProvider);
             var result = await _wslService.ExecuteAsync($"codexbar --provider {normalizedProvider} --format json --source {source} --status", ct);
 
             ct.ThrowIfCancellationRequested();
-            return InterpretProviderResult(normalizedProvider, result);
+            return InterpretProviderResult(normalizedProvider, result, geminiStatus);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to get usage for {Provider}", provider);
-            return ProviderError(normalizedProvider, "Usage fetch unavailable");
+            return ProviderError(normalizedProvider, "Usage fetch unavailable", geminiStatus);
         }
         finally { await SaveUsageCacheAsync(); }
     }
@@ -477,6 +481,8 @@ public class CodexBarService : ICodexBarService
         }
         else
         {
+            var geminiStatus = await PrefetchGeminiStatusAsync(providers, ct);
+            ct.ThrowIfCancellationRequested();
             var commands = providers.Select(BuildProviderCommand).ToArray();
             var retryInIndividualShell = new bool[providers.Count];
             async Task RetryProviderAsync(int index)
@@ -486,7 +492,7 @@ public class CodexBarService : ICodexBarService
                     _logger.LogInformation("WSL batch command not found for {Provider}; retrying individually", providers[index]);
                     RecordBatchFallback(providers[index], "Command failed (exit code 127)");
                 }
-                Complete(index, await FetchProviderAsync(providers[index], commands[index], ct));
+                Complete(index, await FetchProviderAsync(providers[index], commands[index], geminiStatus, ct));
             }
             try
             {
@@ -501,7 +507,7 @@ public class CodexBarService : ICodexBarService
                         retryInIndividualShell[index] = true;
                         return;
                     }
-                    if (results[index] == null) Complete(index, InterpretProviderResult(providers[index], result));
+                    if (results[index] == null) Complete(index, InterpretProviderResult(providers[index], result, geminiStatus));
                 }, ct);
                 ct.ThrowIfCancellationRequested();
                 if (batch == null || batch.Count != commands.Length)
@@ -513,7 +519,7 @@ public class CodexBarService : ICodexBarService
                     {
                         retryInIndividualShell[i] = true;
                     }
-                    else Complete(i, InterpretProviderResult(providers[i], batch[i]));
+                    else Complete(i, InterpretProviderResult(providers[i], batch[i], geminiStatus));
                 }
                 await Task.WhenAll(Enumerable.Range(0, providers.Count)
                     .Where(i => results[i] == null && retryInIndividualShell[i]).Select(RetryProviderAsync));
@@ -559,7 +565,7 @@ public class CodexBarService : ICodexBarService
         }
     }
 
-    private async Task<UsageData> FetchProviderAsync(string provider, WslBatchCommand command, CancellationToken ct)
+    private async Task<UsageData> FetchProviderAsync(string provider, WslBatchCommand command, ProviderStatus? geminiStatus, CancellationToken ct)
     {
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
         deadline.CancelAfter(command.Timeout);
@@ -568,72 +574,97 @@ public class CodexBarService : ICodexBarService
             var result = await _wslService.ExecuteAsync(command.Command, deadline.Token);
             ct.ThrowIfCancellationRequested();
             return deadline.IsCancellationRequested
-                ? ProviderError(provider, "Request timed out")
-                : InterpretProviderResult(provider, result);
+                ? ProviderError(provider, "Request timed out", geminiStatus)
+                : InterpretProviderResult(provider, result, geminiStatus);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-        catch (OperationCanceledException) { return ProviderError(provider, "Request timed out"); }
+        catch (OperationCanceledException) { return ProviderError(provider, "Request timed out", geminiStatus); }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Failed to fetch {Provider}", provider);
-            return ProviderError(provider, "Unexpected error occurred");
+            return ProviderError(provider, "Unexpected error occurred", geminiStatus);
         }
     }
 
-    private UsageData InterpretProviderResult(string provider, WslResult result)
+    private UsageData InterpretProviderResult(string provider, WslResult result, ProviderStatus? geminiStatus)
     {
-        try { return InterpretProviderResultCore(provider, result); }
+        try { return InterpretProviderResultCore(provider, result, geminiStatus); }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Failed to interpret {Provider}", provider);
-            return ProviderError(provider, "Unexpected error occurred");
+            return ProviderError(provider, "Unexpected error occurred", geminiStatus);
         }
     }
 
-    private UsageData InterpretProviderResultCore(string provider, WslResult result)
+    private UsageData InterpretProviderResultCore(string provider, WslResult result, ProviderStatus? geminiStatus)
     {
         if (!result.Success && (result.ExitCode == 124 ||
             (result.ExitCode == -1 && result.Error.Contains("timed out", StringComparison.OrdinalIgnoreCase))))
-            return ProviderError(provider, "Request timed out");
+            return ProviderError(provider, "Request timed out", geminiStatus);
         if (result.Success && !string.IsNullOrWhiteSpace(result.Output))
         {
             var data = ParseUsageJsonArray(result.Output).FirstOrDefault(d => string.Equals(d.Provider, provider, StringComparison.OrdinalIgnoreCase));
-            if (data == null) return ProviderError(provider, "No data available");
-            data = AttachGeminiStatus(data);
+            if (data == null) return ProviderError(provider, "No data available", geminiStatus);
+            data = AttachGeminiStatus(data, geminiStatus);
             data = ResolveUsage(data with { Provider = provider });
             _logger.LogDebug("Fetched {Provider} successfully", provider);
             return data;
         }
         _logger.LogDebug("{Provider} failed: {Error}", provider, result.Error);
         return ProviderError(provider, string.IsNullOrWhiteSpace(result.Error)
-            ? $"Command failed (exit code {result.ExitCode})" : result.Error.Trim()) with
+            ? $"Command failed (exit code {result.ExitCode})" : result.Error.Trim(), geminiStatus) with
         {
             CommandNotFound = result.ExitCode == 127
         };
     }
 
-    private UsageData AttachGeminiStatus(UsageData data)
+    private async Task<ProviderStatus?> PrefetchGeminiStatusAsync(IReadOnlyList<string> providers, CancellationToken ct)
     {
-        if (_geminiStatusFallback == null ||
-            !string.Equals(data.Provider, "gemini", StringComparison.OrdinalIgnoreCase) ||
-            data.ServiceStatus != null)
-            return data;
+        if (_geminiStatusFallback == null || _settingsService.Settings.DeveloperModeEnabled ||
+            !providers.Contains("gemini", StringComparer.OrdinalIgnoreCase)) return null;
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        deadline.CancelAfter(GeminiStatusBudget);
+        Task<ProviderStatus?>? pending = null;
+        try
+        {
+            pending = _geminiStatusFallback.GetStatusAsync(deadline.Token);
+            // Also bound implementations that fail to observe cancellation.
+            return await pending.WaitAsync(GeminiStatusBudget, ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Gemini status fallback unavailable within refresh budget");
+            return null;
+        }
+        finally
+        {
+            deadline.Cancel();
+            if (pending != null)
+                Helpers.AsyncHelper.SafeFireAndForget(pending,
+                    onError: ex => _logger.LogDebug(ex, "Gemini status fallback completed after refresh budget"));
+        }
+    }
 
-        var status = _geminiStatusFallback.GetStatus();
+    private static UsageData AttachGeminiStatus(UsageData data, ProviderStatus? status)
+    {
+        if (!string.Equals(data.Provider, "gemini", StringComparison.OrdinalIgnoreCase) || data.ServiceStatus != null)
+            return data;
         // A fallback status is a fresh status reading: mark it so ResolveUsage keeps it instead of the cached one.
         return status == null ? data : data with { ServiceStatus = status, StatusFetchOutcome = FetchOutcome.Success };
     }
 
-    private UsageData ProviderError(string provider, string error) => ResolveUsage(new UsageData
+    private UsageData ProviderError(string provider, string error, ProviderStatus? geminiStatus = null) => ResolveUsage(AttachGeminiStatus(new UsageData
     {
         Provider = provider, Error = error, FetchedAt = _timeProvider.GetUtcNow().UtcDateTime,
         UsageFetchOutcome = FetchOutcome.Failed, StatusFetchOutcome = FetchOutcome.Failed
-    });
+    }, geminiStatus));
 
     private UsageData ResolveUsage(UsageData data)
     {
         var now = _timeProvider.GetUtcNow().UtcDateTime;
         var cached = _cacheService.GetLastKnown(data.Provider);
+        if (cached != null) cached = CacheRetention.PruneExpired(cached, now);
         var previous = cached?.HasUsage == true ? cached : _history?.GetLastKnownUsage(data.Provider);
         if (previous != null)
         {
@@ -656,8 +687,7 @@ public class CodexBarService : ICodexBarService
             LastSuccessfulFetch = success ? now : previous?.LastSuccessfulFetch ?? previous?.FetchedAt,
             UsageIsStale = !success && previous?.HasUsage == true,
             ServiceStatus = statusSuccess ? data.ServiceStatus : cached?.ServiceStatus,
-            LastSuccessfulStatusFetch = statusSuccess ? now : cached?.LastSuccessfulStatusFetch ??
-                cached?.ServiceStatus?.UpdatedAt ?? (cached?.ServiceStatus != null ? cached.FetchedAt : null),
+            LastSuccessfulStatusFetch = statusSuccess ? now : cached?.LastSuccessfulStatusFetch,
             StatusIsStale = !statusSuccess && cached?.ServiceStatus != null,
             Error = success ? null : data.Error ?? "No usage reading available"
         };

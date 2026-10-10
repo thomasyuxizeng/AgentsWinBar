@@ -41,7 +41,7 @@ public class CacheService : ICacheService
         {
             if (IsFresh(data.FetchedAt))
             {
-                return data;
+                return CacheRetention.PruneExpired(data, DateTime.UtcNow);
             }
 
             _logger.LogDebug("Cache expired for {Provider}", provider);
@@ -69,15 +69,15 @@ public class CacheService : ICacheService
 
     public UsageData? GetLastKnown(string provider) => !DeveloperMode && ProviderConstants.IsValidProvider(provider) &&
         _cache.TryGetValue(ProviderConstants.ValidateAndNormalize(provider), out var data) &&
-        Utc(data.FetchedAt) <= DateTime.UtcNow &&
-        DateTime.UtcNow - Utc(data.LastSuccessfulFetch ?? data.FetchedAt) <= CacheRetention.MaxAge ? data : null;
+        Utc(data.FetchedAt) <= DateTime.UtcNow ? CacheRetention.PruneExpired(data, DateTime.UtcNow) : null;
 
     public IReadOnlyDictionary<string, UsageData> GetAll()
     {
         if (DeveloperMode) return new Dictionary<string, UsageData>();
         return _cache
             .Where(kv => IsFresh(kv.Value.FetchedAt))
-            .ToDictionary(kv => kv.Key, kv => kv.Value);
+            .Select(kv => (kv.Key, Data: CacheRetention.PruneExpired(kv.Value, DateTime.UtcNow)))
+            .Where(kv => kv.Data != null).ToDictionary(kv => kv.Key, kv => kv.Data!);
     }
 
     public async Task SaveAsync()
@@ -90,9 +90,9 @@ public class CacheService : ICacheService
             var now = DateTime.UtcNow;
             foreach (var (k, v) in _cache.ToArray())
             {
-                var successAt = Utc(v.LastSuccessfulFetch ?? v.FetchedAt);
-                if (now - successAt > CacheRetention.MaxAge)
-                    _cache.TryRemove(k, out _);
+                var retained = CacheRetention.PruneExpired(v, now);
+                if (retained == null) _cache.TryRemove(new KeyValuePair<string, UsageData>(k, v));
+                else _cache.TryUpdate(k, retained, v);
             }
             var cacheData = new CacheData
             {
@@ -168,13 +168,13 @@ public class CacheService : ICacheService
                     if (lastSuccessUtc - now > CacheRetention.ClockSkewTolerance) continue;
                     if (lastSuccessUtc > now) data = data with { LastSuccessfulFetch = now };
                 }
-                var itemSuccessAt = Utc(data.LastSuccessfulFetch ?? data.FetchedAt);
-                if (now - itemSuccessAt > CacheRetention.MaxAge) continue;
+                data = CacheRetention.PruneExpired(data, now);
+                if (data == null) continue;
                 if (!string.Equals(item.Name, data.Provider, StringComparison.OrdinalIgnoreCase)
                     || data.ExtraWindows.Any(window => window == null || window.Window == null)
                     || string.Equals(data.Status, "offline", StringComparison.OrdinalIgnoreCase)
                     || data.HasError || data.CommandNotFound || data.IsLoading
-                    || data.UsageFetchOutcome is FetchOutcome.Failed or FetchOutcome.Unavailable) continue;
+                    || ((data.UsageFetchOutcome is FetchOutcome.Failed or FetchOutcome.Unavailable) && data.ServiceStatus == null)) continue;
                 _cache[ProviderConstants.ValidateAndNormalize(item.Name)] = data;
             }
 

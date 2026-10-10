@@ -129,18 +129,24 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         if (_settingsService.Settings.DeveloperModeEnabled) return;
         var enabled = _settingsService.Settings.Providers.Where(p => p.IsEnabled && ProviderConstants.IsValidProvider(p.Id))
-            .OrderBy(p => p.Order).Select(p => p.Id).ToList();
+            .OrderBy(p => p.Order).Select(p => ProviderConstants.ValidateAndNormalize(p.Id)).ToList();
         var restoredByProvider = enabled.ToDictionary(provider => provider, provider =>
         {
             var cached = _cacheService.GetLastKnown(provider);
+            if (cached != null) cached = CacheRetention.PruneExpired(cached, DateTime.UtcNow);
             if (cached?.HasUsage == true) return cached;
             var fromHistory = _history.GetLastKnownUsage(provider);
             if (fromHistory != null)
             {
                 var successAt = Helpers.DashboardValues.Utc(fromHistory.LastSuccessfulFetch ?? fromHistory.FetchedAt);
-                if (DateTime.UtcNow - successAt <= CacheRetention.MaxAge) return fromHistory;
+                if (CacheRetention.IsRetained(successAt, DateTime.UtcNow)) return fromHistory with
+                {
+                    ServiceStatus = cached?.ServiceStatus,
+                    LastSuccessfulStatusFetch = cached?.LastSuccessfulStatusFetch,
+                    StatusIsStale = cached?.ServiceStatus != null
+                };
             }
-            return null;
+            return cached;
         });
         if (Providers.Count == 0 && restoredByProvider.Values.All(data => data == null)) return;
         ProviderListSynchronizer.Sync(Providers, enabled);
@@ -149,8 +155,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
             if (Providers[i].HasUsage) continue;
             var restored = restoredByProvider[Providers[i].Provider];
             if (restored == null) continue;
-            Providers[i] = restored with { IsLoading = false, UsageIsStale = true,
-                LastSuccessfulFetch = restored.LastSuccessfulFetch ?? restored.FetchedAt,
+            Providers[i] = restored with { IsLoading = false, UsageIsStale = restored.HasUsage,
+                StatusIsStale = restored.ServiceStatus != null,
+                LastSuccessfulFetch = restored.HasUsage ? restored.LastSuccessfulFetch ?? restored.FetchedAt : null,
                 Cost = _settingsService.Settings.ShowCostTotals ? restored.Cost : null };
         }
     }
@@ -162,7 +169,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
         if (enabled.Count == 0) return false;
         var interval = TimeSpan.FromSeconds(_settingsService.Settings.RefreshIntervalSeconds);
         var now = DateTime.UtcNow;
-        var cached = enabled.Select(p => _cacheService.Get(p.Id)).ToList();
+        var cached = enabled.Select(p => _cacheService.Get(p.Id) is { } data
+            ? CacheRetention.PruneExpired(data, now) : null).ToList();
         if (cached.Any(data => data == null || data.HasError || CacheTimestampUtc(data.FetchedAt) > now ||
             now - CacheTimestampUtc(data.FetchedAt) >= interval))
             return false;

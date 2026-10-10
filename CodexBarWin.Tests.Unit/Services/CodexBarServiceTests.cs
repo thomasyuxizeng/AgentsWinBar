@@ -935,7 +935,7 @@ public class CodexBarServiceTests
             Url = "https://www.google.com/appsstatus/dashboard/products/npdyhgECDJ6tB66MxXyo/history"
         };
         var mockFallback = new Mock<IGeminiStatusFallback>();
-        mockFallback.Setup(f => f.GetStatus(It.IsAny<CancellationToken>())).Returns(fallbackStatus);
+        mockFallback.Setup(f => f.GetStatusAsync(It.IsAny<CancellationToken>())).ReturnsAsync(fallbackStatus);
 
         var serviceWithFallback = new CodexBarService(
             _mockWslService, _mockCacheService, _mockSettingsService, _mockSampleDataLoader,
@@ -951,13 +951,14 @@ public class CodexBarServiceTests
         var result = results.Single();
         result.Session!.Percent.Should().Be(10);
         result.ServiceStatus.Should().Be(fallbackStatus);
-        mockFallback.Verify(f => f.GetStatus(It.IsAny<CancellationToken>()), Times.Once);
+        mockFallback.Verify(f => f.GetStatusAsync(It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [TestMethod]
     public async Task GetAllUsageStreamAsync_WhenGeminiAlreadyHasStatus_DoesNotOverwriteWithFallback()
     {
         var mockFallback = new Mock<IGeminiStatusFallback>(MockBehavior.Strict);
+        mockFallback.Setup(f => f.GetStatusAsync(It.IsAny<CancellationToken>())).ReturnsAsync(new ProviderStatus { Indicator = ProviderStatusIndicator.Critical });
 
         var serviceWithFallback = new CodexBarService(
             _mockWslService, _mockCacheService, _mockSettingsService, _mockSampleDataLoader,
@@ -973,7 +974,7 @@ public class CodexBarServiceTests
         var result = results.Single();
         result.ServiceStatus!.Indicator.Should().Be(ProviderStatusIndicator.Major);
         result.ServiceStatus.Description.Should().Be("CLI reported major");
-        mockFallback.Verify(f => f.GetStatus(It.IsAny<CancellationToken>()), Times.Never);
+        mockFallback.Verify(f => f.GetStatusAsync(It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [TestMethod]

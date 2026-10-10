@@ -9,13 +9,7 @@ public interface IGeminiStatusFallback
 {
     /// <summary>
     /// Fetches and returns the current provider status for Gemini asynchronously, using cached data if within TTL.
-    /// Returns null on any failure.
+    /// Returns null on any failure, cancellation, or disposal.
     /// </summary>
     Task<ProviderStatus?> GetStatusAsync(CancellationToken ct = default);
-
-    /// <summary>
-    /// Synchronous accessor for the Gemini provider status, using cached data or executing synchronously.
-    /// Returns null on any failure.
-    /// </summary>
-    ProviderStatus? GetStatus(CancellationToken ct = default);
 }

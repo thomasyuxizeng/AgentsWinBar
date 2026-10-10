@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text;
 using System.Text.Json;
 using CodexBarWin.Models;
 using Microsoft.Extensions.Logging;
@@ -16,6 +17,7 @@ public sealed class GeminiStatusFallback : IGeminiStatusFallback, IDisposable
     public const string HistoryUrl = "https://www.google.com/appsstatus/dashboard/products/npdyhgECDJ6tB66MxXyo/history";
     public static readonly TimeSpan CacheTtl = TimeSpan.FromMinutes(5);
     public static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(5);
+    public const int MaxFeedBytes = 2 * 1024 * 1024;
     public const string UserAgent = "CodexBarWin/1.0 (+https://github.com/steipete/CodexBar)";
 
     private readonly HttpClient _httpClient;
@@ -23,6 +25,8 @@ public sealed class GeminiStatusFallback : IGeminiStatusFallback, IDisposable
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<GeminiStatusFallback>? _logger;
     private readonly SemaphoreSlim _gate = new(1, 1);
+    private readonly object _lifetimeLock = new();
+    private readonly CancellationTokenSource _lifetime = new();
 
     private ProviderStatus? _cachedStatus;
     private DateTimeOffset _cachedAt = DateTimeOffset.MinValue;
@@ -65,48 +69,37 @@ public sealed class GeminiStatusFallback : IGeminiStatusFallback, IDisposable
 
     public async Task<ProviderStatus?> GetStatusAsync(CancellationToken ct = default)
     {
-        ObjectDisposedException.ThrowIf(_disposed, this);
-
-        var now = _timeProvider.GetUtcNow();
-        if (_cachedStatus != null && now - _cachedAt < CacheTtl)
+        CancellationTokenSource deadline;
+        lock (_lifetimeLock)
         {
-            return _cachedStatus;
+            if (_disposed || ct.IsCancellationRequested) return null;
+            deadline = CancellationTokenSource.CreateLinkedTokenSource(ct, _lifetime.Token);
         }
-
+        using var deadlineScope = deadline;
+        deadline.CancelAfter(DefaultTimeout); // Includes waiting for another caller.
+        var entered = false;
         try
         {
-            await _gate.WaitAsync(ct).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch
-        {
-            return null;
-        }
-
-        try
-        {
-            now = _timeProvider.GetUtcNow();
-            if (_cachedStatus != null && now - _cachedAt < CacheTtl)
+            await _gate.WaitAsync(deadline.Token).ConfigureAwait(false);
+            entered = true;
+            deadline.Token.ThrowIfCancellationRequested();
+            var now = _timeProvider.GetUtcNow();
+            var age = now - _cachedAt;
+            // Cache failures too, so a burst of callers cannot hammer a failing feed.
+            if (age >= TimeSpan.Zero && age < CacheTtl)
             {
                 return _cachedStatus;
             }
 
-            var status = await FetchStatusCoreAsync(ct).ConfigureAwait(false);
-            if (status != null)
-            {
-                _cachedStatus = status;
-                _cachedAt = _timeProvider.GetUtcNow();
-                return status;
-            }
-
-            return null;
+            var status = await FetchStatusCoreAsync(deadline.Token).ConfigureAwait(false);
+            deadline.Token.ThrowIfCancellationRequested();
+            _cachedStatus = status;
+            _cachedAt = _timeProvider.GetUtcNow();
+            return status;
         }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        catch (OperationCanceledException)
         {
-            throw;
+            return null;
         }
         catch (Exception ex)
         {
@@ -115,40 +108,12 @@ public sealed class GeminiStatusFallback : IGeminiStatusFallback, IDisposable
         }
         finally
         {
-            _gate.Release();
-        }
-    }
-
-    public ProviderStatus? GetStatus(CancellationToken ct = default)
-    {
-        ObjectDisposedException.ThrowIf(_disposed, this);
-
-        var now = _timeProvider.GetUtcNow();
-        if (_cachedStatus != null && now - _cachedAt < CacheTtl)
-        {
-            return _cachedStatus;
-        }
-
-        try
-        {
-            return Task.Run(() => GetStatusAsync(ct), CancellationToken.None).GetAwaiter().GetResult();
-        }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            _logger?.LogWarning(ex, "Failed to retrieve Gemini status fallback synchronously");
-            return null;
+            if (entered) _gate.Release();
         }
     }
 
     private async Task<ProviderStatus?> FetchStatusCoreAsync(CancellationToken ct)
     {
-        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        timeoutCts.CancelAfter(DefaultTimeout);
-
         try
         {
             using var request = new HttpRequestMessage(HttpMethod.Get, FeedUri);
@@ -157,15 +122,29 @@ public sealed class GeminiStatusFallback : IGeminiStatusFallback, IDisposable
                 request.Headers.UserAgent.ParseAdd(UserAgent);
             }
 
-            using var response = await _httpClient.SendAsync(request, timeoutCts.Token).ConfigureAwait(false);
+            using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
             if (!response.IsSuccessStatusCode)
             {
                 _logger?.LogWarning("Google status feed returned HTTP {StatusCode}", response.StatusCode);
                 return null;
             }
 
-            var json = await response.Content.ReadAsStringAsync(timeoutCts.Token).ConfigureAwait(false);
-            return ParseIncidents(json, _timeProvider.GetUtcNow());
+            if (response.Content.Headers.ContentLength > MaxFeedBytes) return null;
+            await using var stream = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
+            using var buffer = new MemoryStream();
+            var chunk = new byte[16 * 1024];
+            while (true)
+            {
+                // Read at most one byte over the cap, even without a Content-Length header.
+                var read = await stream.ReadAsync(chunk.AsMemory(0, Math.Min(chunk.Length,
+                    MaxFeedBytes + 1 - (int)buffer.Length)), ct).ConfigureAwait(false);
+                if (read == 0) break;
+                buffer.Write(chunk, 0, read);
+                if (buffer.Length > MaxFeedBytes) return null;
+            }
+            var bytes = buffer.GetBuffer();
+            var offset = buffer.Length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF ? 3 : 0;
+            return ParseIncidents(Encoding.UTF8.GetString(bytes, offset, (int)buffer.Length - offset), _timeProvider.GetUtcNow());
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -185,7 +164,7 @@ public sealed class GeminiStatusFallback : IGeminiStatusFallback, IDisposable
 
     internal static ProviderStatus? ParseIncidents(string json, DateTimeOffset now)
     {
-        if (string.IsNullOrWhiteSpace(json))
+        if (string.IsNullOrWhiteSpace(json) || Encoding.UTF8.GetByteCount(json) > MaxFeedBytes)
         {
             return null;
         }
@@ -254,6 +233,7 @@ public sealed class GeminiStatusFallback : IGeminiStatusFallback, IDisposable
     private static bool IsGeminiIncident(JsonElement incident)
     {
         if (incident.TryGetProperty("service_key", out var serviceKeyEl) &&
+            serviceKeyEl.ValueKind == JsonValueKind.String &&
             string.Equals(serviceKeyEl.GetString(), GeminiProductId, StringComparison.OrdinalIgnoreCase))
         {
             return true;
@@ -266,6 +246,7 @@ public sealed class GeminiStatusFallback : IGeminiStatusFallback, IDisposable
             {
                 if (prod.ValueKind == JsonValueKind.Object &&
                     prod.TryGetProperty("id", out var idEl) &&
+                    idEl.ValueKind == JsonValueKind.String &&
                     string.Equals(idEl.GetString(), GeminiProductId, StringComparison.OrdinalIgnoreCase))
                 {
                     return true;
@@ -282,14 +263,14 @@ public sealed class GeminiStatusFallback : IGeminiStatusFallback, IDisposable
             endEl.ValueKind == JsonValueKind.String &&
             !string.IsNullOrWhiteSpace(endEl.GetString()))
         {
-            if (DateTimeOffset.TryParse(endEl.GetString(), CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var endUtc) &&
-                endUtc <= now)
-            {
-                return true;
-            }
+            if (DateTimeOffset.TryParse(endEl.GetString(), CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var endUtc))
+                return endUtc <= now;
         }
 
-        return false;
+        // Google occasionally leaves old incidents open. Prefer modified, then begin;
+        // missing dates alone do not prove an incident has ended.
+        var updatedAt = ExtractUpdatedAt(incident, now);
+        return now.UtcDateTime - updatedAt > CacheRetention.MaxAge;
     }
 
     private static (ProviderStatusIndicator Indicator, int Rank) DetermineIndicatorAndRank(JsonElement incident)
@@ -417,9 +398,14 @@ public sealed class GeminiStatusFallback : IGeminiStatusFallback, IDisposable
 
     public void Dispose()
     {
-        if (_disposed) return;
-        _disposed = true;
-        _gate.Dispose();
+        lock (_lifetimeLock)
+        {
+            if (_disposed) return;
+            _disposed = true;
+        }
+        _lifetime.Cancel();
+        _lifetime.Dispose();
+        // Do not dispose the semaphore while in-flight callers may still release it.
         if (_disposeClient)
         {
             _httpClient.Dispose();

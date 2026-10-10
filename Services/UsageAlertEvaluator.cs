@@ -15,7 +15,7 @@ public sealed record UsageAlert(string Key, string Title, string Message);
 public class UsageAlertEvaluator
 {
     /// <summary>Usage at or above this is "nearly out".</summary>
-    public const double NearLimitPercent = 90;
+    public const double NearLimitPercent = UsageThresholds.Critical;
 
     /// <summary>How many points usage must be ahead of the time elapsed to count as "far ahead of pace".</summary>
     public const double AheadOfPacePoints = 25;

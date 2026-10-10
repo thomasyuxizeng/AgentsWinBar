@@ -384,12 +384,12 @@ public class GeminiStatusFallbackTests
     }
 
     [TestMethod]
-    public void GetStatus_SynchronousCall_ReturnsSameResult()
+    public async Task GetStatusAsync_EmptyFeed_ReturnsOperationalStatus()
     {
         SetupHttpResponse(HttpStatusCode.OK, "[]");
         using var fallback = CreateFallback();
 
-        var status = fallback.GetStatus();
+        var status = await fallback.GetStatusAsync();
 
         status.Should().NotBeNull();
         status!.Indicator.Should().Be(ProviderStatusIndicator.None);

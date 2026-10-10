@@ -81,6 +81,51 @@ public class StaleMainViewModelStartupTests
     };
 
     [TestMethod]
+    [DataRow(-8, false)]
+    [DataRow(-1, true)]
+    public void RestoreLastKnownUsage_StatusAge_ExpiresIndependentlyAndMarksRetainedStatusStale(int days, bool retained)
+    {
+        var now = DateTime.UtcNow;
+        _cache.Setup(c => c.GetLastKnown("claude")).Returns(SampleData("claude", 42, now.AddHours(-1)) with
+        { ServiceStatus = new() { Indicator = ProviderStatusIndicator.Major }, LastSuccessfulStatusFetch = now.AddDays(days) });
+        _viewModel.RestoreLastKnownUsage();
+        var restored = _viewModel.Providers.Single(p => p.Provider == "claude");
+        restored.Session!.Percent.Should().Be(42);
+        (restored.ServiceStatus != null).Should().Be(retained);
+        restored.StatusIsStale.Should().Be(retained);
+        restored.LastSuccessfulStatusFetch.Should().Be(retained ? now.AddDays(days) : null);
+    }
+
+    [TestMethod]
+    public void RestoreLastKnownUsage_StatusOnlyCacheAndUsageHistory_RestoresBothWithIndependentAges()
+    {
+        var now = DateTime.UtcNow;
+        _cache.Setup(c => c.GetLastKnown("claude")).Returns(new UsageData { Provider = "claude", FetchedAt = now.AddDays(-8),
+            ServiceStatus = new() { Indicator = ProviderStatusIndicator.Minor }, LastSuccessfulStatusFetch = now.AddHours(-1) });
+        _history.Add(new() { Provider = "claude", WindowKey = "session", UsedPercent = 42, Timestamp = now.AddHours(-2) }, now);
+        _viewModel.RestoreLastKnownUsage();
+        var restored = _viewModel.Providers.Single(p => p.Provider == "claude");
+        restored.Session!.Percent.Should().Be(42);
+        restored.ServiceStatus!.Indicator.Should().Be(ProviderStatusIndicator.Minor);
+        restored.StatusIsStale.Should().BeTrue(); restored.UsageIsStale.Should().BeTrue();
+        restored.LastSuccessfulStatusFetch.Should().Be(now.AddHours(-1));
+        restored.LastSuccessfulFetch.Should().Be(now.AddHours(-2));
+    }
+
+    [TestMethod]
+    public void RestoreLastKnownUsage_StatusOnlyWithoutHistory_RestoresStatusWithoutUsage()
+    {
+        var now = DateTime.UtcNow;
+        _cache.Setup(c => c.GetLastKnown("claude")).Returns(new UsageData { Provider = "claude", FetchedAt = now.AddDays(-8),
+            ServiceStatus = new() { Indicator = ProviderStatusIndicator.Minor }, LastSuccessfulStatusFetch = now.AddHours(-1) });
+        _viewModel.RestoreLastKnownUsage();
+        var restored = _viewModel.Providers.Single(p => p.Provider == "claude");
+        restored.HasUsage.Should().BeFalse(); restored.UsageIsStale.Should().BeFalse();
+        restored.LastSuccessfulFetch.Should().BeNull();
+        restored.ServiceStatus.Should().NotBeNull(); restored.StatusIsStale.Should().BeTrue();
+    }
+
+    [TestMethod]
     public async Task StartAsync_WhenCacheHasUsage_RestoresCacheBeforeFirstFetchFinishes()
     {
         var pastTime = DateTime.UtcNow.AddHours(-1);

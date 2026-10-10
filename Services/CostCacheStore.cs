@@ -5,7 +5,7 @@ using Microsoft.Extensions.Logging;
 namespace CodexBarWin.Services;
 
 /// <summary>
-/// Atomic cost-cache.json beside the settings file. Last-known values are retained regardless of age,
+/// Atomic cost-cache.json beside the settings file. Last-known values are retained for up to seven days,
 /// and developer mode never reads or writes it.
 /// </summary>
 public sealed class CostCacheStore : ICostCacheStore
