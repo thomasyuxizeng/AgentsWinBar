@@ -233,7 +233,7 @@ public sealed partial class TaskbarWindow : Window
                 Icon = ProviderIcons.GetGeometry(data.Provider),
                 StatusBrush = Controls.ProviderStatusVisuals.Brush(data.ServiceStatus),
                 IncidentVisibility = ProviderStatusPresentation.IsIncident(data.ServiceStatus) ? Visibility.Visible : Visibility.Collapsed,
-                StatusDescription = ProviderStatusPresentation.Description(data.ServiceStatus),
+                StatusDescription = StatusDetailCaption.Tooltip(data.ServiceStatus, DateTime.UtcNow),
                 SessionPercent = first?.Window.Percent ?? 0,
                 WeeklyPercent = second?.Window.Percent ?? 0,
                 SessionTimePercent = first?.Window.ElapsedPercent ?? -1,

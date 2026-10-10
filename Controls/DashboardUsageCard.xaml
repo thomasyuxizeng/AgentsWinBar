@@ -32,7 +32,7 @@
                                Text="{x:Bind views:DashboardFormat.CardNote(Data), Mode=OneWay}"/>
                     <Ellipse Width="8" Height="8" VerticalAlignment="Center"
                              Fill="{x:Bind views:DashboardFormat.StatusBrush(Data.ServiceStatus), Mode=OneWay}"
-                             ToolTipService.ToolTip="{x:Bind views:DashboardFormat.StatusText(Data.ServiceStatus), Mode=OneWay}"/>
+                             ToolTipService.ToolTip="{x:Bind views:DashboardFormat.StatusTip(Data), Mode=OneWay}"/>
                 </StackPanel>
             </Grid>
             <StackPanel x:Name="RowsHost" Spacing="9"/>

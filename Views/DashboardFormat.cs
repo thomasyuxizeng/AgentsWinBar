@@ -97,14 +97,24 @@ internal static class DashboardFormat
     public static string StatusText(ProviderStatus? status) => ProviderStatusPresentation.Description(status);
     public static string StatusChecked(ProviderStatus? status) => status?.UpdatedAt is { } at
         ? $"Status page updated {Ago(at)}" : status == null ? "No status reported" : string.Empty;
-    /// <summary>Stale-status caption for a provider card; empty when the status is fresh.</summary>
-    public static string StatusStale(DashboardProvider? provider) => provider == null ? string.Empty
-        : StaleCaption.StatusText(provider.StatusIsStale, provider.LastSuccessfulStatusFetchUtc, DateTime.UtcNow);
     /// <summary>The "status page updated" line, replaced by the stale caption when the status is last-known-good.</summary>
     public static string StatusChecked(DashboardProvider? provider) => provider == null ? string.Empty
         : StaleCaption.StatusLine(provider.StatusIsStale, provider.LastSuccessfulStatusFetchUtc, DateTime.UtcNow,
             StatusChecked(provider.ServiceStatus));
-    public static Visibility VisStatusStale(DashboardProvider? provider) => VisText(StatusStale(provider));
+    // Incident detail (banner lines and status dot tooltips); all empty/collapsed when the provider has no incident detail.
+    public static string IncidentTitle(DashboardProvider? provider) => StatusDetailCaption.BannerTitle(provider);
+    public static Visibility VisIncidentTitle(DashboardProvider? provider) => VisText(IncidentTitle(provider));
+    public static string IncidentBody(DashboardProvider? provider) =>
+        provider?.ServiceStatus is { Indicator: not ProviderStatusIndicator.None } ? IncidentCaption.UpdateBody(provider) : string.Empty;
+    public static Visibility VisIncidentBody(DashboardProvider? provider) => VisText(IncidentBody(provider));
+    public static string IncidentAge(DashboardProvider? provider) =>
+        provider?.ServiceStatus is { Indicator: not ProviderStatusIndicator.None } ? IncidentCaption.AgeText(provider, DateTime.UtcNow) : string.Empty;
+    public static Visibility VisIncidentAge(DashboardProvider? provider) => VisText(IncidentAge(provider));
+    /// <summary>Status dot tooltip: description, incident title, update text and update age.</summary>
+    public static string StatusTip(DashboardProvider? provider) => StatusDetailCaption.Tooltip(provider, DateTime.UtcNow);
+    /// <summary>Line under a failed-fetch message when the usage shown is last-known-good; empty otherwise.</summary>
+    public static string LastKnownData(DashboardProvider? provider) => StatusDetailCaption.LastKnownData(provider, DateTime.UtcNow);
+    public static Visibility VisLastKnownData(DashboardProvider? provider) => VisText(LastKnownData(provider));
     public static Visibility StatusBanner(ProviderStatus? status) => Vis(ProviderStatusPresentation.ShowBanner(status));
     public static Uri? StatusUri(ProviderStatus? status) => ProviderStatusPresentation.StatusPageUri(status);
     public static Visibility StatusLink(ProviderStatus? status) => VisNotNull(ProviderStatusPresentation.StatusPageUri(status));

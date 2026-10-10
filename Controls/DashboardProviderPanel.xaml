@@ -88,8 +88,15 @@
                     <TextBlock Text="Provider service status" FontWeight="SemiBold" FontSize="12"/>
                     <TextBlock Text="{x:Bind views:DashboardFormat.StatusText(Data.ServiceStatus), Mode=OneWay}"
                                TextWrapping="Wrap" FontSize="12"/>
-                    <TextBlock Style="{StaticResource Meta}" Text="{x:Bind views:DashboardFormat.StatusStale(Data), Mode=OneWay}"
-                               Visibility="{x:Bind views:DashboardFormat.VisStatusStale(Data), Mode=OneWay}"/>
+                    <TextBlock Text="{x:Bind views:DashboardFormat.IncidentTitle(Data), Mode=OneWay}"
+                               TextWrapping="Wrap" FontSize="12" FontWeight="Medium"
+                               Visibility="{x:Bind views:DashboardFormat.VisIncidentTitle(Data), Mode=OneWay}"/>
+                    <TextBlock Text="{x:Bind views:DashboardFormat.IncidentBody(Data), Mode=OneWay}"
+                               TextWrapping="Wrap" MaxLines="3" TextTrimming="CharacterEllipsis" FontSize="12"
+                               ToolTipService.ToolTip="{x:Bind views:DashboardFormat.IncidentBody(Data), Mode=OneWay}"
+                               Visibility="{x:Bind views:DashboardFormat.VisIncidentBody(Data), Mode=OneWay}"/>
+                    <TextBlock Style="{StaticResource Meta}" Text="{x:Bind views:DashboardFormat.IncidentAge(Data), Mode=OneWay}"
+                               Visibility="{x:Bind views:DashboardFormat.VisIncidentAge(Data), Mode=OneWay}"/>
                     <HyperlinkButton Content="Open status page" Padding="0" FontSize="12"
                                      NavigateUri="{x:Bind views:DashboardFormat.StatusUri(Data.ServiceStatus), Mode=OneWay}"
                                      Visibility="{x:Bind views:DashboardFormat.StatusLink(Data.ServiceStatus), Mode=OneWay}"/>
@@ -102,6 +109,8 @@
                 <StackPanel Spacing="2">
                     <TextBlock Text="Last fetch failed" FontWeight="SemiBold" FontSize="12"/>
                     <TextBlock Text="{x:Bind Data.Error, Mode=OneWay}" TextWrapping="Wrap" FontSize="12" IsTextSelectionEnabled="True"/>
+                    <TextBlock Style="{StaticResource Meta}" Text="{x:Bind views:DashboardFormat.LastKnownData(Data), Mode=OneWay}"
+                               Visibility="{x:Bind views:DashboardFormat.VisLastKnownData(Data), Mode=OneWay}"/>
                 </StackPanel>
             </Border>
 

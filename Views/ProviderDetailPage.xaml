@@ -59,12 +59,24 @@
         <ScrollViewer Grid.Row="1">
             <StackPanel Spacing="12">
 
+                <TextBlock x:Name="ServiceStatusStaleAlone" Style="{StaticResource CaptionTextBlockStyle}"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap"
+                           Visibility="Collapsed"/>
+
                 <Border x:Name="ServiceStatusBanner" Visibility="Collapsed" Padding="12"
                         BorderThickness="1" CornerRadius="6"
                         Background="{ThemeResource CardBackgroundFillColorDefaultBrush}">
                     <StackPanel Spacing="6">
                         <TextBlock Text="Provider service status" FontWeight="SemiBold"/>
                         <TextBlock x:Name="ServiceStatusDescription" TextWrapping="Wrap"/>
+                        <TextBlock x:Name="ServiceStatusIncidentTitle" TextWrapping="Wrap" FontWeight="Medium" Visibility="Collapsed"/>
+                        <TextBlock x:Name="ServiceStatusIncidentBody" TextWrapping="Wrap" MaxLines="3"
+                                   TextTrimming="CharacterEllipsis" Visibility="Collapsed"/>
+                        <TextBlock x:Name="ServiceStatusIncidentAge" Style="{StaticResource CaptionTextBlockStyle}"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" Visibility="Collapsed"/>
+                        <TextBlock x:Name="ServiceStatusStale" Style="{StaticResource CaptionTextBlockStyle}"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap"
+                                   Visibility="Collapsed"/>
                         <HyperlinkButton x:Name="ServiceStatusLink" Content="Open status page" Padding="0"
                                          HorizontalAlignment="Left" Visibility="Collapsed"/>
                     </StackPanel>
@@ -380,6 +392,7 @@
                             <TextBlock
                                 Grid.Column="1"
                                 x:Name="FetchedAtText"
+                                TextWrapping="Wrap"
                                 Style="{StaticResource CaptionTextBlockStyle}"/>
                         </Grid>
                     </StackPanel>
@@ -395,6 +408,7 @@
                     CornerRadius="6"
                     Visibility="Collapsed">
                     <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
                     </Grid.RowDefinitions>
@@ -424,9 +438,19 @@
                         </Button>
                     </Grid>
 
+                    <!-- Shown when the usage bars above are last-known data -->
+                    <TextBlock
+                        Grid.Row="1"
+                        x:Name="LastKnownDataText"
+                        Style="{StaticResource CaptionTextBlockStyle}"
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                        TextWrapping="Wrap"
+                        Margin="0,0,0,8"
+                        Visibility="Collapsed"/>
+
                     <!-- Error text (read-only TextBox) -->
                     <TextBox
-                        Grid.Row="1"
+                        Grid.Row="2"
                         x:Name="ErrorTextBox"
                         IsReadOnly="True"
                         TextWrapping="Wrap"

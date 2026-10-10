@@ -37,6 +37,7 @@
     <Compile Include="..\Helpers\DataAge.cs" Link="Linked\DataAge.cs" />
     <Compile Include="..\Helpers\StaleCaption.cs" Link="Linked\StaleCaption.cs" />
     <Compile Include="..\Helpers\IncidentCaption.cs" Link="Linked\IncidentCaption.cs" />
+    <Compile Include="..\Helpers\StatusDetailCaption.cs" Link="Linked\StatusDetailCaption.cs" />
     <Compile Include="..\Helpers\UsageThresholds.cs" Link="Linked\UsageThresholds.cs" />
     <Compile Include="..\Services\IActivityLog.cs" Link="Linked\IActivityLog.cs" />
     <Compile Include="..\Services\ActivityLog.cs" Link="Linked\ActivityLog.cs" />

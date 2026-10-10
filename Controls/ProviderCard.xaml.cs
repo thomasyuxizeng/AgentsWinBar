@@ -90,7 +90,7 @@ public sealed partial class ProviderCard : UserControl
         StatusNormal.Visibility = Visibility.Collapsed;
         StatusLoading.Visibility = Visibility.Collapsed;
         StatusNormal.Fill = ProviderStatusVisuals.Brush(Data.ServiceStatus);
-        ToolTipService.SetToolTip(StatusNormal, Helpers.ProviderStatusPresentation.Description(Data.ServiceStatus));
+        ToolTipService.SetToolTip(StatusNormal, Helpers.StatusDetailCaption.Tooltip(Data.ServiceStatus, DateTime.UtcNow));
 
         if (isLoading)
         {

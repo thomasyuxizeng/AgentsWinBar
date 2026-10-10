@@ -255,7 +255,7 @@ public sealed partial class OverlayWindow : Window
             Icon = ProviderIcons.GetGeometry(data.Provider),
             StatusBrush = Controls.ProviderStatusVisuals.Brush(data.ServiceStatus),
             IncidentVisibility = ProviderStatusPresentation.IsIncident(data.ServiceStatus) ? Visibility.Visible : Visibility.Collapsed,
-            StatusDescription = ProviderStatusPresentation.Description(data.ServiceStatus),
+            StatusDescription = StatusDetailCaption.Tooltip(data.ServiceStatus, DateTime.UtcNow),
             SessionPercent = firstCell.Percent,
             SessionTimePercent = first?.Window.ElapsedPercent ?? -1,
             SessionText = firstCell.Text,

@@ -10,6 +10,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - Provider incident fetcher (`ProviderIncidentFetcher`) and status text sanitizer (`IncidentTextSanitizer`) for provider outage and degradation details across Claude, Codex, and Gemini feeds.
 - Service status incident detail integration in `CodexBarService`, dashboard snapshot models (`DashboardProvider`), and caption presentation helpers (`IncidentCaption`).
+- Incident detail (title, latest update, update age) is shown in the service status banner on the dashboard and the provider detail page, and in the status dot tooltips.
+
+### Changed
+- Detail page: the stale service status line now sits with the status instead of under the Source row.
+- Detail page: "Last fetched" keeps the absolute fetch time when data is stale and appends the stale caption.
+- The failed-fetch banner says "Showing last-known data from ..." when the usage shown is the last good reading.
 
 ## [1.1.0] - 2026-10-11
 

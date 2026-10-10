@@ -108,9 +108,23 @@ public sealed partial class ProviderDetailPage : Page
         ServiceStatusBanner.Visibility = Helpers.ProviderStatusPresentation.ShowBanner(status)
             ? Visibility.Visible : Visibility.Collapsed;
         ServiceStatusBanner.BorderBrush = Controls.ProviderStatusVisuals.Brush(status);
-        var statusStale = Helpers.StaleCaption.StatusText(_data.StatusIsStale, _data.LastSuccessfulStatusFetch, DateTime.UtcNow);
-        ServiceStatusDescription.Text = Helpers.ProviderStatusPresentation.Description(status)
-            + (statusStale.Length > 0 ? "\n" + statusStale : string.Empty);
+        var now = DateTime.UtcNow;
+        var statusStale = Helpers.StaleCaption.StatusText(_data.StatusIsStale, _data.LastSuccessfulStatusFetch, now);
+        ServiceStatusDescription.Text = Helpers.ProviderStatusPresentation.Description(status);
+
+        // Incident detail under the description (nothing extra when the provider reports none)
+        var incidentTitle = Helpers.StatusDetailCaption.BannerTitle(status);
+        var incidentBody = Helpers.IncidentCaption.UpdateBody(status);
+        var incidentAge = Helpers.IncidentCaption.AgeText(status, now);
+        SetLine(ServiceStatusIncidentTitle, incidentTitle);
+        SetLine(ServiceStatusIncidentBody, incidentBody);
+        ToolTipService.SetToolTip(ServiceStatusIncidentBody, incidentBody.Length > 0 ? incidentBody : null);
+        SetLine(ServiceStatusIncidentAge, incidentAge);
+
+        // Stale status line sits with the status: inside the banner, or alone when the banner is hidden
+        var bannerShown = ServiceStatusBanner.Visibility == Visibility.Visible;
+        SetLine(ServiceStatusStale, bannerShown ? statusStale : string.Empty);
+        SetLine(ServiceStatusStaleAlone, bannerShown ? string.Empty : statusStale);
         ServiceStatusLink.NavigateUri = Helpers.ProviderStatusPresentation.StatusPageUri(status);
         ServiceStatusLink.Visibility = ServiceStatusLink.NavigateUri != null ? Visibility.Visible : Visibility.Collapsed;
 
@@ -194,7 +208,7 @@ public sealed partial class ProviderDetailPage : Page
         if (!string.IsNullOrEmpty(_data.Status))
         {
             StatusRow.Visibility = Visibility.Visible;
-            StatusText.Text = _data.Status + (statusStale.Length > 0 ? "\n" + statusStale : string.Empty);
+            StatusText.Text = _data.Status;
         }
         else
         {
@@ -202,7 +216,8 @@ public sealed partial class ProviderDetailPage : Page
         }
 
         FetchedAtText.Text = _data.UsageIsStale
-            ? Helpers.StaleCaption.Text(true, _data.LastSuccessfulFetch, DateTime.UtcNow)
+            ? Helpers.StatusDetailCaption.FetchedWhenStale(DashboardFormat.Local(_data.FetchedAt), _data.FetchedAt,
+                true, _data.LastSuccessfulFetch, now)
             : Helpers.TimestampFormatter.FormatLocal(_data.FetchedAt);
 
         // Error
@@ -210,11 +225,22 @@ public sealed partial class ProviderDetailPage : Page
         {
             ErrorSection.Visibility = Visibility.Visible;
             ErrorTextBox.Text = _data.Error ?? string.Empty;
+            var lastKnown = Helpers.StatusDetailCaption.LastKnownData(_data.UsageIsStale,
+                _data.Session != null || _data.Weekly != null || _data.Tertiary != null || _data.HasExtraWindows,
+                _data.LastSuccessfulFetch, now);
+            SetLine(LastKnownDataText, lastKnown);
         }
         else
         {
             ErrorSection.Visibility = Visibility.Collapsed;
+            SetLine(LastKnownDataText, string.Empty);
         }
+    }
+
+    private static void SetLine(TextBlock block, string text)
+    {
+        block.Text = text;
+        block.Visibility = text.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private void UpdateHistory(Controls.BurndownChart chart, string key, UsageWindow? window)
