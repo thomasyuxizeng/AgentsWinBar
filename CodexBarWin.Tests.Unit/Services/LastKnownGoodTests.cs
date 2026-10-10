@@ -110,7 +110,7 @@ public class LastKnownGoodTests
     public async Task GetAllUsageAsync_WhenRestarted_RestoresExpiredDiskCache()
     {
         Response(GoodUsage); var first = (await Service().GetAllUsageAsync()).Single();
-        _clock.Now += TimeSpan.FromDays(10);
+        _clock.Now += TimeSpan.FromDays(3);
         var cache = Cache(); await cache.LoadAsync(); Response("", false);
         var stale = (await Service(cache).GetAllUsageAsync()).Single();
         stale.Session!.Percent.Should().Be(42); stale.LastSuccessfulFetch.Should().Be(first.LastSuccessfulFetch);
@@ -155,14 +155,14 @@ public class LastKnownGoodTests
     public async Task GetCostAsync_WhenUnavailable_RetainsOriginalValuesAndAge(string json, bool success)
     {
         var service = Service(); Response(GoodCost); var good = await service.GetCostAsync("gemini");
-        _clock.Now += TimeSpan.FromDays(8); Response(json, success);
+        _clock.Now += TimeSpan.FromDays(3); Response(json, success);
         var stale = await service.GetCostAsync("gemini", forceRefresh: true);
         stale!.TodayTokens.Should().Be(250); stale.TodayCostUSD.Should().Be(2.5m);
         stale.Last30DaysTokens.Should().Be(4000); stale.IsStale.Should().BeTrue();
         stale.LastSuccessfulFetch.Should().Be(good!.LastSuccessfulFetch);
         var snapshot = DashboardSnapshotBuilder.Build(new() { Providers = [new() { Provider = "gemini", Cost = stale }],
             Settings = _settings.Settings, NowUtc = _clock.Now.UtcDateTime });
-        snapshot.Providers.Single().Cost!.StaleAge.Should().Be(TimeSpan.FromDays(8));
+        snapshot.Providers.Single().Cost!.StaleAge.Should().Be(TimeSpan.FromDays(3));
         snapshot.Providers.Single().IsStale.Should().BeTrue();
     }
 
@@ -175,7 +175,7 @@ public class LastKnownGoodTests
         var zero = await service.GetCostAsync("gemini", forceRefresh: true);
         zero!.HasData.Should().BeTrue(); zero.FetchOutcome.Should().Be(FetchOutcome.Success);
         zero.IsStale.Should().BeFalse(); zero.TodayTokens.Should().Be(0); zero.Last30DaysCostUSD.Should().Be(0);
-        _clock.Now += TimeSpan.FromDays(10); Response("", false);
+        _clock.Now += TimeSpan.FromDays(3); Response("", false);
         var restored = await Service().GetCostAsync("gemini");
         restored!.HasData.Should().BeTrue(); restored.IsStale.Should().BeTrue();
         restored.Last30DaysCostUSD.Should().Be(0); restored.LastSuccessfulFetch.Should().Be(zero.LastSuccessfulFetch);
@@ -185,7 +185,7 @@ public class LastKnownGoodTests
     public async Task GetCostAsync_WhenRestartedAndDisconnected_RetainsNonzeroDiskTotals()
     {
         Response(GoodCost); var good = await Service().GetCostAsync("gemini");
-        _clock.Now += TimeSpan.FromDays(10); Response("", false);
+        _clock.Now += TimeSpan.FromDays(3); Response("", false);
         var restored = await Service().GetCostAsync("gemini");
         restored!.TodayCostUSD.Should().Be(2.5m); restored.TodayTokens.Should().Be(250);
         restored.LastSuccessfulFetch.Should().Be(good!.LastSuccessfulFetch); restored.IsStale.Should().BeTrue();

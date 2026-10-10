@@ -42,9 +42,15 @@ public static class DashboardSnapshotBuilder
                 var store = new UsageHistoryStore();
                 store.Restore(byProvider[data.Provider], now);
                 if (store.GetLastKnownUsage(data.Provider) is { } restored)
-                    data = restored with { Error = data.Error, IsLoading = data.IsLoading, Cost = data.Cost,
-                        ServiceStatus = data.ServiceStatus, StatusIsStale = data.StatusIsStale,
-                        LastSuccessfulStatusFetch = data.LastSuccessfulStatusFetch };
+                {
+                    var successAt = Utc(restored.LastSuccessfulFetch ?? restored.FetchedAt);
+                    if (now - successAt <= Services.CacheRetention.MaxAge)
+                    {
+                        data = restored with { Error = data.Error, IsLoading = data.IsLoading, Cost = data.Cost,
+                            ServiceStatus = data.ServiceStatus, StatusIsStale = data.StatusIsStale,
+                            LastSuccessfulStatusFetch = data.LastSuccessfulStatusFetch };
+                    }
+                }
             }
             var id = data.Provider ?? string.Empty;
             var history = byProvider[id].ToArray();
@@ -60,7 +66,7 @@ public static class DashboardSnapshotBuilder
                 var historyKey = key;
                 var suffix = 2;
                 while (!keys.Add(key)) key = $"{historyKey}#{suffix++}";
-                var percent = DashboardValues.Percent(window.Percent);
+                var percent = double.IsFinite(window.Percent) ? Math.Max(0, window.Percent) : 0;
                 var pace = double.IsFinite(window.Percent)
                     ? PaceCalculator.Project(percent, window.WindowMinutes, window.ResetAt, now)
                     : new PaceProjection(PaceKind.Unknown);

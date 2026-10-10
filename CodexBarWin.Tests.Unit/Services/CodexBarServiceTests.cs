@@ -640,12 +640,24 @@ public class CodexBarServiceTests
     }
 
     [TestMethod]
-    public async Task GetCostAsync_LastGoodOlderThanSevenDays_IsStillServedAsStale()
+    public async Task GetCostAsync_LastGoodOlderThanSevenDays_IsDropped()
     {
         var clock = new CostClock(); var service = CostService(clock);
         SetCostResponse();
         await service.GetCostAsync("claude");
         clock.Now += TimeSpan.FromDays(8);
+        SetCostResponse(success: false, json: "Command timed out");
+        var stale = await service.GetCostAsync("claude");
+        stale.Should().BeNull();
+    }
+
+    [TestMethod]
+    public async Task GetCostAsync_LastGoodWithinSevenDays_IsStillServedAsStale()
+    {
+        var clock = new CostClock(); var service = CostService(clock);
+        SetCostResponse();
+        await service.GetCostAsync("claude");
+        clock.Now += TimeSpan.FromDays(3);
         SetCostResponse(success: false, json: "Command timed out");
         var stale = await service.GetCostAsync("claude");
         stale!.Last30DaysTokens.Should().Be(123456);

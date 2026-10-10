@@ -125,7 +125,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         await RefreshCoreAsync();
     }
 
-    private void RestoreLastKnownUsage()
+    internal void RestoreLastKnownUsage()
     {
         if (_settingsService.Settings.DeveloperModeEnabled) return;
         var enabled = _settingsService.Settings.Providers.Where(p => p.IsEnabled && ProviderConstants.IsValidProvider(p.Id))
@@ -133,7 +133,14 @@ public partial class MainViewModel : ObservableObject, IDisposable
         var restoredByProvider = enabled.ToDictionary(provider => provider, provider =>
         {
             var cached = _cacheService.GetLastKnown(provider);
-            return cached?.HasUsage == true ? cached : _history.GetLastKnownUsage(provider);
+            if (cached?.HasUsage == true) return cached;
+            var fromHistory = _history.GetLastKnownUsage(provider);
+            if (fromHistory != null)
+            {
+                var successAt = Helpers.DashboardValues.Utc(fromHistory.LastSuccessfulFetch ?? fromHistory.FetchedAt);
+                if (DateTime.UtcNow - successAt <= CacheRetention.MaxAge) return fromHistory;
+            }
+            return null;
         });
         if (Providers.Count == 0 && restoredByProvider.Values.All(data => data == null)) return;
         ProviderListSynchronizer.Sync(Providers, enabled);

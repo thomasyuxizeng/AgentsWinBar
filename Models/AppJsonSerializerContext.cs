@@ -120,7 +120,7 @@ public record ExtraRateWindowDto
 public record UsageWindowDto
 {
     public double? UsedPercent { get; init; }
-    public bool HasReading => UsedPercent is { } percent && double.IsFinite(percent) && percent is >= 0 and <= 100;
+    public bool HasReading => UsedPercent is { } percent && double.IsFinite(percent) && percent >= 0;
     public int WindowMinutes { get; init; }
     public DateTime? ResetsAt { get; init; }
     public string? ResetDescription { get; init; }

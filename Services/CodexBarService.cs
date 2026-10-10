@@ -257,6 +257,13 @@ public class CodexBarService : ICodexBarService
     private CostData? LastGoodCost(string provider, DateTimeOffset now)
     {
         if (!_lastGoodCost.TryGetValue(provider, out var data)) return null;
+        var successAt = (data.LastSuccessfulFetch ?? data.FetchedAt).ToUniversalTime();
+        if (now.UtcDateTime - successAt > CacheRetention.MaxAge)
+        {
+            _lastGoodCost.Remove(provider);
+            _costStoreDirty = true;
+            return null;
+        }
         return data with { IsStale = true, LastSuccessfulFetch = data.LastSuccessfulFetch ?? data.FetchedAt };
     }
 
@@ -266,6 +273,16 @@ public class CodexBarService : ICodexBarService
         Dictionary<string, CostData>? snapshot = null;
         lock (_costCache)
         {
+            var nowUtc = _timeProvider.GetUtcNow().UtcDateTime;
+            foreach (var (k, v) in _lastGoodCost.ToList())
+            {
+                var successAt = (v.LastSuccessfulFetch ?? v.FetchedAt).ToUniversalTime();
+                if (nowUtc - successAt > CacheRetention.MaxAge)
+                {
+                    _lastGoodCost.Remove(k);
+                    _costStoreDirty = true;
+                }
+            }
             if (!_costStoreDirty) return;
             snapshot = new Dictionary<string, CostData>(_lastGoodCost, StringComparer.Ordinal);
             _costStoreDirty = false;
@@ -599,9 +616,14 @@ public class CodexBarService : ICodexBarService
 
     private UsageData ResolveUsage(UsageData data)
     {
+        var now = _timeProvider.GetUtcNow().UtcDateTime;
         var cached = _cacheService.GetLastKnown(data.Provider);
         var previous = cached?.HasUsage == true ? cached : _history?.GetLastKnownUsage(data.Provider);
-        var now = _timeProvider.GetUtcNow().UtcDateTime;
+        if (previous != null)
+        {
+            var prevSuccess = Helpers.DashboardValues.Utc(previous.LastSuccessfulFetch ?? previous.FetchedAt);
+            if (now - prevSuccess > CacheRetention.MaxAge) previous = null;
+        }
         var success = data.UsageFetchOutcome == FetchOutcome.Success;
         var statusSuccess = data.StatusFetchOutcome == FetchOutcome.Success;
         var resolved = data with

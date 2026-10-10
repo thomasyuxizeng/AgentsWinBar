@@ -71,7 +71,7 @@ public class CostCacheStoreTests
 
         var loaded = await Store().LoadAsync();
 
-        loaded.Keys.Should().BeEquivalentTo(["codex", "claude"]);
+        loaded.Keys.Should().BeEquivalentTo(["codex"]);
     }
 
     [TestMethod]

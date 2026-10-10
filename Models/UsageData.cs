@@ -31,7 +31,7 @@ public record UsageData
     public DateTime? LastSuccessfulFetch { get; init; }
     public DateTime? LastSuccessfulStatusFetch { get; init; }
     public bool HasUsage => Session != null || Weekly != null || Tertiary != null || ExtraWindows?.Count > 0 || Credits != null;
-    public bool IsStale => UsageIsStale || StatusIsStale || Cost?.IsStale == true || DateTime.UtcNow - FetchedAt > TimeSpan.FromMinutes(5);
+    public bool IsStale => UsageIsStale || StatusIsStale || Cost?.IsStale == true || DateTime.UtcNow - Helpers.DashboardValues.Utc(FetchedAt) > TimeSpan.FromMinutes(5);
     public string? Status { get; init; }
     public ProviderStatus? ServiceStatus { get; init; }
     public CostData? Cost { get; init; }

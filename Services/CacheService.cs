@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
 using CodexBarWin.Models;
+using CodexBarWin.Helpers;
 using Microsoft.Extensions.Logging;
 
 namespace CodexBarWin.Services;
@@ -68,7 +69,8 @@ public class CacheService : ICacheService
 
     public UsageData? GetLastKnown(string provider) => !DeveloperMode && ProviderConstants.IsValidProvider(provider) &&
         _cache.TryGetValue(ProviderConstants.ValidateAndNormalize(provider), out var data) &&
-        Utc(data.FetchedAt) <= DateTime.UtcNow ? data : null;
+        Utc(data.FetchedAt) <= DateTime.UtcNow &&
+        DateTime.UtcNow - Utc(data.LastSuccessfulFetch ?? data.FetchedAt) <= CacheRetention.MaxAge ? data : null;
 
     public IReadOnlyDictionary<string, UsageData> GetAll()
     {
@@ -85,9 +87,16 @@ public class CacheService : ICacheService
         try
         {
             if (DeveloperMode) return;
+            var now = DateTime.UtcNow;
+            foreach (var (k, v) in _cache.ToArray())
+            {
+                var successAt = Utc(v.LastSuccessfulFetch ?? v.FetchedAt);
+                if (now - successAt > CacheRetention.MaxAge)
+                    _cache.TryRemove(k, out _);
+            }
             var cacheData = new CacheData
             {
-                Timestamp = DateTime.UtcNow,
+                Timestamp = now,
                 Items = _cache.ToDictionary(kv => kv.Key, kv => kv.Value)
             };
 
@@ -123,11 +132,14 @@ public class CacheService : ICacheService
             if (document.RootElement.ValueKind != JsonValueKind.Object) return;
             var timestamp = FindProperty(document.RootElement, "timestamp");
             if (timestamp.ValueKind != JsonValueKind.String || !timestamp.TryGetDateTime(out var savedAt)) return;
-            if (Utc(savedAt) > DateTime.UtcNow)
+            var now = DateTime.UtcNow;
+            var savedAtUtc = Utc(savedAt);
+            if (savedAtUtc - now > CacheRetention.ClockSkewTolerance)
             {
                 _logger.LogDebug("Cache file timestamp is in the future, ignoring");
                 return;
             }
+            if (savedAtUtc > now) savedAtUtc = now;
 
             var items = FindProperty(document.RootElement, "items");
             if (items.ValueKind != JsonValueKind.Object) return;
@@ -135,7 +147,7 @@ public class CacheService : ICacheService
             {
                 if (item.Value.ValueKind != JsonValueKind.Object
                     || FindProperty(item.Value, "fetchedAt").ValueKind != JsonValueKind.String
-                    || FindProperty(item.Value, "extraWindows").ValueKind == JsonValueKind.Null
+                    || FindProperty(item.Value, "extraWindows").ValueKind is not (JsonValueKind.Undefined or JsonValueKind.Null or JsonValueKind.Array)
                     || !ProviderConstants.IsValidProvider(item.Name)) continue;
                 UsageData? data;
                 try
@@ -147,10 +159,21 @@ public class CacheService : ICacheService
                 catch (JsonException) { continue; }
                 // An entry that omits extraWindows deserializes it as null; treat that as none rather than as corruption.
                 data = data with { ExtraWindows = data.ExtraWindows ?? [] };
+                var fetchedAtUtc = Utc(data.FetchedAt);
+                if (fetchedAtUtc - now > CacheRetention.ClockSkewTolerance) continue;
+                if (fetchedAtUtc > now) data = data with { FetchedAt = now };
+                if (data.LastSuccessfulFetch.HasValue)
+                {
+                    var lastSuccessUtc = Utc(data.LastSuccessfulFetch.Value);
+                    if (lastSuccessUtc - now > CacheRetention.ClockSkewTolerance) continue;
+                    if (lastSuccessUtc > now) data = data with { LastSuccessfulFetch = now };
+                }
+                var itemSuccessAt = Utc(data.LastSuccessfulFetch ?? data.FetchedAt);
+                if (now - itemSuccessAt > CacheRetention.MaxAge) continue;
                 if (!string.Equals(item.Name, data.Provider, StringComparison.OrdinalIgnoreCase)
                     || data.ExtraWindows.Any(window => window == null || window.Window == null)
                     || string.Equals(data.Status, "offline", StringComparison.OrdinalIgnoreCase)
-                    || data.HasError || data.CommandNotFound || data.IsLoading || Utc(data.FetchedAt) > DateTime.UtcNow
+                    || data.HasError || data.CommandNotFound || data.IsLoading
                     || data.UsageFetchOutcome is FetchOutcome.Failed or FetchOutcome.Unavailable) continue;
                 _cache[ProviderConstants.ValidateAndNormalize(item.Name)] = data;
             }
@@ -172,7 +195,7 @@ public class CacheService : ICacheService
         return age >= TimeSpan.Zero && age < Expiry;
     }
 
-    private static DateTime Utc(DateTime timestamp) => timestamp.Kind == DateTimeKind.Local ? timestamp.ToUniversalTime() : timestamp;
+    private static DateTime Utc(DateTime timestamp) => DashboardValues.Utc(timestamp);
 
     private static JsonElement FindProperty(JsonElement element, string name)
     {

@@ -120,11 +120,12 @@ public sealed partial class UsageMeter : UserControl
         var signature = (Percent, TimePercent, Accent, PaceText, ActualWidth);
         if (_lastUpdate == signature) return;
         _lastUpdate = signature;
-        var percent = DashboardValues.Percent(Percent);
+        var visualPercent = DashboardValues.Percent(Percent);
+        var honestPercent = double.IsFinite(Percent) ? Math.Max(0, Percent) : 0;
 
-        UsageBar.Width = ActualWidth * (percent / 100.0);
-        var key = (Accent, percent >= 95 ? 2 : percent >= 80 ? 1 : 0);
-        if (!_barBrushes.TryGetValue(key, out var barBrush)) _barBrushes[key] = barBrush = GetBarBrush(percent, Accent);
+        UsageBar.Width = ActualWidth * (visualPercent / 100.0);
+        var key = (Accent, honestPercent >= 95 ? 2 : honestPercent >= 80 ? 1 : 0);
+        if (!_barBrushes.TryGetValue(key, out var barBrush)) _barBrushes[key] = barBrush = GetBarBrush(honestPercent, Accent);
         if (!ReferenceEquals(UsageBar.Fill, barBrush)) UsageBar.Fill = barBrush;
 
         if (!double.IsFinite(TimePercent) || TimePercent < 0)
@@ -144,14 +145,14 @@ public sealed partial class UsageMeter : UserControl
         // The marker only appears when usage is outpacing the schedule (the blue has run past the time
         // position, so the violet layer is hidden). Otherwise the violet layer already shows the headroom.
         // Keep it fully inside the bar, even at 0% and 100%.
-        TimeMarker.Visibility = percent > time && ActualWidth > TimeMarker.Width ? Visibility.Visible : Visibility.Collapsed;
+        TimeMarker.Visibility = honestPercent > time && ActualWidth > TimeMarker.Width ? Visibility.Visible : Visibility.Collapsed;
         var markerX = Math.Clamp(ActualWidth * (time / 100.0) - TimeMarker.Width / 2, 0, Math.Max(0, ActualWidth - TimeMarker.Width));
         TimeMarker.Margin = new Thickness(markerX, 0, 0, 0);
 
-        var pace = percent > time + 5 ? "ahead of time: using it fast"
-            : percent < time - 5 ? "behind time: using it slowly"
+        var pace = honestPercent > time + 5 ? "ahead of time: using it fast"
+            : honestPercent < time - 5 ? "behind time: using it slowly"
             : "on pace";
-        var tip = $"Used {percent:F0}% · {time:F0}% of the time has passed ({pace})";
+        var tip = $"Used {honestPercent:F0}% · {time:F0}% of the time has passed ({pace})";
         if (!string.IsNullOrEmpty(PaceText))
         {
             tip += Environment.NewLine + PaceText;

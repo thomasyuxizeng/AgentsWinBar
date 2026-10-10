@@ -79,6 +79,7 @@
     <Compile Include="..\Services\ICostCacheStore.cs" Link="Linked\ICostCacheStore.cs" />
     <Compile Include="..\Services\CostCacheStore.cs" Link="Linked\CostCacheStore.cs" />
     <Compile Include="..\Services\SettingsService.cs" Link="Linked\SettingsService.cs" />
+    <Compile Include="..\Services\CacheRetention.cs" Link="Linked\CacheRetention.cs" />
     <Compile Include="..\Services\CacheService.cs" Link="Linked\CacheService.cs" />
     <Compile Include="..\Services\SetupChecker.cs" Link="Linked\SetupChecker.cs" />
     <Compile Include="..\Services\SampleDataLoader.cs" Link="Linked\SampleDataLoader.cs" />

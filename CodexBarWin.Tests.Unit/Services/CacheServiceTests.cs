@@ -49,7 +49,7 @@ public class CacheServiceTests
     [TestMethod]
     public async Task GetLastKnown_WhenFileAndReadingExpired_RestoresReadingWithoutTreatingItAsFresh()
     {
-        var old = DateTime.UtcNow.AddDays(-30);
+        var old = DateTime.UtcNow.AddDays(-2);
         Directory.CreateDirectory(Path.GetDirectoryName(_cachePath)!);
         await File.WriteAllTextAsync(_cachePath, System.Text.Json.JsonSerializer.Serialize(new CacheData
         {
@@ -102,7 +102,6 @@ public class CacheServiceTests
     [DataRow("null")]
     [DataRow("{\"provider\":\"claude\"}")]
     [DataRow("{\"provider\":\"codex\",\"fetchedAt\":\"$now\"}")]
-    [DataRow("{\"provider\":\"claude\",\"fetchedAt\":\"$now\",\"extraWindows\":null}")]
     [DataRow("{\"provider\":\"claude\",\"fetchedAt\":\"$now\",\"error\":\"failed\"}")]
     [DataRow("{\"provider\":\"claude\",\"fetchedAt\":\"$now\",\"commandNotFound\":true}")]
     public async Task LoadAsync_PartialOrInvalidEntry_SkipsEntry(string item)
