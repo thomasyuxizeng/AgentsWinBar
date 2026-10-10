@@ -73,7 +73,7 @@
                                    FontSize="12" TextWrapping="Wrap" TextAlignment="Right" MaxWidth="220"/>
                     </StackPanel>
                     <TextBlock Style="{StaticResource Meta}" HorizontalAlignment="Right" TextAlignment="Right"
-                               Text="{x:Bind views:DashboardFormat.StatusChecked(Data.ServiceStatus), Mode=OneWay}"/>
+                               Text="{x:Bind views:DashboardFormat.StatusChecked(Data), Mode=OneWay}"/>
                     <TextBlock Style="{StaticResource Meta}" HorizontalAlignment="Right"
                                Text="{x:Bind views:DashboardFormat.SourceLine(Data.Source), Mode=OneWay}"
                                ToolTipService.ToolTip="Where these numbers came from"/>
@@ -88,6 +88,8 @@
                     <TextBlock Text="Provider service status" FontWeight="SemiBold" FontSize="12"/>
                     <TextBlock Text="{x:Bind views:DashboardFormat.StatusText(Data.ServiceStatus), Mode=OneWay}"
                                TextWrapping="Wrap" FontSize="12"/>
+                    <TextBlock Style="{StaticResource Meta}" Text="{x:Bind views:DashboardFormat.StatusStale(Data), Mode=OneWay}"
+                               Visibility="{x:Bind views:DashboardFormat.VisStatusStale(Data), Mode=OneWay}"/>
                     <HyperlinkButton Content="Open status page" Padding="0" FontSize="12"
                                      NavigateUri="{x:Bind views:DashboardFormat.StatusUri(Data.ServiceStatus), Mode=OneWay}"
                                      Visibility="{x:Bind views:DashboardFormat.StatusLink(Data.ServiceStatus), Mode=OneWay}"/>

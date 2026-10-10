@@ -19,4 +19,14 @@ public static class StaleCaption
         !isStale ? string.Empty
         : lastSuccessUtc is { } at ? $"Stale · last updated {Age(at, nowUtc)}"
         : "Stale · last update unknown";
+
+    /// <summary>Status-specific caption; empty when fresh. "Stale · status last checked 12m ago".</summary>
+    public static string StatusText(bool isStale, DateTime? lastSuccessUtc, DateTime nowUtc) =>
+        !isStale ? string.Empty
+        : lastSuccessUtc is { } at ? $"Stale · status last checked {Age(at, nowUtc)}"
+        : "Stale · status last check unknown";
+
+    /// <summary>The status caption when stale, otherwise <paramref name="fresh"/> unchanged.</summary>
+    public static string StatusLine(bool isStale, DateTime? lastSuccessUtc, DateTime nowUtc, string fresh) =>
+        isStale ? StatusText(true, lastSuccessUtc, nowUtc) : fresh;
 }

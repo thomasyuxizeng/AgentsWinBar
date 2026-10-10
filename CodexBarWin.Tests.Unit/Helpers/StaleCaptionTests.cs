@@ -45,4 +45,28 @@ public class StaleCaptionTests
     [TestMethod]
     public void Text_StaleCost_UsesSameCaption() =>
         StaleCaption.Text(true, Now.AddHours(-2), Now).Should().Be("Stale · last updated 2h ago");
+
+    [TestMethod]
+    public void StatusText_Fresh_IsEmpty() =>
+        StaleCaption.StatusText(false, Now.AddHours(-3), Now).Should().BeEmpty();
+
+    [TestMethod]
+    [DataRow(12 * 60, "Stale · status last checked 12m ago")]
+    [DataRow(5 * 3600, "Stale · status last checked 5h ago")]
+    [DataRow(2 * 86400, "Stale · status last checked 2d ago")]
+    public void StatusText_Stale_UsesAge(int secondsAgo, string expected) =>
+        StaleCaption.StatusText(true, Now.AddSeconds(-secondsAgo), Now).Should().Be(expected);
+
+    [TestMethod]
+    public void StatusText_StaleWithNullLastSuccess_SaysUnknown() =>
+        StaleCaption.StatusText(true, null, Now).Should().Be("Stale · status last check unknown");
+
+    [TestMethod]
+    public void StatusLine_Fresh_KeepsExistingText() =>
+        StaleCaption.StatusLine(false, Now, Now, "Status page updated 3m ago").Should().Be("Status page updated 3m ago");
+
+    [TestMethod]
+    public void StatusLine_Stale_ReplacesExistingText() =>
+        StaleCaption.StatusLine(true, Now.AddMinutes(-12), Now, "Status page updated 3m ago")
+            .Should().Be("Stale · status last checked 12m ago");
 }

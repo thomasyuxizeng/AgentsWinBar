@@ -7,7 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-10-11
+
 ### Changed
+- Stale service status now says when it was last checked.
 - Usage colours and limit labels now turn amber at 75% and red at 90% across all displays, using shared thresholds.
 - Provider cards and the detail page show a quiet "Stale · last updated 12m ago" caption, including for cost and tokens, when the dashboard is showing last-known-good data.
 - Added a 7-day expiry on all last-known-good cache data across usage and cost caches, in-memory cost tracking, and history restore fallback; expired entries are purged on load/save and treated as absent.
@@ -20,6 +23,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Clock skew tolerance of up to 5 minutes is shared and clamped across cache loading instead of discarding entire cache entries.
 - Cache loading now treats explicitly null `extraWindows` JSON fields as empty instead of skipping the provider.
 - `CostCacheStore` and `UsageData.IsStale` normalize timestamps to UTC, preventing false future/stale classifications with Local or Unspecified DateTimeKind.
+- Readings the WSL shim replays from its own cache keep their original time and show as stale, instead of renewing their own 7-day expiry or being recorded in history as new.
+- Cost totals already on screen and per-window usage history now expire after 7 days on their own.
+- Two refreshes of the same provider can no longer let an older result overwrite a newer one.
+- Over-quota readings above 100% are kept in usage history and the startup fallback.
 
 ### Added
 - Gemini service status fallback (`GeminiStatusFallback`): queries the Google Workspace Status incident feed directly with in-memory 5-minute caching when the CodexBar CLI returns no status object for Gemini.
@@ -168,7 +175,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Window slide-in animation from system tray
 - Setup wizard for first-time configuration
 
-[Unreleased]: https://github.com/Wave-OCE/CodexBarWin/compare/v1.0.2...HEAD
+[Unreleased]: https://github.com/Wave-OCE/CodexBarWin/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/Wave-OCE/CodexBarWin/compare/v1.0.2...v1.1.0
 [1.0.2]: https://github.com/Wave-OCE/CodexBarWin/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/Wave-OCE/CodexBarWin/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/Wave-OCE/CodexBarWin/compare/v0.9.9...v1.0.0

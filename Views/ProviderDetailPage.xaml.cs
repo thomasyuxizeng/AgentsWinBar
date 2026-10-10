@@ -108,7 +108,9 @@ public sealed partial class ProviderDetailPage : Page
         ServiceStatusBanner.Visibility = Helpers.ProviderStatusPresentation.ShowBanner(status)
             ? Visibility.Visible : Visibility.Collapsed;
         ServiceStatusBanner.BorderBrush = Controls.ProviderStatusVisuals.Brush(status);
-        ServiceStatusDescription.Text = Helpers.ProviderStatusPresentation.Description(status);
+        var statusStale = Helpers.StaleCaption.StatusText(_data.StatusIsStale, _data.LastSuccessfulStatusFetch, DateTime.UtcNow);
+        ServiceStatusDescription.Text = Helpers.ProviderStatusPresentation.Description(status)
+            + (statusStale.Length > 0 ? "\n" + statusStale : string.Empty);
         ServiceStatusLink.NavigateUri = Helpers.ProviderStatusPresentation.StatusPageUri(status);
         ServiceStatusLink.Visibility = ServiceStatusLink.NavigateUri != null ? Visibility.Visible : Visibility.Collapsed;
 
@@ -192,7 +194,7 @@ public sealed partial class ProviderDetailPage : Page
         if (!string.IsNullOrEmpty(_data.Status))
         {
             StatusRow.Visibility = Visibility.Visible;
-            StatusText.Text = _data.Status;
+            StatusText.Text = _data.Status + (statusStale.Length > 0 ? "\n" + statusStale : string.Empty);
         }
         else
         {
