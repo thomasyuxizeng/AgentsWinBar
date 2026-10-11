@@ -45,6 +45,7 @@
     <Compile Include="..\Services\DashboardService.cs" Link="Linked\DashboardService.cs" />
     <Compile Include="..\Helpers\EarlyResetDetector.cs" Link="Linked\EarlyResetDetector.cs" />
     <Compile Include="..\Helpers\EarlyResetCaption.cs" Link="Linked\EarlyResetCaption.cs" />
+    <Compile Include="..\Helpers\EarlyResetDisplay.cs" Link="Linked\EarlyResetDisplay.cs" />
     <Compile Include="..\Models\EarlyResetModels.cs" Link="Linked\EarlyResetModels.cs" />
     <Compile Include="..\Services\IEarlyResetStore.cs" Link="Linked\IEarlyResetStore.cs" />
     <Compile Include="..\Services\EarlyResetStore.cs" Link="Linked\EarlyResetStore.cs" />

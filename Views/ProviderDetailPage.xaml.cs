@@ -20,6 +20,8 @@ public sealed class ExtraWindowRow
     public string PercentText { get; set; } = string.Empty;
     public string ResetText { get; set; } = string.Empty;
     public Helpers.BurndownSeries History { get; set; } = new();
+    public string EarlyDetail { get; set; } = string.Empty;
+    public Visibility EarlyVisibility => string.IsNullOrEmpty(EarlyDetail) ? Visibility.Collapsed : Visibility.Visible;
 }
 
 /// <summary>
@@ -91,6 +93,25 @@ public sealed partial class ProviderDetailPage : Page
         BackRequested?.Invoke(this, EventArgs.Empty);
     }
 
+    private string EarlyDetailFor(IReadOnlyList<Helpers.EarlyReset> resets, string windowKey, double percent)
+    {
+        var reset = resets.Where(r => string.Equals(r.Provider, _data?.Provider, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(r.WindowKey, windowKey, StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(r => r.DetectedAtUtc).FirstOrDefault();
+        return reset == null ? string.Empty
+            : Helpers.EarlyResetDisplay.Detail(reset.DetectedAtUtc, reset.PreviousPercent, percent, DateTime.UtcNow);
+    }
+
+    /// <summary>Shows the RESET EARLY chip and detail line for a window, or collapses both when it was not reset early.</summary>
+    private void ShowEarlyReset(Border chip, TextBlock detail, IReadOnlyList<Helpers.EarlyReset> resets, string windowKey, double percent)
+    {
+        var text = EarlyDetailFor(resets, windowKey, percent);
+        var visibility = text.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+        chip.Visibility = visibility;
+        detail.Visibility = visibility;
+        detail.Text = text;
+    }
+
     private void UpdateUI()
     {
         if (_data == null) return;
@@ -133,6 +154,8 @@ public sealed partial class ProviderDetailPage : Page
         WeeklySectionTitle.Text = $"{_data.WeeklyLabel} Usage";
         TertiarySectionTitle.Text = _data.TertiaryLabel;
 
+        var earlyResets = App.Services.GetService<Services.IEarlyResetStore>()?.GetActive(DateTime.UtcNow) ?? [];
+
         // Session usage
         if (_data.Session != null)
         {
@@ -142,6 +165,7 @@ public sealed partial class ProviderDetailPage : Page
             SessionMeter.PaceText = _data.Session.PaceSummary;
             SessionPercentText.Text = $"{_data.Session.PercentText} used";
             SessionResetText.Text = _data.Session.ResetText;
+            ShowEarlyReset(SessionEarlyChip, SessionEarlyDetail, earlyResets, "session", _data.Session.Percent);
         }
         else
         {
@@ -157,6 +181,7 @@ public sealed partial class ProviderDetailPage : Page
             WeeklyMeter.PaceText = _data.Weekly.PaceSummary;
             WeeklyPercentText.Text = $"{_data.Weekly.PercentText} used";
             WeeklyResetText.Text = _data.Weekly.ResetText;
+            ShowEarlyReset(WeeklyEarlyChip, WeeklyEarlyDetail, earlyResets, "weekly", _data.Weekly.Percent);
         }
         else
         {
@@ -173,6 +198,7 @@ public sealed partial class ProviderDetailPage : Page
             TertiaryMeter.PaceText = _data.Tertiary.PaceSummary;
             TertiaryPercentText.Text = $"{_data.Tertiary.PercentText} used";
             TertiaryResetText.Text = _data.Tertiary.ResetText;
+            ShowEarlyReset(TertiaryEarlyChip, TertiaryEarlyDetail, earlyResets, "tertiary", _data.Tertiary.Percent);
         }
         else
         {
@@ -189,6 +215,7 @@ public sealed partial class ProviderDetailPage : Page
             PaceText = x.Window.PaceSummary,
             PercentText = $"{x.Window.PercentText} used",
             ResetText = x.Window.ResetText,
+            EarlyDetail = EarlyDetailFor(earlyResets, Services.UsageHistoryStore.ExtraWindowKey(x), x.Window.Percent),
             History = Helpers.BurndownBuilder.Build(_history?.Get(_data.Provider, Services.UsageHistoryStore.ExtraWindowKey(x)) ?? [],
                 x.Window, DateTime.UtcNow)
         }).ToList();

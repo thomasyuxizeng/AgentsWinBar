@@ -94,15 +94,20 @@
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
                     </Grid.RowDefinitions>
 
-                    <TextBlock
-                        Grid.Row="0"
-                        x:Name="SessionSectionTitle"
+                    <StackPanel Grid.Row="0" Orientation="Horizontal" Spacing="8" Margin="0,0,0,6">
+                        <TextBlock x:Name="SessionSectionTitle"
                         Text="Session Usage"
                         Style="{StaticResource CaptionTextBlockStyle}"
                         FontWeight="SemiBold"
-                        Margin="0,0,0,6"/>
+                        />
+                        <Border x:Name="SessionEarlyChip" CornerRadius="3" Padding="6,1" VerticalAlignment="Center" Visibility="Collapsed"
+                                Background="{x:Bind local:DashboardFormat.EarlyBrush()}">
+                            <TextBlock Text="RESET EARLY" FontSize="9" FontWeight="Bold" Foreground="#CC000000"/>
+                        </Border>
+                    </StackPanel>
 
                     <controls:UsageMeter
                         Grid.Row="1"
@@ -129,6 +134,10 @@
                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                             VerticalAlignment="Center"/>
                     </Grid>
+
+                    <TextBlock Grid.Row="3" x:Name="SessionEarlyDetail" Margin="0,4,0,0" Visibility="Collapsed"
+                               Style="{StaticResource CaptionTextBlockStyle}"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap"/>
                 </Grid>
 
                 <!-- Weekly Usage -->
@@ -146,15 +155,20 @@
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
                     </Grid.RowDefinitions>
 
-                    <TextBlock
-                        Grid.Row="0"
-                        x:Name="WeeklySectionTitle"
+                    <StackPanel Grid.Row="0" Orientation="Horizontal" Spacing="8" Margin="0,0,0,6">
+                        <TextBlock x:Name="WeeklySectionTitle"
                         Text="Weekly Usage"
                         Style="{StaticResource CaptionTextBlockStyle}"
                         FontWeight="SemiBold"
-                        Margin="0,0,0,6"/>
+                        />
+                        <Border x:Name="WeeklyEarlyChip" CornerRadius="3" Padding="6,1" VerticalAlignment="Center" Visibility="Collapsed"
+                                Background="{x:Bind local:DashboardFormat.EarlyBrush()}">
+                            <TextBlock Text="RESET EARLY" FontSize="9" FontWeight="Bold" Foreground="#CC000000"/>
+                        </Border>
+                    </StackPanel>
 
                     <controls:UsageMeter
                         Grid.Row="1"
@@ -181,6 +195,10 @@
                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                             VerticalAlignment="Center"/>
                     </Grid>
+
+                    <TextBlock Grid.Row="3" x:Name="WeeklyEarlyDetail" Margin="0,4,0,0" Visibility="Collapsed"
+                               Style="{StaticResource CaptionTextBlockStyle}"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap"/>
                 </Grid>
 
                 <!-- Tertiary Usage (e.g., Sonnet Weekly for Claude) -->
@@ -198,15 +216,20 @@
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
                     </Grid.RowDefinitions>
 
-                    <TextBlock
-                        Grid.Row="0"
-                        x:Name="TertiarySectionTitle"
+                    <StackPanel Grid.Row="0" Orientation="Horizontal" Spacing="8" Margin="0,0,0,6">
+                        <TextBlock x:Name="TertiarySectionTitle"
                         Text="Tertiary Usage"
                         Style="{StaticResource CaptionTextBlockStyle}"
                         FontWeight="SemiBold"
-                        Margin="0,0,0,6"/>
+                        />
+                        <Border x:Name="TertiaryEarlyChip" CornerRadius="3" Padding="6,1" VerticalAlignment="Center" Visibility="Collapsed"
+                                Background="{x:Bind local:DashboardFormat.EarlyBrush()}">
+                            <TextBlock Text="RESET EARLY" FontSize="9" FontWeight="Bold" Foreground="#CC000000"/>
+                        </Border>
+                    </StackPanel>
 
                     <controls:UsageMeter
                         Grid.Row="1"
@@ -233,6 +256,10 @@
                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                             VerticalAlignment="Center"/>
                     </Grid>
+
+                    <TextBlock Grid.Row="3" x:Name="TertiaryEarlyDetail" Margin="0,4,0,0" Visibility="Collapsed"
+                               Style="{StaticResource CaptionTextBlockStyle}"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap"/>
                 </Grid>
 
                 <!-- Extra windows (e.g. Antigravity's Claude and GPT quota): detail page only -->
@@ -257,16 +284,22 @@
                                     <RowDefinition Height="Auto"/>
                                     <RowDefinition Height="Auto"/>
                                     <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
                                 </Grid.RowDefinitions>
 
-                                <TextBlock
-                                    Grid.Row="0"
-                                    Text="{x:Bind Title}"
-                                    Style="{StaticResource CaptionTextBlockStyle}"
-                                    FontWeight="SemiBold"
-                                    Margin="0,0,0,6"/>
+                                <StackPanel Grid.Row="0" Orientation="Horizontal" Spacing="8" Margin="0,0,0,6">
+                                    <TextBlock
+                                        Text="{x:Bind Title}"
+                                        Style="{StaticResource CaptionTextBlockStyle}"
+                                        FontWeight="SemiBold"/>
+                                    <Border CornerRadius="3" Padding="6,1" VerticalAlignment="Center"
+                                            Visibility="{x:Bind EarlyVisibility}"
+                                            Background="{x:Bind local:DashboardFormat.EarlyBrush()}">
+                                        <TextBlock Text="RESET EARLY" FontSize="9" FontWeight="Bold" Foreground="#CC000000"/>
+                                    </Border>
+                                </StackPanel>
 
-                                <controls:BurndownChart Grid.Row="3" Margin="0,12,0,0"
+                                <controls:BurndownChart Grid.Row="4" Margin="0,12,0,0"
                                                         Series="{x:Bind History}" Accent="{x:Bind Accent}"/>
 
                                 <controls:UsageMeter
@@ -297,6 +330,11 @@
                                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                         VerticalAlignment="Center"/>
                                 </Grid>
+
+                                <TextBlock Grid.Row="3" Margin="0,4,0,0" Text="{x:Bind EarlyDetail}"
+                                           Visibility="{x:Bind EarlyVisibility}"
+                                           Style="{StaticResource CaptionTextBlockStyle}"
+                                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap"/>
                             </Grid>
                         </DataTemplate>
                     </ItemsControl.ItemTemplate>
