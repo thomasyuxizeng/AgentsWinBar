@@ -106,6 +106,7 @@ public partial class App : Application
 
             await Services.GetRequiredService<UsageHistoryPersistence>().LoadAsync();
             await Services.GetRequiredService<ICostLedger>().LoadAsync();
+            await Services.GetRequiredService<IEarlyResetStore>().LoadAsync();
 
             // A recent successful setup avoids waking WSL solely for launch validation.
             if (await Services.GetRequiredService<ISetupMemoService>().IsValidAsync())
@@ -264,6 +265,7 @@ public partial class App : Application
         services.AddSingleton<UsageHistoryStore>();
         services.AddSingleton<UsageHistoryPersistence>();
         services.AddSingleton<IActivityLog, ActivityLog>();
+        services.AddSingleton<IEarlyResetStore, EarlyResetStore>();
         services.AddSingleton<IDashboardService, DashboardService>();
         services.AddSingleton<IToastNotifier, ToastNotifier>();
 

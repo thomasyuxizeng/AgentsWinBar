@@ -43,6 +43,11 @@
     <Compile Include="..\Services\ActivityLog.cs" Link="Linked\ActivityLog.cs" />
     <Compile Include="..\Services\IDashboardService.cs" Link="Linked\IDashboardService.cs" />
     <Compile Include="..\Services\DashboardService.cs" Link="Linked\DashboardService.cs" />
+    <Compile Include="..\Helpers\EarlyResetDetector.cs" Link="Linked\EarlyResetDetector.cs" />
+    <Compile Include="..\Helpers\EarlyResetCaption.cs" Link="Linked\EarlyResetCaption.cs" />
+    <Compile Include="..\Models\EarlyResetModels.cs" Link="Linked\EarlyResetModels.cs" />
+    <Compile Include="..\Services\IEarlyResetStore.cs" Link="Linked\IEarlyResetStore.cs" />
+    <Compile Include="..\Services\EarlyResetStore.cs" Link="Linked\EarlyResetStore.cs" />
     <Compile Include="..\Helpers\ResetTimeFormatter.cs" Link="Linked\ResetTimeFormatter.cs" />
     <Compile Include="..\Helpers\WindowTitles.cs" Link="Linked\WindowTitles.cs" />
     <Compile Include="..\Helpers\TimestampFormatter.cs" Link="Linked\TimestampFormatter.cs" />

@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Early reset detection and notifications for usage windows that reset ahead of schedule (`EarlyResetDetector`, `EarlyResetStore`, `EarlyResetCaption`).
+
 ## [1.2.1] - 2026-10-11
 
 ### Fixed
