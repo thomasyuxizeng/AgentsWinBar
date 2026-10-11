@@ -7,8 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-10-11
+
+### Added
+- A RESET EARLY chip and detail line ("Reset early 2h ago · 79% to 3%") show on a usage window that was reset ahead of schedule, for 24 hours, and a toast fires. Detected from the data: used% drops 10+ points while the window's own reset is still more than 10 minutes away (Codex and Claude limit resets, banked resets, the Reset button). Events are kept in `early-resets.json` (`EarlyResetDetector`, `EarlyResetStore`, `EarlyResetCaption`).
+
 ### Fixed
-- Fixed: a rate-limited Claude refresh no longer waits ~30 s on the Claude CLI fallback.
+- A rate-limited Claude refresh no longer waits ~30 s on the Claude CLI fallback: the shim serves its cache at once when the usage API is rate-limited, and the CLI route is bounded by a 25 s timeout and remembered as failed for 30 minutes.
 
 ## [1.2.1] - 2026-10-11
 
@@ -215,7 +220,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Window slide-in animation from system tray
 - Setup wizard for first-time configuration
 
-[Unreleased]: https://github.com/Wave-OCE/CodexBarWin/compare/v1.2.1...HEAD
+[Unreleased]: https://github.com/Wave-OCE/CodexBarWin/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/Wave-OCE/CodexBarWin/compare/v1.2.1...v1.3.0
 [1.2.1]: https://github.com/Wave-OCE/CodexBarWin/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/Wave-OCE/CodexBarWin/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/Wave-OCE/CodexBarWin/compare/v1.0.2...v1.1.0

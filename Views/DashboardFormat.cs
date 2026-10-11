@@ -33,6 +33,14 @@ internal static class DashboardFormat
     /// <summary>"Near limit" / "At limit" chip (75% / 90%, UsageThresholds, the same as the bars); hidden below 75%.</summary>
     public static string LimitLabel(double percent) => percent >= UsageThresholds.Critical ? "AT LIMIT" : percent >= UsageThresholds.Warning ? "NEAR LIMIT" : string.Empty;
     public static Visibility LimitVis(double percent) => Vis(percent >= UsageThresholds.Warning);
+    /// <summary>"RESET EARLY" chip and its detail line for a window reset ahead of schedule (empty / collapsed otherwise).</summary>
+    public static string EarlyChip(DashboardWindow? window) => EarlyResetDisplay.Chip(window?.EarlyResetAtUtc);
+    public static Visibility EarlyVis(DashboardWindow? window) => Vis(window?.EarlyResetAtUtc != null);
+    public static string EarlyDetail(DashboardWindow? window) => window == null ? string.Empty
+        : EarlyResetDisplay.Detail(window.EarlyResetAtUtc, window.EarlyResetFromPercent, window.UsedPercent, DateTime.UtcNow);
+    public static Visibility VisEarlyDetail(DashboardWindow? window) => VisText(EarlyDetail(window));
+    public static Brush EarlyBrush() => Green;
+
     public static Brush LimitBrush(double percent) => percent >= UsageThresholds.Critical ? Red : Amber;
 
     public static string Money(decimal value, string currency) => CostFormatter.Money(value, currency);
@@ -147,7 +155,8 @@ internal static class DashboardFormat
         {
             $"{window.Title}: {FormatPercent(window.UsedPercent):F0}% used",
             ResetLine(window.ResetText, window.ResetsAtUtc),
-            window.PaceSummary
+            window.PaceSummary,
+            EarlyDetail(window)
         }.Where(line => !string.IsNullOrWhiteSpace(line)));
 
     public static string SourceLine(string? source) => string.IsNullOrWhiteSpace(source) ? "Source unknown" : $"Source: {source}";

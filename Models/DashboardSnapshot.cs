@@ -101,6 +101,10 @@ public sealed record DashboardProvider
 
     public int HistorySampleCount { get; init; }
     public DateTime? HistoryOldestUtc { get; init; }
+
+    /// <summary>Timestamp of an active early reset (within 24h) for this provider, if any.</summary>
+    public DateTime? EarlyResetAtUtc { get; init; }
+    public double? EarlyResetFromPercent { get; init; }
 }
 
 public enum DashboardWindowKind
@@ -136,6 +140,10 @@ public sealed record DashboardWindow
 
     /// <summary>Burndown for the current window (usage line, even-use guide, projection).</summary>
     public BurndownSeries History { get; init; } = new();
+
+    /// <summary>Timestamp of an active early reset (within 24h) for this window, if any.</summary>
+    public DateTime? EarlyResetAtUtc { get; init; }
+    public double? EarlyResetFromPercent { get; init; }
 }
 
 /// <summary>Local-log cost and token totals for one provider, plus derived figures.</summary>

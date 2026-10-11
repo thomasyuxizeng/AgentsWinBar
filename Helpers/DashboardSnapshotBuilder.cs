@@ -23,6 +23,8 @@ public sealed record DashboardInputs
     public IReadOnlyList<DashboardAlertEntry> RecentAlerts { get; init; } = [];
     public IReadOnlyList<DashboardCostCacheEntry> CostCache { get; init; } = [];
     public ICostLedger? CostLedger { get; init; }
+    public IEarlyResetStore? EarlyResetStore { get; init; }
+    public IReadOnlyList<EarlyReset>? EarlyResets { get; init; }
 }
 
 public static class DashboardSnapshotBuilder
@@ -32,6 +34,9 @@ public static class DashboardSnapshotBuilder
         var settings = inputs.Settings ?? new();
         var timeouts = settings.Timeouts ?? new();
         var now = Utc(inputs.NowUtc);
+        var activeResets = (inputs.EarlyResets ?? inputs.EarlyResetStore?.GetActive(now) ?? [])
+            .OfType<EarlyReset>().ToArray();
+        var resetsByProvider = activeResets.ToLookup(r => r.Provider, StringComparer.OrdinalIgnoreCase);
         var samples = (inputs.HistorySamples ?? []).OfType<UsageHistorySample>().ToArray();
         var byProvider = samples.ToLookup(s => s.Provider, StringComparer.OrdinalIgnoreCase);
         var today = DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(now, TimeZoneInfo.Local));
@@ -47,6 +52,8 @@ public static class DashboardSnapshotBuilder
                     : data with { ServiceStatus = null, LastSuccessfulStatusFetch = null, StatusIsStale = false };
             }
             var id = data.Provider ?? string.Empty;
+            var providerResets = resetsByProvider[id].ToArray();
+            var resetsByWindow = providerResets.ToLookup(r => r.WindowKey, StringComparer.OrdinalIgnoreCase);
             var history = byProvider[id].ToArray();
             var extras = (data.ExtraWindows ?? []).OfType<ExtraUsageWindow>()
                 .Select(e => e with { Title = e.Title ?? string.Empty }).ToArray();
@@ -64,6 +71,7 @@ public static class DashboardSnapshotBuilder
                 var pace = double.IsFinite(window.Percent)
                     ? PaceCalculator.Project(percent, window.WindowMinutes, window.ResetAt, now)
                     : new PaceProjection(PaceKind.Unknown);
+                var windowReset = resetsByWindow[historyKey].OrderByDescending(r => r.DetectedAtUtc).FirstOrDefault();
                 windows.Add(new DashboardWindow
                 {
                     Key = key, Kind = kind, Title = title,
@@ -77,7 +85,9 @@ public static class DashboardSnapshotBuilder
                     PaceSummary = PaceCalculator.Summarize(pace),
                     // Duplicate source keys cannot identify which window produced a sample.
                     History = BurndownBuilder.Build(ambiguousKeys.Contains(historyKey)
-                        ? [] : history.Where(s => s.WindowKey == historyKey), window, now)
+                        ? [] : history.Where(s => s.WindowKey == historyKey), window, now),
+                    EarlyResetAtUtc = windowReset != null ? Utc(windowReset.DetectedAtUtc) : null,
+                    EarlyResetFromPercent = windowReset?.PreviousPercent
                 });
             }
             // Labels on UsageData require a non-null provider id.
@@ -106,6 +116,7 @@ public static class DashboardSnapshotBuilder
             var incidentTitle = hasIncident && !string.IsNullOrWhiteSpace(status!.IncidentTitle) ? status.IncidentTitle : null;
             var incidentUpdateText = hasIncident && !string.IsNullOrWhiteSpace(status!.LatestUpdateText) ? status.LatestUpdateText : null;
             var incidentUpdateAtUtc = hasIncident ? Utc(status!.LatestUpdateAt) : null;
+            var mostRecentProviderReset = providerResets.OrderByDescending(r => r.DetectedAtUtc).FirstOrDefault();
             return new DashboardProvider
             {
                 Id = id, DisplayName = id.ToLowerInvariant() switch
@@ -121,7 +132,9 @@ public static class DashboardSnapshotBuilder
                 StaleAge = lastSuccess.HasValue ? Age(now, lastSuccess.Value) : null,
                 Error = data.Error, FetchedAtUtc = Utc(data.FetchedAt), OldReadingUtc = oldReading, Credits = data.Credits,
                 Windows = windows, Cost = settings.ShowCostTotals && cost?.HasData == true ? BuildCost(cost, today, now) : null,
-                HistorySampleCount = history.Length, HistoryOldestUtc = Oldest(history)
+                HistorySampleCount = history.Length, HistoryOldestUtc = Oldest(history),
+                EarlyResetAtUtc = mostRecentProviderReset != null ? Utc(mostRecentProviderReset.DetectedAtUtc) : null,
+                EarlyResetFromPercent = mostRecentProviderReset?.PreviousPercent
             };
         }).ToArray();
         var refs = providers.SelectMany(p => p.Windows.Select(w => (Window: w, Ref: new DashboardWindowRef

@@ -29,6 +29,12 @@
                     <TextBlock Text="{x:Bind views:DashboardFormat.LimitLabel(Data.UsedPercent), Mode=OneWay}"
                                FontSize="9" FontWeight="Bold" Foreground="#CC000000"/>
                 </Border>
+                <Border CornerRadius="3" Padding="6,1" VerticalAlignment="Center"
+                        Background="{x:Bind views:DashboardFormat.EarlyBrush()}"
+                        Visibility="{x:Bind views:DashboardFormat.EarlyVis(Data), Mode=OneWay}">
+                    <TextBlock Text="{x:Bind views:DashboardFormat.EarlyChip(Data), Mode=OneWay}"
+                               FontSize="9" FontWeight="Bold" Foreground="#CC000000"/>
+                </Border>
             </StackPanel>
             <TextBlock HorizontalAlignment="Right" FontSize="14" FontWeight="SemiBold"
                        Text="{x:Bind views:DashboardFormat.Used(Data.UsedPercent), Mode=OneWay}"/>
@@ -48,6 +54,9 @@
             <TextBlock Grid.Column="1" Style="{StaticResource Meta}" TextAlignment="Right"
                        Text="{x:Bind views:DashboardFormat.WindowMeta(Data.WindowMinutes, Data.ElapsedPercent), Mode=OneWay}"/>
         </Grid>
+        <TextBlock Style="{StaticResource Meta}"
+                   Text="{x:Bind views:DashboardFormat.EarlyDetail(Data), Mode=OneWay}"
+                   Visibility="{x:Bind views:DashboardFormat.VisEarlyDetail(Data), Mode=OneWay}"/>
         <TextBlock Style="{StaticResource Meta}" Foreground="{ThemeResource TextFillColorPrimaryBrush}"
                    Text="{x:Bind Data.PaceSummary, Mode=OneWay}"
                    Visibility="{x:Bind views:DashboardFormat.VisText(Data.PaceSummary), Mode=OneWay}"/>

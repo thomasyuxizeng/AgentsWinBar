@@ -1,4 +1,5 @@
 using System.Text.Json;
+using CodexBarWin.Helpers;
 using CodexBarWin.Models;
 using Microsoft.Extensions.Logging;
 
@@ -26,6 +27,8 @@ public class CodexBarService : ICodexBarService
     internal static readonly TimeSpan CostScanTimeout = TimeSpan.FromMinutes(5);
     private readonly ICostCacheStore? _costStore;
     private readonly ICostLedger? _costLedger;
+    private readonly IEarlyResetStore? _earlyResetStore;
+    private readonly IToastNotifier? _toastNotifier;
     private readonly UsageHistoryStore? _history;
     private readonly IGeminiStatusFallback? _geminiStatusFallback;
     private readonly IProviderIncidentFetcher? _incidentFetcher;
@@ -72,11 +75,15 @@ public class CodexBarService : ICodexBarService
         UsageHistoryStore? history = null,
         IGeminiStatusFallback? geminiStatusFallback = null,
         IProviderIncidentFetcher? incidentFetcher = null,
-        ICostLedger? costLedger = null)
+        ICostLedger? costLedger = null,
+        IEarlyResetStore? earlyResetStore = null,
+        IToastNotifier? toastNotifier = null)
     {
         _history = history;
         _costStore = costStore;
         _costLedger = costLedger;
+        _earlyResetStore = earlyResetStore;
+        _toastNotifier = toastNotifier;
         _geminiStatusFallback = geminiStatusFallback;
         _incidentFetcher = incidentFetcher;
         _wslService = wslService;
@@ -932,8 +939,81 @@ public class CodexBarService : ICodexBarService
                 UsageFetchOutcome = resolved.HasUsage ? FetchOutcome.Success : FetchOutcome.Unknown
             });
         }
+        if (freshSuccess && previous != null && _earlyResetStore != null)
+        {
+            try
+            {
+                ProcessEarlyResets(previous, resolved, now);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to process early reset detection for {Provider}", data.Provider);
+            }
+        }
         return resolved;
     }
+
+    private void ProcessEarlyResets(UsageData previous, UsageData current, DateTime nowUtc)
+    {
+        var prevSuccess = Helpers.DashboardValues.Utc(previous.LastSuccessfulFetch ?? previous.FetchedAt);
+        if (nowUtc - prevSuccess > EarlyResetDetector.MaxPreviousReadingAge)
+        {
+            return;
+        }
+
+        var resets = EarlyResetDetector.DetectAll(previous, current, nowUtc);
+        foreach (var earlyReset in resets)
+        {
+            bool isNew;
+            try
+            {
+                isNew = _earlyResetStore!.Record(earlyReset);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to record early reset for {Provider}", earlyReset.Provider);
+                continue;
+            }
+
+            if (isNew)
+            {
+                _logger.LogInformation("Early reset detected for {Provider} {Window}: dropped from {Prev:F0}% to {Cur:F0}%",
+                    earlyReset.Provider, earlyReset.WindowKey, earlyReset.PreviousPercent, earlyReset.CurrentPercent);
+
+                if (_settingsService?.Settings?.AlertsEnabled == true)
+                {
+                    var title = EarlyResetCaption.ToastTitle(earlyReset.Provider, earlyReset.WindowTitle);
+                    var message = EarlyResetCaption.ToastBody(earlyReset.PreviousPercent, earlyReset.CurrentPercent, earlyReset.PreviousResetAtUtc, nowUtc);
+
+                    try
+                    {
+                        _toastNotifier?.Show(title, message);
+                        _earlyResetStore.MarkNotified(earlyReset);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "Failed to show toast notification for early reset");
+                    }
+
+                    try
+                    {
+                        _activityLog?.RecordAlert(new DashboardAlertEntry
+                        {
+                            TimestampUtc = nowUtc,
+                            ProviderId = earlyReset.Provider,
+                            Title = title,
+                            Message = message
+                        });
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogDebug(ex, "Failed to record alert in activity log");
+                    }
+                }
+            }
+        }
+    }
+
     public async Task<string?> GetVersionAsync(CancellationToken ct = default)
     {
         try

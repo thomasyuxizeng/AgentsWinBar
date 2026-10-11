@@ -31,6 +31,10 @@ namespace CodexBarWin.Models;
 [JsonSerializable(typeof(UsageHistorySample))]
 [JsonSerializable(typeof(List<UsageHistorySample>))]
 [JsonSerializable(typeof(IReadOnlyList<UsageHistorySample>))]
+[JsonSerializable(typeof(EarlyResetStoreFile))]
+[JsonSerializable(typeof(EarlyResetEntry))]
+[JsonSerializable(typeof(List<EarlyResetEntry>))]
+[JsonSerializable(typeof(CodexBarWin.Helpers.EarlyReset))]
 public partial class AppJsonSerializerContext : JsonSerializerContext
 {
 }

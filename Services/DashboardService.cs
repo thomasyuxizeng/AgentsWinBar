@@ -23,14 +23,16 @@ public sealed class DashboardService : IDashboardService
     private DateTimeOffset? _capturedAt;
     private string? _cliVersion;
     private bool? _cliAvailable;
+    private readonly IEarlyResetStore? _earlyResetStore;
 
     public DashboardService(ISettingsService settings, UsageHistoryStore history, UsageHistoryPersistence persistence,
         IActivityLog activity, ICodexBarService cli, ILogger<DashboardService> logger, TimeProvider? timeProvider = null,
-        ICostLedger? costLedger = null)
+        ICostLedger? costLedger = null, IEarlyResetStore? earlyResetStore = null)
     {
         _settings = settings; _history = history; _persistence = persistence;
         _activity = activity; _cli = cli; _logger = logger; _clock = timeProvider ?? TimeProvider.System;
         _costLedger = costLedger;
+        _earlyResetStore = earlyResetStore;
     }
 
     public DashboardSnapshot GetSnapshot(IReadOnlyList<UsageData> providers, DateTime? lastRefreshUtc,
@@ -50,7 +52,8 @@ public sealed class DashboardService : IDashboardService
             CliVersion = version, CliAvailable = available, AppVersion = _appVersion,
             SettingsPath = _settings.SettingsFilePath, RecentRefreshes = _activity.RecentRefreshes,
             RecentAlerts = _activity.RecentAlerts, CostCache = _cli.GetCostCacheInfo(),
-            CostLedger = _costLedger
+            CostLedger = _costLedger,
+            EarlyResetStore = _earlyResetStore
         });
     }
 
