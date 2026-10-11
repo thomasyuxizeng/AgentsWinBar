@@ -49,6 +49,7 @@ public class EarlyResetStoreTests
     private string _directory = null!;
     private MockSettingsService _settings = null!;
     private FixedClock _clock = null!;
+    private readonly List<EarlyResetStore> _stores = [];
 
     [TestInitialize]
     public void Setup()
@@ -60,8 +61,9 @@ public class EarlyResetStoreTests
     }
 
     [TestCleanup]
-    public void Cleanup()
+    public async Task Cleanup()
     {
+        foreach (var store in _stores) await store.FlushAsync();
         for (int i = 0; i < 5; i++)
         {
             try
@@ -79,8 +81,12 @@ public class EarlyResetStoreTests
         }
     }
 
-    private EarlyResetStore CreateStore() =>
-        new(_settings, NullLogger<EarlyResetStore>.Instance, _clock, Path.Combine(_directory, "early-resets.json"));
+    private EarlyResetStore CreateStore()
+    {
+        var store = new EarlyResetStore(_settings, NullLogger<EarlyResetStore>.Instance, _clock, Path.Combine(_directory, "early-resets.json"));
+        _stores.Add(store);
+        return store;
+    }
 
     private static EarlyReset MakeEvent(
         string provider = "codex",
@@ -267,5 +273,59 @@ public class EarlyResetStoreTests
         {
             SynchronizationContext.SetSynchronizationContext(prevContext);
         }
+    }
+
+    private sealed class PersistenceClock(int callerThread) : TimeProvider
+    {
+        public int CallerReads;
+        public int BackgroundReads;
+        public override DateTimeOffset GetUtcNow()
+        {
+            if (Environment.CurrentManagedThreadId == callerThread) Interlocked.Increment(ref CallerReads);
+            else Interlocked.Increment(ref BackgroundReads);
+            return Now;
+        }
+    }
+
+    [TestMethod]
+    public void RecordThenFlush_SingleThreadContextWritesOnPoolWithoutDeadlock()
+    {
+        var clock = new PersistenceClock(Environment.CurrentManagedThreadId);
+        var store = new EarlyResetStore(_settings, NullLogger<EarlyResetStore>.Instance, clock, Path.Combine(_directory, "early-resets.json"));
+        _stores.Add(store);
+        var context = new SingleThreadSynchronizationContext();
+        var previousContext = SynchronizationContext.Current;
+        try
+        {
+            SynchronizationContext.SetSynchronizationContext(context);
+            store.Record(MakeEvent()).Should().BeTrue();
+            var flush = store.FlushAsync();
+            var deadline = DateTime.UtcNow.AddSeconds(10);
+            while (!flush.IsCompleted && DateTime.UtcNow < deadline)
+            {
+                context.RunPending();
+                Thread.Sleep(1);
+            }
+            flush.IsCompletedSuccessfully.Should().BeTrue();
+            // Record reads the clock once for its in-memory update. Save reads it BEFORE
+            // serialization and Directory.CreateDirectory, which must happen on a pool thread.
+            clock.CallerReads.Should().Be(1);
+            clock.BackgroundReads.Should().BeGreaterThan(0);
+            File.Exists(store.FilePath).Should().BeTrue();
+        }
+        finally { SynchronizationContext.SetSynchronizationContext(previousContext); }
+    }
+
+    [TestMethod]
+    public async Task RecordThenFlush_EventIsDurableAndRestartRejectsDuplicate()
+    {
+        var store = CreateStore();
+        var reset = MakeEvent();
+        store.Record(reset).Should().BeTrue();
+        await store.FlushAsync();
+        var restarted = CreateStore();
+        await restarted.LoadAsync();
+        restarted.GetActive(Now.UtcDateTime).Should().ContainSingle();
+        restarted.Record(reset).Should().BeFalse();
     }
 }

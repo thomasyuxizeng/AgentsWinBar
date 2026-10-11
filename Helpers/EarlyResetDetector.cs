@@ -28,7 +28,10 @@ public sealed record EarlyResetWindowReading(
     DateTime ReadingAtUtc,
     bool IsCached = false,
     bool IsStale = false,
-    FetchOutcome FetchOutcome = FetchOutcome.Success);
+    FetchOutcome FetchOutcome = FetchOutcome.Success,
+    string? Plan = null,
+    int Limit = 0,
+    int WindowMinutes = 0);
 
 /// <summary>
 /// Pure, static detector for unexpected early usage limit resets (e.g. unannounced OpenAI resets or Claude limit resets).
@@ -38,11 +41,8 @@ public static class EarlyResetDetector
     /// <summary>Minimum percentage point drop required to consider an early reset (filters jitter and CLI noise).</summary>
     public const double EarlyResetMinDropPoints = 10.0;
 
-    /// <summary>Large drop threshold in points to recognize resets for providers with rolling/unknown reset times.</summary>
-    public const double RollingResetMinDropPoints = 25.0;
-
-    /// <summary>Near-zero threshold percentage: drops to at or below this value from >= 10 points are considered resets.</summary>
-    public const double NearZeroPercent = 1.0;
+    /// <summary>Restart evidence when current usage is at or below two percent, subject to all other guards.</summary>
+    public const double NearZeroPercent = 2.0;
 
     /// <summary>Grace period before scheduled ResetAt. A drop within this duration is considered a normal scheduled reset.</summary>
     public static readonly TimeSpan GraceBeforeReset = TimeSpan.FromMinutes(10);
@@ -52,6 +52,11 @@ public static class EarlyResetDetector
 
     /// <summary>
     /// Detects whether an early reset occurred between two consecutive readings of the same usage window.
+    /// A plain percentage drop with the same reset time can be a limit increase or provider
+    /// recalculation (OpenAI often raises limits), so require a known, not-yet-due baseline reset
+    /// and restart evidence: a reset shift exceeding ten minutes or usage at or below two percent.
+    /// Plan, limit and window length changes start a new baseline. Account identity is not
+    /// available in UsageData, so account switches with identical metadata cannot be distinguished.
     /// </summary>
     /// <param name="previous">The previous reading of the window.</param>
     /// <param name="current">The current reading of the window.</param>
@@ -95,11 +100,14 @@ public static class EarlyResetDetector
         }
 
         var prevReadingAt = DashboardValues.Utc(previous.ReadingAtUtc);
-        var curReadingAt = DashboardValues.Utc(current.ReadingAtUtc != default ? current.ReadingAtUtc : nowUtc);
+        var curReadingAt = DashboardValues.Utc(current.ReadingAtUtc);
         var now = DashboardValues.Utc(nowUtc);
 
-        // Previous reading must not be older than 24 hours
-        if (curReadingAt - prevReadingAt > MaxPreviousReadingAge || now - prevReadingAt > MaxPreviousReadingAge)
+        if (curReadingAt <= prevReadingAt ||
+            curReadingAt > now + CacheRetention.ClockSkewTolerance ||
+            prevReadingAt > now + CacheRetention.ClockSkewTolerance ||
+            curReadingAt - prevReadingAt > MaxPreviousReadingAge || now - prevReadingAt > MaxPreviousReadingAge ||
+            previous.Plan != current.Plan || previous.Limit != current.Limit || previous.WindowMinutes != current.WindowMinutes)
         {
             return null;
         }
@@ -120,62 +128,15 @@ public static class EarlyResetDetector
         DateTime? prevResetUtc = previous.ResetAt.HasValue ? DashboardValues.Utc(previous.ResetAt.Value) : null;
         DateTime? curResetUtc = current.ResetAt.HasValue ? DashboardValues.Utc(current.ResetAt.Value) : null;
 
-        // Both reset times unknown:
-        if (prevResetUtc == null && curResetUtc == null)
-        {
-            // Windows with unknown ResetAt on both sides when the drop is < 25 points must never flag
-            if (drop < RollingResetMinDropPoints)
-            {
-                return null;
-            }
-
-            return new EarlyReset(
-                Provider: prevProvider,
-                WindowKey: current.WindowKey,
-                WindowTitle: current.WindowTitle,
-                PreviousPercent: previous.UsedPercent,
-                CurrentPercent: current.UsedPercent,
-                PreviousResetAtUtc: null,
-                NewResetAtUtc: null,
-                DetectedAtUtc: now);
-        }
-
-        // Previous reset time unknown, but current is known:
-        if (prevResetUtc == null)
-        {
-            if (drop < RollingResetMinDropPoints)
-            {
-                return null;
-            }
-
-            return new EarlyReset(
-                Provider: prevProvider,
-                WindowKey: current.WindowKey,
-                WindowTitle: current.WindowTitle,
-                PreviousPercent: previous.UsedPercent,
-                CurrentPercent: current.UsedPercent,
-                PreviousResetAtUtc: null,
-                NewResetAtUtc: curResetUtc,
-                DetectedAtUtc: now);
-        }
-
-        // Previous ResetAt is known:
-        // Must be more than GraceBeforeReset (10 min) after CURRENT reading time (so the old window had not ended).
-        // Reset time passed or within 10 minutes is a normal scheduled reset and must NEVER count.
-        if (prevResetUtc.Value <= curReadingAt + GraceBeforeReset)
+        if (!prevResetUtc.HasValue || prevResetUtc.Value <= curReadingAt + GraceBeforeReset)
         {
             return null;
         }
 
-        // Old window had not ended! Early reset if:
-        // 1. current.ResetAt is later than previous.ResetAt, OR
-        // 2. drop >= 25 points (rolling window drop), OR
-        // 3. usedPercent dropped to ~0 from >= 10 with a not-yet-due reset
-        bool resetShiftedForward = curResetUtc.HasValue && curResetUtc.Value > prevResetUtc.Value;
-        bool rollingLargeDrop = drop >= RollingResetMinDropPoints;
-        bool droppedToNearZero = previous.UsedPercent >= EarlyResetMinDropPoints && current.UsedPercent <= NearZeroPercent;
+        bool resetShiftedForward = curResetUtc.HasValue && curResetUtc.Value > prevResetUtc.Value + GraceBeforeReset;
+        bool droppedToNearZero = current.UsedPercent <= NearZeroPercent;
 
-        if (resetShiftedForward || rollingLargeDrop || droppedToNearZero)
+        if (resetShiftedForward || droppedToNearZero)
         {
             return new EarlyReset(
                 Provider: prevProvider,
@@ -207,10 +168,13 @@ public static class EarlyResetDetector
             WindowTitle: windowTitle,
             UsedPercent: window.Percent,
             ResetAt: window.ResetAt,
-            ReadingAtUtc: readingTimeUtc ?? DashboardValues.Utc(data.DataUpdatedAt ?? data.FetchedAt),
+            ReadingAtUtc: readingTimeUtc ?? DashboardValues.Utc(data.DataUpdatedAt ?? data.CacheUpdatedAt ?? data.FetchedAt),
             IsCached: data.UsageIsCached,
             IsStale: data.UsageIsStale,
-            FetchOutcome: data.UsageFetchOutcome);
+            FetchOutcome: data.UsageFetchOutcome,
+            Plan: data.Plan,
+            Limit: window.Limit,
+            WindowMinutes: window.WindowMinutes);
     }
 
     /// <summary>
@@ -261,17 +225,28 @@ public static class EarlyResetDetector
         Check("weekly", currentData.WeeklyLabel, previousData.Weekly, currentData.Weekly);
         Check("tertiary", currentData.TertiaryLabel, previousData.Tertiary, currentData.Tertiary);
 
-        foreach (var extra in currentData.ExtraWindows)
+        var previousExtras = UniqueExtras(previousData);
+        foreach (var extra in UniqueExtras(currentData))
         {
-            var key = UsageHistoryStore.ExtraWindowKey(extra);
-            var prevExtra = previousData.ExtraWindows.FirstOrDefault(e =>
-                string.Equals(UsageHistoryStore.ExtraWindowKey(e), key, StringComparison.OrdinalIgnoreCase));
-            if (prevExtra != null)
+            if (previousExtras.TryGetValue(extra.Key, out var prevExtra))
             {
-                Check(key, extra.Title, prevExtra.Window, extra.Window);
+                Check(extra.Key, extra.Value.Title, prevExtra.Window, extra.Value.Window);
             }
         }
 
         return results;
+    }
+
+    internal static Dictionary<string, ExtraUsageWindow> UniqueExtras(UsageData data) =>
+        (data.ExtraWindows ?? []).GroupBy(UsageHistoryStore.ExtraWindowKey, StringComparer.OrdinalIgnoreCase)
+            .Where(g => g.Count() == 1).ToDictionary(g => g.Key, g => g.Single(), StringComparer.OrdinalIgnoreCase);
+
+    internal static IEnumerable<EarlyResetWindowReading> Readings(UsageData data)
+    {
+        if (data.Session != null) yield return CreateReading(data, "session", data.SessionLabel, data.Session);
+        if (data.Weekly != null) yield return CreateReading(data, "weekly", data.WeeklyLabel, data.Weekly);
+        if (data.Tertiary != null) yield return CreateReading(data, "tertiary", data.TertiaryLabel, data.Tertiary);
+        foreach (var extra in UniqueExtras(data))
+            yield return CreateReading(data, extra.Key, extra.Value.Title, extra.Value.Window);
     }
 }

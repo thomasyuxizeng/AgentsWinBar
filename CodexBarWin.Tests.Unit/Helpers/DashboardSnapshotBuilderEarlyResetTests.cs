@@ -29,10 +29,12 @@ public class DashboardSnapshotBuilderEarlyResetTests
         var codex = snapshot.Providers.Single(p => p.Id == "codex");
         codex.EarlyResetAtUtc.Should().BeNull();
         codex.EarlyResetFromPercent.Should().BeNull();
+        codex.EarlyResetToPercent.Should().BeNull();
 
         var session = codex.Windows.Single(w => w.Key == "session");
         session.EarlyResetAtUtc.Should().BeNull();
         session.EarlyResetFromPercent.Should().BeNull();
+        session.EarlyResetToPercent.Should().BeNull();
     }
 
     [TestMethod]
@@ -68,13 +70,33 @@ public class DashboardSnapshotBuilderEarlyResetTests
         var codex = snapshot.Providers.Single(p => p.Id == "codex");
         codex.EarlyResetAtUtc.Should().Be(resetAt);
         codex.EarlyResetFromPercent.Should().Be(82.5);
+        codex.EarlyResetToPercent.Should().Be(5);
 
         var session = codex.Windows.Single(w => w.Key == "session");
         session.EarlyResetAtUtc.Should().Be(resetAt);
         session.EarlyResetFromPercent.Should().Be(82.5);
+        session.EarlyResetToPercent.Should().Be(5);
 
         var weekly = codex.Windows.Single(w => w.Key == "weekly");
         weekly.EarlyResetAtUtc.Should().BeNull();
         weekly.EarlyResetFromPercent.Should().BeNull();
+    }
+
+    [TestMethod]
+    public void Build_UsageRisesTo90_EventDestinationAndTooltipStillSay79To3()
+    {
+        var reset = new EarlyReset("codex", "session", "Session", 79, 3, Now.AddHours(2), Now.AddHours(5), Now.AddHours(-1));
+        var snapshot = DashboardSnapshotBuilder.Build(new()
+        {
+            Providers = [new() { Provider = "codex", FetchedAt = Now, Session = new() { ReportedPercent = 90 } }],
+            NowUtc = Now, EarlyResets = [reset]
+        });
+        var provider = snapshot.Providers.Single();
+        var window = provider.Windows.Single();
+        window.UsedPercent.Should().Be(90);
+        provider.EarlyResetToPercent.Should().Be(3);
+        var detail = EarlyResetDisplay.Detail(window.EarlyResetAtUtc, window.EarlyResetFromPercent, window.EarlyResetToPercent, Now);
+        detail.Should().Contain("79% to 3%");
+        EarlyResetDisplay.AppendToTip("Session: 90% used", detail).Should().Contain("79% to 3%");
     }
 }

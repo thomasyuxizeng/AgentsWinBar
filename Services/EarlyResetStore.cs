@@ -26,6 +26,8 @@ public sealed class EarlyResetStore : IEarlyResetStore
     private readonly SemaphoreSlim _ioGate = new(1, 1);
     private readonly object _gate = new();
     private readonly List<EarlyResetEntry> _entries = [];
+    private readonly Dictionary<string, EarlyResetWindowReading> _baselines = new(StringComparer.OrdinalIgnoreCase);
+    private Task _pendingWrites = Task.CompletedTask;
 
     public string FilePath { get; }
 
@@ -106,6 +108,12 @@ public sealed class EarlyResetStore : IEarlyResetStore
             lock (_gate)
             {
                 _entries.Clear();
+                _baselines.Clear();
+                foreach (var baseline in file.Baselines ?? [])
+                {
+                    if (baseline != null && IsFreshBaseline(baseline, now))
+                        _baselines[BaselineKey(baseline)] = baseline;
+                }
                 foreach (var entry in file.Events ?? [])
                 {
                     if (entry?.Event == null) continue;
@@ -136,7 +144,29 @@ public sealed class EarlyResetStore : IEarlyResetStore
         }
     }
 
-    public async Task SaveAsync(CancellationToken ct = default)
+    public Task SaveAsync(CancellationToken ct = default)
+    {
+        // Register before returning, and start ALL serialization and file work on the pool.
+        // Chaining also guarantees FlushAsync observes Record/MarkNotified writes in order.
+        lock (_gate)
+        {
+            var preceding = _pendingWrites;
+            _pendingWrites = Task.Run(async () =>
+            {
+                try { await preceding.ConfigureAwait(false); }
+                catch (OperationCanceledException) { /* A cancelled caller must not poison later writes. */ }
+                await SaveCoreAsync(ct).ConfigureAwait(false);
+            });
+            return _pendingWrites;
+        }
+    }
+
+    public Task FlushAsync(CancellationToken ct = default)
+    {
+        lock (_gate) return _pendingWrites.WaitAsync(ct);
+    }
+
+    private async Task SaveCoreAsync(CancellationToken ct)
     {
         var acquired = false;
         try
@@ -152,7 +182,8 @@ public sealed class EarlyResetStore : IEarlyResetStore
                 file = new EarlyResetStoreFile
                 {
                     Version = 1,
-                    Events = _entries.ToList()
+                    Events = _entries.ToList(),
+                    Baselines = _baselines.Values.ToList()
                 };
             }
 
@@ -182,6 +213,59 @@ public sealed class EarlyResetStore : IEarlyResetStore
             if (acquired) _ioGate.Release();
         }
     }
+
+    /// <summary>
+    /// Replays, failures and stale observations do not replace or invalidate fresh baselines.
+    /// Metadata changes replace a baseline without an event. UsageData contains no account identity;
+    /// switching accounts with the same plan/limit/window length is a known limitation.
+    /// </summary>
+    public IReadOnlyList<EarlyReset> Observe(UsageData data, DateTime nowUtc)
+    {
+        var now = DashboardValues.Utc(nowUtc);
+        if (!ProviderConstants.IsValidProvider(data.Provider) || data.UsageIsCached || data.UsageIsStale ||
+            data.UsageFetchOutcome != FetchOutcome.Success || data.HasError) return [];
+
+        var observedAt = DashboardValues.Utc(data.DataUpdatedAt ?? data.CacheUpdatedAt ?? data.FetchedAt);
+        if (observedAt > now + CacheRetention.ClockSkewTolerance || now - observedAt > EarlyResetDetector.MaxPreviousReadingAge)
+            return [];
+
+        var readings = EarlyResetDetector.Readings(data).Where(r => IsFreshBaseline(r, now)).ToArray();
+        var events = new List<EarlyReset>();
+        var changed = false;
+        lock (_gate)
+        {
+            // A fresh ambiguous snapshot breaks identity continuity: neither duplicate is a baseline.
+            foreach (var group in (data.ExtraWindows ?? []).GroupBy(UsageHistoryStore.ExtraWindowKey, StringComparer.OrdinalIgnoreCase)
+                         .Where(g => g.Count() > 1))
+            {
+                var key = ProviderConstants.ValidateAndNormalize(data.Provider) + "|" + group.Key;
+                if (_baselines.TryGetValue(key, out var held) && observedAt > DashboardValues.Utc(held.ReadingAtUtc))
+                    changed |= _baselines.Remove(key);
+            }
+            foreach (var reading in readings)
+            {
+                var key = BaselineKey(reading);
+                _baselines.TryGetValue(key, out var baseline);
+                if (baseline != null && reading.ReadingAtUtc <= DashboardValues.Utc(baseline.ReadingAtUtc)) continue;
+                var detected = EarlyResetDetector.Detect(baseline, reading, now);
+                if (detected != null) events.Add(detected);
+                _baselines[key] = reading;
+                changed = true;
+            }
+        }
+        if (changed) SaveAsync().SafeFireAndForget(ex => _logger.LogWarning(ex, "Failed to save fresh reset baselines"));
+        return events;
+    }
+
+    private static string BaselineKey(EarlyResetWindowReading reading) =>
+        ProviderConstants.ValidateAndNormalize(reading.Provider) + "|" + reading.WindowKey;
+
+    private static bool IsFreshBaseline(EarlyResetWindowReading reading, DateTime now) =>
+        ProviderConstants.IsValidProvider(reading.Provider) && !string.IsNullOrWhiteSpace(reading.WindowKey) &&
+        !reading.IsCached && !reading.IsStale && reading.FetchOutcome == FetchOutcome.Success &&
+        double.IsFinite(reading.UsedPercent) && reading.UsedPercent >= 0 &&
+        DashboardValues.Utc(reading.ReadingAtUtc) <= now + CacheRetention.ClockSkewTolerance &&
+        now - DashboardValues.Utc(reading.ReadingAtUtc) <= EarlyResetDetector.MaxPreviousReadingAge;
 
     public bool Record(EarlyReset @event)
     {

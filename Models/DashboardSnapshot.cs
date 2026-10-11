@@ -105,6 +105,7 @@ public sealed record DashboardProvider
     /// <summary>Timestamp of an active early reset (within 24h) for this provider, if any.</summary>
     public DateTime? EarlyResetAtUtc { get; init; }
     public double? EarlyResetFromPercent { get; init; }
+    public double? EarlyResetToPercent { get; init; }
 }
 
 public enum DashboardWindowKind
@@ -144,6 +145,7 @@ public sealed record DashboardWindow
     /// <summary>Timestamp of an active early reset (within 24h) for this window, if any.</summary>
     public DateTime? EarlyResetAtUtc { get; init; }
     public double? EarlyResetFromPercent { get; init; }
+    public double? EarlyResetToPercent { get; init; }
 }
 
 /// <summary>Local-log cost and token totals for one provider, plus derived figures.</summary>

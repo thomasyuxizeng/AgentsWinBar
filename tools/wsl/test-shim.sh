@@ -80,6 +80,11 @@ src=''; prev=''
 for a in "$@"; do [ "$prev" = --source ] && src=$a; prev=$a; done
 printf '%s\n' "$src" >> "$CALLS"
 if [ "$src" = oauth ]; then printf '%s\n' "$OAUTH_OUT"; exit "$OAUTH_EXIT"; fi
+if [ -n "${CHECK_BROKEN_STAMP:-}" ]; then
+  [[ -f "$CHECK_BROKEN_STAMP" ]] || exit 97
+  printf 'stamp-before-cli\n' >> "$STAMP_CHECK_LOG"
+fi
+[ -z "${CLI_IGNORE_TERM:-}" ] || trap '' TERM
 [ -z "${CLI_SLEEP:-}" ] || sleep "$CLI_SLEEP"
 printf '%s\n' "$CLI_OUT"; exit "$CLI_EXIT"
 CLI
@@ -191,6 +196,35 @@ elapsed=$(( SECONDS - start_s ))
 check "$output" '"cached": true'
 check "$output" "$observed"
 [[ "$(cat "$CALLS")" = oauth ]]
+
+# A CLI that ignores TERM is killed after the three-second grace. Its cooldown exists
+# before it starts, not merely after the timeout wrapper returns.
+: > "$CALLS"; rm -f "$TMP"/claude-cache/*
+printf '%s\n' "[{\"provider\":\"claude\",\"source\":\"oauth\",\"usage\":{\"updatedAt\":\"$observed\",\"primary\":{\"usedPercent\":30}}}]" > "$cache_file"
+touch -d '15 minutes ago' "$cache_file"
+start_s=$SECONDS
+output=$(CHECK_BROKEN_STAMP="$TMP/claude-cache/codexbar-claude-$uid-cli-broken" STAMP_CHECK_LOG="$TMP/stamp-check" CLI_IGNORE_TERM=1 CODEXBAR_CLAUDE_CLI_TIMEOUT=1 CLI_SLEEP=30 OAUTH_OUT=$expired OAUTH_EXIT=3 CLI_OUT=$good CLI_EXIT=0 bash "$TMP/claude-shim" usage --provider claude --format json --source cli)
+elapsed=$(( SECONDS - start_s ))
+[[ "$elapsed" -ge 3 && "$elapsed" -lt 7 ]]
+check "$output" '"cached": true'
+[[ "$(cat "$TMP/stamp-check")" = stamp-before-cli ]]
+[[ "$(cat "$CALLS")" = $'oauth\ncli' ]]
+[[ -f "$TMP/claude-cache/codexbar-claude-$uid-cli-broken" ]]
+
+# Without timeout in PATH the CLI must never be launched, with or without old cache.
+for use_cache in no yes; do
+  : > "$CALLS"; rm -f "$TMP"/claude-cache/*
+  if [ "$use_cache" = yes ]; then
+    printf '%s\n' "$good" > "$cache_file"
+    touch -d '15 minutes ago' "$cache_file"
+  fi
+  set +e
+  output=$(PATH="$TMP/nopy-bin" CLI_SLEEP=30 OAUTH_OUT=$expired OAUTH_EXIT=3 CLI_OUT=$good CLI_EXIT=0 bash "$TMP/claude-shim" usage --provider claude --format json --source cli); rc=$?
+  set -e
+  [[ "$(cat "$CALLS")" = oauth ]]
+  [[ -f "$TMP/claude-cache/codexbar-claude-$uid-cli-broken" ]]
+  if [ "$use_cache" = yes ]; then [[ "$rc" -eq 0 && "$output" = "$good" ]]; else [[ "$rc" -eq 3 ]]; check "$output" 'token expired'; fi
+done
 
 # 429 + cache serves cache without calling the CLI route.
 : > "$CALLS"; rm -f "$TMP"/claude-cache/*

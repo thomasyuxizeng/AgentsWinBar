@@ -25,6 +25,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private readonly ISessionStateSource _sessionState;
     private readonly ICacheService _cacheService;
     private readonly ISetupMemoService _setupMemo;
+    private readonly IEarlyResetStore? _earlyResetStore;
     private bool _sessionLocked;
     private CancellationTokenSource? _refreshCts;
     private CancellationTokenSource? _timerCts;
@@ -86,7 +87,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
         IActivityLog activityLog,
         ISessionStateSource sessionState,
         ICacheService cacheService,
-        ISetupMemoService setupMemo)
+        ISetupMemoService setupMemo,
+        IEarlyResetStore? earlyResetStore = null)
     {
         _codexBarService = codexBarService;
         _settingsService = settingsService;
@@ -99,6 +101,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _sessionState = sessionState;
         _cacheService = cacheService;
         _setupMemo = setupMemo;
+        _earlyResetStore = earlyResetStore;
 
         _settingsService.SettingsChanged += OnSettingsChanged;
         _sessionState.Locked += OnSessionLocked;
@@ -729,6 +732,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         if (activeDemand != null) await activeDemand;
         await activeBackground;
         await _historyPersistence.SaveAsync(force: true);
+        if (_earlyResetStore != null) await _earlyResetStore.FlushAsync();
         ExitRequested?.Invoke(this, EventArgs.Empty);
     }
 

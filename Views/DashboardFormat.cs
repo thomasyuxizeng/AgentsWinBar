@@ -37,7 +37,7 @@ internal static class DashboardFormat
     public static string EarlyChip(DashboardWindow? window) => EarlyResetDisplay.Chip(window?.EarlyResetAtUtc);
     public static Visibility EarlyVis(DashboardWindow? window) => Vis(window?.EarlyResetAtUtc != null);
     public static string EarlyDetail(DashboardWindow? window) => window == null ? string.Empty
-        : EarlyResetDisplay.Detail(window.EarlyResetAtUtc, window.EarlyResetFromPercent, window.UsedPercent, DateTime.UtcNow);
+        : EarlyResetDisplay.Detail(window.EarlyResetAtUtc, window.EarlyResetFromPercent, window.EarlyResetToPercent, DateTime.UtcNow);
     public static Visibility VisEarlyDetail(DashboardWindow? window) => VisText(EarlyDetail(window));
     public static Brush EarlyBrush() => Green;
 

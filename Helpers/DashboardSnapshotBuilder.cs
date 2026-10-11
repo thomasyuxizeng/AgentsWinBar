@@ -87,7 +87,8 @@ public static class DashboardSnapshotBuilder
                     History = BurndownBuilder.Build(ambiguousKeys.Contains(historyKey)
                         ? [] : history.Where(s => s.WindowKey == historyKey), window, now),
                     EarlyResetAtUtc = windowReset != null ? Utc(windowReset.DetectedAtUtc) : null,
-                    EarlyResetFromPercent = windowReset?.PreviousPercent
+                    EarlyResetFromPercent = windowReset?.PreviousPercent,
+                    EarlyResetToPercent = windowReset?.CurrentPercent
                 });
             }
             // Labels on UsageData require a non-null provider id.
@@ -134,7 +135,8 @@ public static class DashboardSnapshotBuilder
                 Windows = windows, Cost = settings.ShowCostTotals && cost?.HasData == true ? BuildCost(cost, today, now) : null,
                 HistorySampleCount = history.Length, HistoryOldestUtc = Oldest(history),
                 EarlyResetAtUtc = mostRecentProviderReset != null ? Utc(mostRecentProviderReset.DetectedAtUtc) : null,
-                EarlyResetFromPercent = mostRecentProviderReset?.PreviousPercent
+                EarlyResetFromPercent = mostRecentProviderReset?.PreviousPercent,
+                EarlyResetToPercent = mostRecentProviderReset?.CurrentPercent
             };
         }).ToArray();
         var refs = providers.SelectMany(p => p.Windows.Select(w => (Window: w, Ref: new DashboardWindowRef

@@ -10,10 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [1.3.0] - 2026-10-11
 
 ### Added
-- A RESET EARLY chip and detail line ("Reset early 2h ago · 79% to 3%") show on a usage window that was reset ahead of schedule, for 24 hours, and a toast fires. Detected from the data: used% drops 10+ points while the window's own reset is still more than 10 minutes away (Codex and Claude limit resets, banked resets, the Reset button). Events are kept in `early-resets.json` (`EarlyResetDetector`, `EarlyResetStore`, `EarlyResetCaption`).
+- A RESET EARLY chip, recorded usage drop, and optional toast identify a fresh drop of 10+ points before a known scheduled reset, with a reset-time shift of over 10 minutes or usage at 2% or below. Fresh baselines survive replays and restarts; plan, limit, or window-length changes start a new baseline.
 
 ### Fixed
-- A rate-limited Claude refresh no longer waits ~30 s on the Claude CLI fallback: the shim serves its cache at once when the usage API is rate-limited, and the CLI route is bounded by a 25 s timeout and remembered as failed for 30 minutes.
+- Early-reset details retain the recorded destination as usage rises. Notifications are saved before display, and pending writes are flushed on exit.
+- A rate-limited Claude refresh serves cache immediately. The CLI fallback has a 25-second timeout with a 3-second kill grace, is skipped when timeout is unavailable, and establishes its 30-minute cooldown before starting.
 
 ## [1.2.1] - 2026-10-11
 

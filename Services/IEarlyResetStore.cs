@@ -1,4 +1,5 @@
 using CodexBarWin.Helpers;
+using CodexBarWin.Models;
 
 namespace CodexBarWin.Services;
 
@@ -16,6 +17,12 @@ public interface IEarlyResetStore
     /// Asynchronously saves in-memory early reset events to disk atomically.
     /// </summary>
     Task SaveAsync(CancellationToken ct = default);
+
+    /// <summary>Waits for all writes queued before this call, including baseline and dedupe updates.</summary>
+    Task FlushAsync(CancellationToken ct = default);
+
+    /// <summary>Compares and advances separate last-fresh-success baselines for unambiguous windows.</summary>
+    IReadOnlyList<EarlyReset> Observe(UsageData data, DateTime nowUtc);
 
     /// <summary>
     /// Records a detected early reset event. Returns true if the event is new, or false if already recorded.

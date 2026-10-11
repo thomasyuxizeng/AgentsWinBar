@@ -21,6 +21,7 @@ public class MainViewModelTests
     private readonly Mock<TimeProvider> _clock = new();
     private readonly Mock<ICacheService> _cache = new();
     private readonly Mock<ISetupMemoService> _memo = new();
+    private readonly Mock<IEarlyResetStore> _earlyResets = new();
     private readonly FakeSessionStateSource _session = new();
     private AppSettings _values = null!;
     private UsageHistoryPersistence _persistence = null!;
@@ -42,7 +43,8 @@ public class MainViewModelTests
         _usage.Setup(s => s.GetCostsAsync(It.IsAny<IReadOnlyList<string>>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()))
             .Returns((IReadOnlyList<string> providers, bool force, CancellationToken ct) => CostResults(providers, force, ct));
         _viewModel = new(_usage.Object, _settings.Object, new UsageAlertEvaluator(), _toast.Object,
-            NullLogger<MainViewModel>.Instance, _history, _persistence, _activity, _session, _cache.Object, _memo.Object);
+            NullLogger<MainViewModel>.Instance, _history, _persistence, _activity, _session, _cache.Object, _memo.Object, _earlyResets.Object);
+        _earlyResets.Setup(s => s.FlushAsync(It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
     }
 
     [TestCleanup]
@@ -1142,7 +1144,7 @@ public class MainViewModelTests
     }
 
     [TestMethod]
-    public async Task Exit_DuringRefresh_CancelsAndWaitsThenFlushesHistoryBeforeExitEvent()
+    public async Task Exit_DuringRefresh_WaitsForHistoryAndEarlyResetFlushBeforeExitEvent()
     {
         var gate = Signal();
         _usage.Setup(s => s.GetAllUsageStreamAsync(It.IsAny<CancellationToken>()))
@@ -1151,6 +1153,8 @@ public class MainViewModelTests
         _history.Add(new UsageHistorySample { Provider = "claude", WindowKey = "session", Timestamp = now,
             UsedPercent = 20, ResetsAt = now.AddHours(2) }, now);
         var exited = false;
+        var resetFlush = Signal();
+        _earlyResets.Setup(s => s.FlushAsync(It.IsAny<CancellationToken>())).Returns(resetFlush.Task);
         _viewModel.ExitRequested += (_, _) =>
         {
             File.Exists(_persistence.FilePath).Should().BeTrue();
@@ -1160,10 +1164,14 @@ public class MainViewModelTests
         var exit = _viewModel.ExitCommand.ExecuteAsync(null);
         exited.Should().BeFalse();
         gate.SetResult();
+        await refresh.WaitAsync(TimeSpan.FromSeconds(5));
+        exited.Should().BeFalse();
+        resetFlush.SetResult();
         await Task.WhenAll(refresh, exit).WaitAsync(TimeSpan.FromSeconds(5));
         exited.Should().BeTrue();
         _history.Samples.Should().ContainSingle().Which.UsedPercent.Should().Be(20);
         (await File.ReadAllTextAsync(_persistence.FilePath)).Should().Contain("20");
+        _earlyResets.Verify(s => s.FlushAsync(It.IsAny<CancellationToken>()), Times.Once);
         await _viewModel.RefreshCommand.ExecuteAsync(null);
         _usage.Verify(s => s.GetAllUsageStreamAsync(It.IsAny<CancellationToken>()), Times.Once);
     }

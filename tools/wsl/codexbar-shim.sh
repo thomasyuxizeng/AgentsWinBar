@@ -204,17 +204,19 @@ PY
   cli_timeout="${CODEXBAR_CLAUDE_CLI_TIMEOUT:-${CODEXBAR_CLI_TIMEOUT:-25}}"
   cli_cooldown="${CODEXBAR_CLAUDE_CLI_COOLDOWN:-${CODEXBAR_CLI_COOLDOWN:-1800}}"
   if [ $rc -ne 0 ] && { [ -z "$broken_read" ] || [ "$(age "$broken_read")" -ge "$cli_cooldown" ]; }; then
+    # Establish cooldown before attempting CLI: TERM-resistant/killed attempts must leave a stamp.
+    write_state "$CLI_BROKEN" '' || true
     if command -v timeout >/dev/null 2>&1; then
-      if r=$(timeout "$cli_timeout" "$REAL" "${cli[@]}"); then rc2=0; else rc2=$?; fi
+      if r=$(timeout -k 3 "$cli_timeout" "$REAL" "${cli[@]}"); then rc2=0; else rc2=$?; fi
     else
-      if r=$("$REAL" "${cli[@]}"); then rc2=0; else rc2=$?; fi
+      # Never launch an unbounded fallback. Keep errors generic and free of credentials.
+      r=''; rc2=127
     fi
     if [ $rc2 -eq 0 ]; then
       o=$r; rc=0
       [ -n "$broken_read" ] && owned "$broken_read" && rm -f "$broken_read"
       owned "$CLI_BROKEN" && rm -f "$CLI_BROKEN"
     else
-      write_state "$CLI_BROKEN" '' || true
       # With OAuth in its rate-limit cooldown, the CLI's error is the most current explanation.
       if [ $oauth_tried -eq 0 ]; then o=$r; rc=$rc2; fi
     fi

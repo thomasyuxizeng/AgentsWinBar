@@ -99,7 +99,7 @@ public sealed partial class ProviderDetailPage : Page
                 && string.Equals(r.WindowKey, windowKey, StringComparison.OrdinalIgnoreCase))
             .OrderByDescending(r => r.DetectedAtUtc).FirstOrDefault();
         return reset == null ? string.Empty
-            : Helpers.EarlyResetDisplay.Detail(reset.DetectedAtUtc, reset.PreviousPercent, percent, DateTime.UtcNow);
+            : Helpers.EarlyResetDisplay.Detail(reset.DetectedAtUtc, reset.PreviousPercent, reset.CurrentPercent, DateTime.UtcNow);
     }
 
     /// <summary>Shows the RESET EARLY chip and detail line for a window, or collapses both when it was not reset early.</summary>

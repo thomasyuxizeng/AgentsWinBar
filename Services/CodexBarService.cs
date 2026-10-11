@@ -29,6 +29,8 @@ public class CodexBarService : ICodexBarService
     private readonly ICostLedger? _costLedger;
     private readonly IEarlyResetStore? _earlyResetStore;
     private readonly IToastNotifier? _toastNotifier;
+    private readonly object _earlyResetTaskGate = new();
+    private Task _earlyResetNotifications = Task.CompletedTask;
     private readonly UsageHistoryStore? _history;
     private readonly IGeminiStatusFallback? _geminiStatusFallback;
     private readonly IProviderIncidentFetcher? _incidentFetcher;
@@ -401,7 +403,11 @@ public class CodexBarService : ICodexBarService
             prefetchedStatus ??= await AwaitPrefetchedStatusAsync(normalizedProvider, prefetchTasks, ct);
             return ProviderError(normalizedProvider, "Usage fetch unavailable", prefetchedStatus, generation);
         }
-        finally { await SaveUsageCacheAsync(); }
+        finally
+        {
+            await DrainEarlyResetNotificationsAsync();
+            await SaveUsageCacheAsync();
+        }
     }
 
     public async Task<IReadOnlyList<UsageData>> GetAllUsageAsync(CancellationToken ct = default)
@@ -480,7 +486,11 @@ public class CodexBarService : ICodexBarService
         Action<UsageData>? onCompleted, CancellationToken ct)
     {
         try { return await FetchAllProvidersCoreAsync(providers, onCompleted, ct); }
-        finally { if (!_settingsService.Settings.DeveloperModeEnabled) await SaveUsageCacheAsync(); }
+        finally
+        {
+            await DrainEarlyResetNotificationsAsync();
+            if (!_settingsService.Settings.DeveloperModeEnabled) await SaveUsageCacheAsync();
+        }
     }
 
     private CostData CachedCost(CostData data, DateTimeOffset now)
@@ -841,7 +851,15 @@ public class CodexBarService : ICodexBarService
         var state = _providerRefreshes.GetOrAdd(data.Provider, _ => new());
         // Keep the entire read/merge/write atomic. Requests are numbered before network work,
         // so completion order cannot let a superseded result replace a newer success.
-        lock (state) return ResolveUsageCore(data, generation, state, statusFetchedThisRefresh);
+        UsageData resolved;
+        lock (state) resolved = ResolveUsageCore(data, generation, state, statusFetchedThisRefresh);
+        // In-memory comparison/dedupe and background persistence start after releasing provider state.
+        if (_earlyResetStore != null)
+        {
+            try { ProcessEarlyResets(resolved, _timeProvider.GetUtcNow().UtcDateTime); }
+            catch (Exception ex) { _logger.LogWarning(ex, "Failed to process early resets for {Provider}", data.Provider); }
+        }
+        return resolved;
     }
 
     private UsageData ResolveUsageCore(UsageData data, long generation, ProviderRefreshState state, bool statusFetchedThisRefresh)
@@ -872,7 +890,7 @@ public class CodexBarService : ICodexBarService
         var isCached = data.UsageIsCached || (!data.UsageIsCached && observationAt.HasValue && Helpers.DataAge.OldReadingUtc(data.FetchedAt, observationAt.Value) != null);
         var isObservationRetained = obsAtUtc.HasValue && CacheRetention.IsRetained(obsAtUtc.Value, now);
 
-        var freshSuccess = !usageSuperseded && !isCached && data.UsageFetchOutcome == FetchOutcome.Success;
+        var freshSuccess = !usageSuperseded && !isCached && !data.UsageIsStale && data.UsageFetchOutcome == FetchOutcome.Success;
         var isNewerCachedReading = !usageSuperseded && isCached && data.HasUsage && isObservationRetained &&
             (previous == null || prevObsAt == null || obsAtUtc!.Value > prevObsAt.Value);
         var isReplayOfHeld = !usageSuperseded && isCached && data.HasUsage && obsAtUtc.HasValue &&
@@ -939,29 +957,12 @@ public class CodexBarService : ICodexBarService
                 UsageFetchOutcome = resolved.HasUsage ? FetchOutcome.Success : FetchOutcome.Unknown
             });
         }
-        if (freshSuccess && previous != null && _earlyResetStore != null)
-        {
-            try
-            {
-                ProcessEarlyResets(previous, resolved, now);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Failed to process early reset detection for {Provider}", data.Provider);
-            }
-        }
         return resolved;
     }
 
-    private void ProcessEarlyResets(UsageData previous, UsageData current, DateTime nowUtc)
+    private void ProcessEarlyResets(UsageData current, DateTime nowUtc)
     {
-        var prevSuccess = Helpers.DashboardValues.Utc(previous.LastSuccessfulFetch ?? previous.FetchedAt);
-        if (nowUtc - prevSuccess > EarlyResetDetector.MaxPreviousReadingAge)
-        {
-            return;
-        }
-
-        var resets = EarlyResetDetector.DetectAll(previous, current, nowUtc);
+        var resets = _earlyResetStore!.Observe(current, nowUtc);
         foreach (var earlyReset in resets)
         {
             bool isNew;
@@ -982,36 +983,44 @@ public class CodexBarService : ICodexBarService
 
                 if (_settingsService?.Settings?.AlertsEnabled == true)
                 {
-                    var title = EarlyResetCaption.ToastTitle(earlyReset.Provider, earlyReset.WindowTitle);
-                    var message = EarlyResetCaption.ToastBody(earlyReset.PreviousPercent, earlyReset.CurrentPercent, earlyReset.PreviousResetAtUtc, nowUtc);
-
-                    try
+                    // Reserve notification synchronously; persist the reservation before showing it.
+                    // Save failures are logged by the store; the in-memory reservation still prevents repeats.
+                    _earlyResetStore.MarkNotified(earlyReset);
+                    var durable = _earlyResetStore.FlushAsync();
+                    lock (_earlyResetTaskGate)
                     {
-                        _toastNotifier?.Show(title, message);
-                        _earlyResetStore.MarkNotified(earlyReset);
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogWarning(ex, "Failed to show toast notification for early reset");
-                    }
-
-                    try
-                    {
-                        _activityLog?.RecordAlert(new DashboardAlertEntry
+                        var preceding = _earlyResetNotifications;
+                        _earlyResetNotifications = Task.Run(async () =>
                         {
-                            TimestampUtc = nowUtc,
-                            ProviderId = earlyReset.Provider,
-                            Title = title,
-                            Message = message
+                            await preceding.ConfigureAwait(false);
+                            await durable.ConfigureAwait(false);
+                            ShowEarlyResetNotification(earlyReset, nowUtc);
                         });
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogDebug(ex, "Failed to record alert in activity log");
                     }
                 }
             }
         }
+    }
+
+    private Task DrainEarlyResetNotificationsAsync()
+    {
+        lock (_earlyResetTaskGate) return _earlyResetNotifications;
+    }
+
+    private void ShowEarlyResetNotification(EarlyReset earlyReset, DateTime nowUtc)
+    {
+        var title = EarlyResetCaption.ToastTitle(earlyReset.Provider, earlyReset.WindowTitle);
+        var message = EarlyResetCaption.ToastBody(earlyReset.PreviousPercent, earlyReset.CurrentPercent, earlyReset.PreviousResetAtUtc, nowUtc);
+        try { _toastNotifier?.Show(title, message); }
+        catch (Exception ex) { _logger.LogWarning(ex, "Failed to show toast notification for early reset"); }
+        try
+        {
+            _activityLog?.RecordAlert(new DashboardAlertEntry
+            {
+                TimestampUtc = nowUtc, ProviderId = earlyReset.Provider, Title = title, Message = message
+            });
+        }
+        catch (Exception ex) { _logger.LogDebug(ex, "Failed to record alert in activity log"); }
     }
 
     public async Task<string?> GetVersionAsync(CancellationToken ct = default)

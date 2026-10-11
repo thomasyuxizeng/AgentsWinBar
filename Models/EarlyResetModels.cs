@@ -9,6 +9,7 @@ public sealed record EarlyResetStoreFile
 {
     public int Version { get; init; } = 1;
     public List<EarlyResetEntry> Events { get; init; } = [];
+    public List<EarlyResetWindowReading> Baselines { get; init; } = [];
 }
 
 /// <summary>
@@ -17,6 +18,7 @@ public sealed record EarlyResetStoreFile
 public sealed record EarlyResetEntry
 {
     public EarlyReset Event { get; init; } = default!;
+    /// <summary>Notification reserved before its toast attempt, so a restart cannot repeat the toast.</summary>
     public bool Notified { get; init; }
     public DateTime? NotifiedAtUtc { get; init; }
 }

@@ -7,10 +7,10 @@ namespace CodexBarWin.Helpers;
 public static class EarlyResetDisplay
 {
     /// <summary>"Reset early 2h ago · 79% to 3%", or empty when there is no active early reset.</summary>
-    public static string Detail(DateTime? atUtc, double? fromPercent, double currentPercent, DateTime nowUtc)
+    public static string Detail(DateTime? atUtc, double? fromPercent, double? toPercent, DateTime nowUtc)
     {
-        if (atUtc is not { } at || fromPercent is not { } from) return string.Empty;
-        var to = double.IsFinite(currentPercent) ? Math.Max(0, currentPercent) : 0;
+        if (atUtc is not { } at || fromPercent is not { } from || toPercent is not { } recordedTo) return string.Empty;
+        var to = double.IsFinite(recordedTo) ? Math.Max(0, recordedTo) : 0;
         var utcAt = at.Kind == DateTimeKind.Local ? at.ToUniversalTime() : DateTime.SpecifyKind(at, DateTimeKind.Utc);
         return EarlyResetCaption.Detail(double.IsFinite(from) ? from : 0, to, utcAt, nowUtc);
     }
