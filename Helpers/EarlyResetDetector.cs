@@ -35,6 +35,7 @@ public sealed record EarlyResetWindowReading(
 
 /// <summary>
 /// Pure, static detector for unexpected early usage limit resets (e.g. unannounced OpenAI resets or Claude limit resets).
+/// Account switches with identical usage metadata cannot be distinguished from resets.
 /// </summary>
 public static class EarlyResetDetector
 {

@@ -14,7 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - Early-reset details retain the recorded destination as usage rises. Notifications are saved before display, and pending writes are flushed on exit.
-- A rate-limited Claude refresh serves cache immediately. The CLI fallback has a 25-second timeout with a 3-second kill grace, is skipped when timeout is unavailable, and establishes its 30-minute cooldown before starting.
+- A rate-limited Claude refresh serves cache immediately. The CLI fallback has a 25-second timeout with a 3-second kill grace, is skipped when timeout is unavailable, and uses a 90-second in-flight stamp while running. Its 30-minute failure cooldown starts only after a failed attempt returns.
+
+### Known limitations
+Early-reset detection cannot tell an account switch from a reset; if saving early-resets.json fails, a toast may repeat after a restart.
 
 ## [1.2.1] - 2026-10-11
 

@@ -10,6 +10,8 @@ public sealed record EarlyResetStoreFile
     public int Version { get; init; } = 1;
     public List<EarlyResetEntry> Events { get; init; } = [];
     public List<EarlyResetWindowReading> Baselines { get; init; } = [];
+    /// <summary>Per-window ambiguity guards, retained until a newer unique reading establishes a baseline.</summary>
+    public Dictionary<string, DateTime> InvalidatedAtUtc { get; init; } = [];
 }
 
 /// <summary>

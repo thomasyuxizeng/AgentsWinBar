@@ -1,4 +1,5 @@
 using AwesomeAssertions;
+using System.Text.Json;
 using CodexBarWin.Helpers;
 using CodexBarWin.Models;
 using CodexBarWin.Services;
@@ -12,7 +13,8 @@ public class EarlyResetBaselineTests
     private static readonly DateTime Now = new(2026, 10, 11, 12, 0, 0, DateTimeKind.Utc);
     private sealed class FixedClock : TimeProvider
     {
-        public override DateTimeOffset GetUtcNow() => new(Now);
+        public DateTime UtcNow { get; set; } = Now;
+        public override DateTimeOffset GetUtcNow() => new(UtcNow);
     }
     private readonly List<EarlyResetStore> _stores = [];
     private string _directory = null!;
@@ -27,9 +29,9 @@ public class EarlyResetBaselineTests
         if (Directory.Exists(_directory)) Directory.Delete(_directory, recursive: true);
     }
 
-    private EarlyResetStore Store()
+    private EarlyResetStore Store(TimeProvider? clock = null)
     {
-        var store = new EarlyResetStore(null, NullLogger<EarlyResetStore>.Instance, new FixedClock(), Path.Combine(_directory, "early-resets.json"));
+        var store = new EarlyResetStore(null, NullLogger<EarlyResetStore>.Instance, clock ?? new FixedClock(), Path.Combine(_directory, "early-resets.json"));
         _stores.Add(store);
         return store;
     }
@@ -132,5 +134,108 @@ public class EarlyResetBaselineTests
         var restarted = Store();
         await restarted.LoadAsync();
         restarted.Observe(ExtraData(Now, 0), Now).Should().BeEmpty();
+    }
+
+    private static UsageData Extras(DateTime at, params (string Key, double Percent)[] windows) => Data(0, at) with
+    {
+        Session = null,
+        ExtraWindows = windows.Select(w => new ExtraUsageWindow
+        {
+            Key = w.Key, Title = w.Key,
+            Window = new() { ReportedPercent = w.Percent, ResetAt = Now.AddHours(3) }
+        }).ToArray()
+    };
+
+    private static async Task<EarlyResetStoreFile> Saved(EarlyResetStore store)
+    {
+        await store.FlushAsync();
+        return JsonSerializer.Deserialize(await File.ReadAllTextAsync(store.FilePath),
+            AppJsonSerializerContext.Default.EarlyResetStoreFile)!;
+    }
+
+    [TestMethod]
+    [DataRow(false, false)]
+    [DataRow(false, true)]
+    [DataRow(true, false)]
+    [DataRow(true, true)]
+    public async Task Observe_LateUniqueAtOrBeforeAmbiguityCannotRecreateBaseline(bool restart, bool sameTime)
+    {
+        var store = Store();
+        store.Observe(Extras(Now.AddMinutes(-10), ("model", 80)), Now).Should().BeEmpty();
+        store.Observe(Extras(Now.AddMinutes(-5), ("model", 80), ("MODEL", 20)), Now).Should().BeEmpty();
+        var saved = await Saved(store);
+        saved.Baselines.Should().BeEmpty();
+        saved.InvalidatedAtUtc.Should().ContainKey("codex|extra:model")
+            .WhoseValue.Should().Be(Now.AddMinutes(-5));
+        if (restart)
+        {
+            store = Store();
+            await store.LoadAsync();
+        }
+        store.Observe(Extras(Now.AddMinutes(sameTime ? -5 : -7), ("model", 80)), Now).Should().BeEmpty();
+        (await Saved(store)).Baselines.Should().BeEmpty();
+        store.Observe(Extras(Now, ("model", 0)), Now).Should().BeEmpty();
+        (await Saved(store)).InvalidatedAtUtc.Should().BeEmpty();
+        store.Observe(Extras(Now.AddMinutes(1), ("model", 80)), Now.AddMinutes(1)).Should().BeEmpty();
+        store.Observe(Extras(Now.AddMinutes(2), ("model", 0)), Now.AddMinutes(2)).Should().ContainSingle();
+    }
+
+    [TestMethod]
+    public async Task Observe_AmbiguityWithoutBaselineStillGuardsAgainstLateUniqueReading()
+    {
+        var store = Store();
+        store.Observe(Extras(Now.AddMinutes(-5), ("model", 80), ("model", 20)), Now).Should().BeEmpty();
+        await store.FlushAsync();
+        var restarted = Store();
+        await restarted.LoadAsync();
+        restarted.Observe(Extras(Now.AddMinutes(-7), ("model", 80)), Now).Should().BeEmpty();
+        restarted.Observe(Extras(Now, ("model", 0)), Now).Should().BeEmpty();
+    }
+
+    [TestMethod]
+    public void Observe_OlderAmbiguityDoesNotInvalidateNewerUniqueBaseline()
+    {
+        var store = Store();
+        store.Observe(Extras(Now.AddMinutes(-5), ("model", 80)), Now).Should().BeEmpty();
+        store.Observe(Extras(Now.AddMinutes(-7), ("model", 80), ("model", 20)), Now).Should().BeEmpty();
+        store.Observe(Extras(Now, ("model", 0)), Now).Should().ContainSingle();
+    }
+
+    [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task ObserveOrSave_BaselinesBeyond24HoursAreRemovedFromPersistence(bool observe)
+    {
+        var clock = new FixedClock();
+        var store = Store(clock);
+        store.Observe(Data(80, Now), Now).Should().BeEmpty();
+        (await Saved(store)).Baselines.Should().ContainSingle();
+        clock.UtcNow = Now.AddHours(24);
+        await store.SaveAsync();
+        (await Saved(store)).Baselines.Should().ContainSingle();
+        clock.UtcNow = Now.AddHours(24).AddTicks(1);
+        if (observe)
+            store.Observe(Data(0, clock.UtcNow) with { UsageIsCached = true }, clock.UtcNow).Should().BeEmpty();
+        else
+            await store.SaveAsync();
+        (await Saved(store)).Baselines.Should().BeEmpty();
+    }
+
+    [TestMethod]
+    public async Task Observe_BaselineKeyCapDropsOldestAndRetainsNewestAcrossRestart()
+    {
+        var store = Store();
+        store.Observe(Extras(Now.AddMinutes(-10), ("oldest", 80)), Now).Should().BeEmpty();
+        var windows = Enumerable.Range(1, EarlyResetStore.MaxBaselines)
+            .Select(i => ($"model{i:D4}", 80d)).ToArray();
+        store.Observe(Extras(Now.AddMinutes(-5), windows), Now).Should().BeEmpty();
+        var saved = await Saved(store);
+        saved.Baselines.Should().HaveCount(EarlyResetStore.MaxBaselines);
+        saved.Baselines.Should().NotContain(b => b.WindowKey == "extra:oldest");
+        var restarted = Store();
+        await restarted.LoadAsync();
+        restarted.Observe(Extras(Now, ("oldest", 0)), Now).Should().BeEmpty();
+        restarted.Observe(Extras(Now, ("model0200", 0)), Now).Should().ContainSingle();
+        (await Saved(restarted)).Baselines.Should().HaveCount(EarlyResetStore.MaxBaselines);
     }
 }

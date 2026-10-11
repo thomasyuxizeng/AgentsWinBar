@@ -128,6 +128,7 @@ case " $* " in *" --provider claude "*)
   C=/var/tmp/codexbar-claude-$uid-$key.json
   COOLDOWN=/var/tmp/codexbar-claude-$uid-oauth-cooldown
   CLI_BROKEN=/var/tmp/codexbar-claude-$uid-cli-broken
+  CLI_ATTEMPT=/var/tmp/codexbar-claude-$uid-cli-attempt
   # Legacy state is usable only when it belongs to this user. New writes always use UID-scoped names.
   owned() { [ -f "$1" ] && [ ! -L "$1" ] && [ -O "$1" ]; }
   readable_state() {
@@ -136,13 +137,20 @@ case " $* " in *" --provider claude "*)
   cache_read=$(readable_state "$C" "/var/tmp/codexbar-claude-$key.json")
   cooldown_read=$(readable_state "$COOLDOWN" /var/tmp/codexbar-claude-oauth-cooldown)
   broken_read=$(readable_state "$CLI_BROKEN" /var/tmp/codexbar-claude-cli-broken)
+  attempt_read=''
+  if owned "$CLI_ATTEMPT"; then attempt_read=$CLI_ATTEMPT; fi
   write_state() {
     local staged
     staged=$(mktemp "/var/tmp/codexbar-claude-$uid.XXXXXX") || return 1
     if printf '%s\n' "$2" > "$staged" && mv -f "$staged" "$1"; then return 0; fi
     rm -f "$staged"; return 1
   }
-  age() { echo $(( $(date +%s) - $(stat -c %Y "$1") )); }
+  age() {
+    local stamp
+    # A concurrent successful refresh may remove a stamp after our ownership check.
+    stamp=$(stat -c %Y "$1" 2>/dev/null) || { echo 2147483647; return 0; }
+    echo $(( $(date +%s) - stamp ))
+  }
   cached_output() {
     # Add provenance without changing source/usage or the cache file's observation time.
     # Non-JSON output from older/custom CLIs remains byte-compatible.
@@ -203,20 +211,24 @@ PY
 
   cli_timeout="${CODEXBAR_CLAUDE_CLI_TIMEOUT:-${CODEXBAR_CLI_TIMEOUT:-25}}"
   cli_cooldown="${CODEXBAR_CLAUDE_CLI_COOLDOWN:-${CODEXBAR_CLI_COOLDOWN:-1800}}"
-  if [ $rc -ne 0 ] && { [ -z "$broken_read" ] || [ "$(age "$broken_read")" -ge "$cli_cooldown" ]; }; then
-    # Establish cooldown before attempting CLI: TERM-resistant/killed attempts must leave a stamp.
-    write_state "$CLI_BROKEN" '' || true
+  cli_attempt_ttl="${CODEXBAR_CLAUDE_CLI_ATTEMPT_TTL:-90}"
+  if [ $rc -ne 0 ] && { [ -z "$broken_read" ] || [ "$(age "$broken_read")" -ge "$cli_cooldown" ]; } &&
+     { [ -z "$attempt_read" ] || [ "$(age "$attempt_read")" -ge "$cli_attempt_ttl" ]; }; then
+    # Suppress overlapping calls briefly; an interrupted refresh is not a CLI failure.
+    write_state "$CLI_ATTEMPT" '' || true
     if command -v timeout >/dev/null 2>&1; then
       if r=$(timeout -k 3 "$cli_timeout" "$REAL" "${cli[@]}"); then rc2=0; else rc2=$?; fi
     else
       # Never launch an unbounded fallback. Keep errors generic and free of credentials.
       r=''; rc2=127
     fi
+    if owned "$CLI_ATTEMPT"; then rm -f "$CLI_ATTEMPT" || true; fi
     if [ $rc2 -eq 0 ]; then
       o=$r; rc=0
-      [ -n "$broken_read" ] && owned "$broken_read" && rm -f "$broken_read"
-      owned "$CLI_BROKEN" && rm -f "$CLI_BROKEN"
+      if [ -n "$broken_read" ] && owned "$broken_read"; then rm -f "$broken_read" || true; fi
+      if owned "$CLI_BROKEN"; then rm -f "$CLI_BROKEN" || true; fi
     else
+      write_state "$CLI_BROKEN" '' || true
       # With OAuth in its rate-limit cooldown, the CLI's error is the most current explanation.
       if [ $oauth_tried -eq 0 ]; then o=$r; rc=$rc2; fi
     fi

@@ -80,8 +80,8 @@ src=''; prev=''
 for a in "$@"; do [ "$prev" = --source ] && src=$a; prev=$a; done
 printf '%s\n' "$src" >> "$CALLS"
 if [ "$src" = oauth ]; then printf '%s\n' "$OAUTH_OUT"; exit "$OAUTH_EXIT"; fi
-if [ -n "${CHECK_BROKEN_STAMP:-}" ]; then
-  [[ -f "$CHECK_BROKEN_STAMP" ]] || exit 97
+if [ -n "${CHECK_ATTEMPT_STAMP:-}" ]; then
+  [[ -f "$CHECK_ATTEMPT_STAMP" && ! -e "$CHECK_FAILURE_STAMP" ]] || exit 97
   printf 'stamp-before-cli\n' >> "$STAMP_CHECK_LOG"
 fi
 [ -z "${CLI_IGNORE_TERM:-}" ] || trap '' TERM
@@ -102,6 +102,8 @@ output=$(OAUTH_OUT=$expired OAUTH_EXIT=3 CLI_OUT=$good CLI_EXIT=0 claude_run)
 [[ "$output" = "$good" ]]
 [[ "$(cat "$CALLS")" = $'oauth\ncli' ]]
 [[ ! -e "$TMP/claude-cache/codexbar-claude-$uid-oauth-cooldown" ]]
+[[ ! -e "$TMP/claude-cache/codexbar-claude-$uid-cli-attempt" ]]
+[[ ! -e "$TMP/claude-cache/codexbar-claude-$uid-cli-broken" ]]
 
 # Expired token and a failing CLI, nothing cached: the real OAuth error is returned, not "rate limited".
 observed='2026-10-01T10:00:00Z'
@@ -156,6 +158,51 @@ output=$(OAUTH_OUT=$expired OAUTH_EXIT=3 CLI_OUT=$good CLI_EXIT=0 bash "$TMP/cla
 [[ "$output" = "$good" ]]
 [[ ! -e "$TMP/claude-cache/codexbar-claude-$uid-cli-broken" ]]
 
+# A concurrent refresh sees only the in-flight stamp, skips CLI, and sets no failure cooldown.
+attempt_file="$TMP/claude-cache/codexbar-claude-$uid-cli-attempt"
+broken_file="$TMP/claude-cache/codexbar-claude-$uid-cli-broken"
+: > "$CALLS"; rm -f "$TMP"/claude-cache/*
+touch "$attempt_file"
+set +e
+output=$(OAUTH_OUT=$expired OAUTH_EXIT=3 CLI_OUT=$good CLI_EXIT=0 bash -e "$TMP/claude-shim" usage --provider claude --format json --source cli); rc=$?
+set -e
+[[ "$rc" -eq 3 && "$(cat "$CALLS")" = oauth ]]
+check "$output" 'token expired'
+[[ -f "$attempt_file" && ! -e "$broken_file" ]]
+
+# An abandoned attempt expires after 90 seconds and expired-token recovery removes both stamps.
+: > "$CALLS"
+touch -d '91 seconds ago' "$attempt_file"
+touch -d '31 minutes ago' "$broken_file"
+output=$(OAUTH_OUT=$expired OAUTH_EXIT=3 CLI_OUT=$good CLI_EXIT=0 bash -e "$TMP/claude-shim" usage --provider claude --format json --source cli)
+[[ "$output" = "$good" && "$(cat "$CALLS")" = $'oauth\ncli' ]]
+[[ ! -e "$attempt_file" && ! -e "$broken_file" ]]
+
+# The in-flight TTL can be shortened for tests; a real failed attempt starts the failure cooldown.
+: > "$CALLS"; rm -f "$TMP"/claude-cache/*
+touch -d '3 seconds ago' "$attempt_file"
+set +e
+CODEXBAR_CLAUDE_CLI_ATTEMPT_TTL=2 OAUTH_OUT=$expired OAUTH_EXIT=3 CLI_OUT='[]' CLI_EXIT=1 bash -e "$TMP/claude-shim" usage --provider claude --format json --source cli >/dev/null; rc=$?
+set -e
+[[ "$rc" -eq 3 && "$(cat "$CALLS")" = $'oauth\ncli' ]]
+[[ ! -e "$attempt_file" && -f "$broken_file" ]]
+
+# Exercise overlap with a real slow fake CLI: the second call cannot poison the first attempt.
+: > "$CALLS"; rm -f "$TMP"/claude-cache/*; rm -f "$TMP/overlap-started"
+CHECK_ATTEMPT_STAMP="$attempt_file" CHECK_FAILURE_STAMP="$broken_file" STAMP_CHECK_LOG="$TMP/overlap-started" CLI_SLEEP=2 OAUTH_OUT=$expired OAUTH_EXIT=3 CLI_OUT=$good CLI_EXIT=0 bash -e "$TMP/claude-shim" usage --provider claude --format json --source cli > "$TMP/overlap-result" &
+attempt_pid=$!
+for ((i=0; i<100; i++)); do
+  [ ! -s "$TMP/overlap-started" ] || break
+  sleep 0.01
+done
+[[ -s "$TMP/overlap-started" && -f "$attempt_file" && ! -e "$broken_file" ]] || { wait "$attempt_pid"; exit 1; }
+set +e
+output=$(OAUTH_OUT=$expired OAUTH_EXIT=3 CLI_OUT=$good CLI_EXIT=0 bash -e "$TMP/claude-shim" usage --provider claude --format json --source cli); rc=$?
+set -e
+[[ "$rc" -eq 3 && "$(cat "$CALLS")" = $'oauth\ncli\noauth' && ! -e "$broken_file" ]] || { wait "$attempt_pid"; exit 1; }
+wait "$attempt_pid"
+[[ "$(cat "$TMP/overlap-result")" = "$good" && ! -e "$attempt_file" && ! -e "$broken_file" ]]
+
 # In the rate-limit cooldown, a failing CLI's own error is the most current explanation.
 : > "$CALLS"; rm -f "$TMP"/claude-cache/*
 touch "$TMP/claude-cache/codexbar-claude-$uid-oauth-cooldown"
@@ -197,19 +244,20 @@ check "$output" '"cached": true'
 check "$output" "$observed"
 [[ "$(cat "$CALLS")" = oauth ]]
 
-# A CLI that ignores TERM is killed after the three-second grace. Its cooldown exists
-# before it starts, not merely after the timeout wrapper returns.
+# A CLI that ignores TERM is killed after the three-second grace. Only its in-flight
+# stamp exists before it starts; the failure stamp appears after timeout returns.
 : > "$CALLS"; rm -f "$TMP"/claude-cache/*
 printf '%s\n' "[{\"provider\":\"claude\",\"source\":\"oauth\",\"usage\":{\"updatedAt\":\"$observed\",\"primary\":{\"usedPercent\":30}}}]" > "$cache_file"
 touch -d '15 minutes ago' "$cache_file"
 start_s=$SECONDS
-output=$(CHECK_BROKEN_STAMP="$TMP/claude-cache/codexbar-claude-$uid-cli-broken" STAMP_CHECK_LOG="$TMP/stamp-check" CLI_IGNORE_TERM=1 CODEXBAR_CLAUDE_CLI_TIMEOUT=1 CLI_SLEEP=30 OAUTH_OUT=$expired OAUTH_EXIT=3 CLI_OUT=$good CLI_EXIT=0 bash "$TMP/claude-shim" usage --provider claude --format json --source cli)
+output=$(CHECK_ATTEMPT_STAMP="$TMP/claude-cache/codexbar-claude-$uid-cli-attempt" CHECK_FAILURE_STAMP="$TMP/claude-cache/codexbar-claude-$uid-cli-broken" STAMP_CHECK_LOG="$TMP/stamp-check" CLI_IGNORE_TERM=1 CODEXBAR_CLAUDE_CLI_TIMEOUT=1 CLI_SLEEP=30 OAUTH_OUT=$expired OAUTH_EXIT=3 CLI_OUT=$good CLI_EXIT=0 bash "$TMP/claude-shim" usage --provider claude --format json --source cli)
 elapsed=$(( SECONDS - start_s ))
 [[ "$elapsed" -ge 3 && "$elapsed" -lt 7 ]]
 check "$output" '"cached": true'
 [[ "$(cat "$TMP/stamp-check")" = stamp-before-cli ]]
 [[ "$(cat "$CALLS")" = $'oauth\ncli' ]]
 [[ -f "$TMP/claude-cache/codexbar-claude-$uid-cli-broken" ]]
+[[ ! -e "$TMP/claude-cache/codexbar-claude-$uid-cli-attempt" ]]
 
 # Without timeout in PATH the CLI must never be launched, with or without old cache.
 for use_cache in no yes; do

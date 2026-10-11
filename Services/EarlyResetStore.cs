@@ -8,11 +8,15 @@ namespace CodexBarWin.Services;
 /// <summary>
 /// Persists detected early reset events to early-resets.json beside settings/cache.
 /// Thread-safe, non-blocking in-memory queries with atomic disk writes and corrupt file recovery.
+/// If saving fails, a notification may repeat after a restart.
 /// </summary>
 public sealed class EarlyResetStore : IEarlyResetStore
 {
     /// <summary>Maximum number of recorded events retained.</summary>
     public const int MaxEvents = 50;
+
+    /// <summary>Maximum number of fresh comparison baselines retained.</summary>
+    public const int MaxBaselines = 200;
 
     /// <summary>Retention period: events older than 7 days are discarded.</summary>
     public static readonly TimeSpan MaxRetentionAge = TimeSpan.FromDays(7);
@@ -27,6 +31,7 @@ public sealed class EarlyResetStore : IEarlyResetStore
     private readonly object _gate = new();
     private readonly List<EarlyResetEntry> _entries = [];
     private readonly Dictionary<string, EarlyResetWindowReading> _baselines = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, DateTime> _invalidatedAtUtc = new(StringComparer.OrdinalIgnoreCase);
     private Task _pendingWrites = Task.CompletedTask;
 
     public string FilePath { get; }
@@ -109,10 +114,21 @@ public sealed class EarlyResetStore : IEarlyResetStore
             {
                 _entries.Clear();
                 _baselines.Clear();
+                _invalidatedAtUtc.Clear();
+                foreach (var invalidation in file.InvalidatedAtUtc ?? [])
+                    _invalidatedAtUtc[invalidation.Key] = DashboardValues.Utc(invalidation.Value);
                 foreach (var baseline in file.Baselines ?? [])
                 {
                     if (baseline != null && IsFreshBaseline(baseline, now))
-                        _baselines[BaselineKey(baseline)] = baseline;
+                    {
+                        var key = BaselineKey(baseline);
+                        if (!_invalidatedAtUtc.TryGetValue(key, out var invalidatedAt) ||
+                            DashboardValues.Utc(baseline.ReadingAtUtc) > invalidatedAt)
+                        {
+                            _baselines[key] = baseline;
+                            _invalidatedAtUtc.Remove(key);
+                        }
+                    }
                 }
                 foreach (var entry in file.Events ?? [])
                 {
@@ -126,6 +142,7 @@ public sealed class EarlyResetStore : IEarlyResetStore
                     _entries.Add(entry);
                 }
                 PruneLocked(now);
+                PruneBaselinesLocked(now);
             }
 
             _logger.LogDebug("Loaded early resets from {Path}", FilePath);
@@ -179,11 +196,13 @@ public sealed class EarlyResetStore : IEarlyResetStore
             lock (_gate)
             {
                 PruneLocked(now);
+                PruneBaselinesLocked(now);
                 file = new EarlyResetStoreFile
                 {
                     Version = 1,
                     Events = _entries.ToList(),
-                    Baselines = _baselines.Values.ToList()
+                    Baselines = _baselines.Values.ToList(),
+                    InvalidatedAtUtc = new(_invalidatedAtUtc, StringComparer.OrdinalIgnoreCase)
                 };
             }
 
@@ -222,6 +241,9 @@ public sealed class EarlyResetStore : IEarlyResetStore
     public IReadOnlyList<EarlyReset> Observe(UsageData data, DateTime nowUtc)
     {
         var now = DashboardValues.Utc(nowUtc);
+        bool changed;
+        lock (_gate) changed = PruneBaselinesLocked(now);
+        if (changed) SaveAsync().SafeFireAndForget(ex => _logger.LogWarning(ex, "Failed to prune reset baselines"));
         if (!ProviderConstants.IsValidProvider(data.Provider) || data.UsageIsCached || data.UsageIsStale ||
             data.UsageFetchOutcome != FetchOutcome.Success || data.HasError) return [];
 
@@ -231,27 +253,34 @@ public sealed class EarlyResetStore : IEarlyResetStore
 
         var readings = EarlyResetDetector.Readings(data).Where(r => IsFreshBaseline(r, now)).ToArray();
         var events = new List<EarlyReset>();
-        var changed = false;
+        changed = false;
         lock (_gate)
         {
-            // A fresh ambiguous snapshot breaks identity continuity: neither duplicate is a baseline.
+            // Keep its timestamp even without a baseline so late unique readings cannot bridge ambiguity.
             foreach (var group in (data.ExtraWindows ?? []).GroupBy(UsageHistoryStore.ExtraWindowKey, StringComparer.OrdinalIgnoreCase)
                          .Where(g => g.Count() > 1))
             {
                 var key = ProviderConstants.ValidateAndNormalize(data.Provider) + "|" + group.Key;
-                if (_baselines.TryGetValue(key, out var held) && observedAt > DashboardValues.Utc(held.ReadingAtUtc))
-                    changed |= _baselines.Remove(key);
+                if (_baselines.TryGetValue(key, out var held) && observedAt <= DashboardValues.Utc(held.ReadingAtUtc)) continue;
+                if (_invalidatedAtUtc.TryGetValue(key, out var invalidatedAt) && observedAt <= invalidatedAt) continue;
+                _baselines.Remove(key);
+                _invalidatedAtUtc[key] = observedAt;
+                changed = true;
             }
             foreach (var reading in readings)
             {
                 var key = BaselineKey(reading);
+                if (_invalidatedAtUtc.TryGetValue(key, out var invalidatedAt) &&
+                    DashboardValues.Utc(reading.ReadingAtUtc) <= invalidatedAt) continue;
                 _baselines.TryGetValue(key, out var baseline);
                 if (baseline != null && reading.ReadingAtUtc <= DashboardValues.Utc(baseline.ReadingAtUtc)) continue;
                 var detected = EarlyResetDetector.Detect(baseline, reading, now);
                 if (detected != null) events.Add(detected);
                 _baselines[key] = reading;
+                _invalidatedAtUtc.Remove(key);
                 changed = true;
             }
+            changed |= PruneBaselinesLocked(now);
         }
         if (changed) SaveAsync().SafeFireAndForget(ex => _logger.LogWarning(ex, "Failed to save fresh reset baselines"));
         return events;
@@ -405,6 +434,18 @@ public sealed class EarlyResetStore : IEarlyResetStore
             _entries.Sort((a, b) => b.Event.DetectedAtUtc.CompareTo(a.Event.DetectedAtUtc));
             _entries.RemoveRange(MaxEvents, _entries.Count - MaxEvents);
         }
+    }
+
+    private bool PruneBaselinesLocked(DateTime nowUtc)
+    {
+        var expired = _baselines.Where(pair => !IsFreshBaseline(pair.Value, nowUtc))
+            .Select(pair => pair.Key).ToArray();
+        foreach (var key in expired) _baselines.Remove(key);
+        var oldest = _baselines.OrderBy(pair => DashboardValues.Utc(pair.Value.ReadingAtUtc))
+            .ThenBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase)
+            .Take(Math.Max(0, _baselines.Count - MaxBaselines)).Select(pair => pair.Key).ToArray();
+        foreach (var key in oldest) _baselines.Remove(key);
+        return expired.Length > 0 || oldest.Length > 0;
     }
 
     private void RenameCorruptFile()
