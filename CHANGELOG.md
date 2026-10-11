@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Fixed: a rate-limited Claude refresh no longer waits ~30 s on the Claude CLI fallback.
+
 ## [1.2.1] - 2026-10-11
 
 ### Fixed

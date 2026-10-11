@@ -80,6 +80,7 @@ src=''; prev=''
 for a in "$@"; do [ "$prev" = --source ] && src=$a; prev=$a; done
 printf '%s\n' "$src" >> "$CALLS"
 if [ "$src" = oauth ]; then printf '%s\n' "$OAUTH_OUT"; exit "$OAUTH_EXIT"; fi
+[ -z "${CLI_SLEEP:-}" ] || sleep "$CLI_SLEEP"
 printf '%s\n' "$CLI_OUT"; exit "$CLI_EXIT"
 CLI
 chmod +x "$TMP/claude-real"
@@ -167,6 +168,83 @@ for cli_exit in 1 125 127; do
   set -e
   [[ "$rc" -eq "$cli_exit" && -z "$output" && "$(cat "$CALLS")" = cli ]]
 done
+
+# Slow CLI route is cut off at the bound and the call returns promptly.
+: > "$CALLS"; rm -f "$TMP"/claude-cache/*
+printf '%s\n' "[{\"provider\":\"claude\",\"source\":\"oauth\",\"usage\":{\"updatedAt\":\"$observed\",\"primary\":{\"usedPercent\":30}}}]" > "$cache_file"
+touch -d '15 minutes ago' "$cache_file"
+start_s=$SECONDS
+output=$(CODEXBAR_CLAUDE_CLI_TIMEOUT=1 CLI_SLEEP=10 OAUTH_OUT=$expired OAUTH_EXIT=3 CLI_OUT=$good CLI_EXIT=0 bash "$TMP/claude-shim" usage --provider claude --format json --source cli)
+elapsed=$(( SECONDS - start_s ))
+[[ "$elapsed" -lt 5 ]]
+check "$output" '"cached": true'
+check "$output" "$observed"
+[[ "$(cat "$CALLS")" = $'oauth\ncli' ]]
+[[ -f "$TMP/claude-cache/codexbar-claude-$uid-cli-broken" ]]
+
+# Negative cache skips the CLI route on the next call (assert the fake CLI call log).
+: > "$CALLS"
+start_s=$SECONDS
+output=$(CODEXBAR_CLAUDE_CLI_TIMEOUT=1 CLI_SLEEP=10 OAUTH_OUT=$expired OAUTH_EXIT=3 CLI_OUT=$good CLI_EXIT=0 bash "$TMP/claude-shim" usage --provider claude --format json --source cli)
+elapsed=$(( SECONDS - start_s ))
+[[ "$elapsed" -lt 3 ]]
+check "$output" '"cached": true'
+check "$output" "$observed"
+[[ "$(cat "$CALLS")" = oauth ]]
+
+# 429 + cache serves cache without calling the CLI route.
+: > "$CALLS"; rm -f "$TMP"/claude-cache/*
+printf '%s\n' "[{\"provider\":\"claude\",\"source\":\"oauth\",\"usage\":{\"updatedAt\":\"$observed\",\"primary\":{\"usedPercent\":30}}}]" > "$cache_file"
+touch -d '15 minutes ago' "$cache_file"
+output=$(OAUTH_OUT=$limited OAUTH_EXIT=3 CLI_OUT=$good CLI_EXIT=0 bash "$TMP/claude-shim" usage --provider claude --format json --source cli)
+check "$output" '"cached": true'
+check "$output" "$observed"
+[[ "$(cat "$CALLS")" = oauth ]]
+[[ -f "$TMP/claude-cache/codexbar-claude-$uid-oauth-cooldown" ]]
+[[ ! -e "$TMP/claude-cache/codexbar-claude-$uid-cli-broken" ]]
+
+# Subsequent call while OAuth is in 429 cooldown also serves cache immediately without calling CLI.
+: > "$CALLS"
+output=$(OAUTH_OUT=$limited OAUTH_EXIT=3 CLI_OUT=$good CLI_EXIT=0 bash "$TMP/claude-shim" usage --provider claude --format json --source cli)
+check "$output" '"cached": true'
+[[ -z "$(cat "$CALLS")" ]]
+
+# 429 + no cache still tries the CLI route once (success case caches data).
+: > "$CALLS"; rm -f "$TMP"/claude-cache/*
+output=$(OAUTH_OUT=$limited OAUTH_EXIT=3 CLI_OUT=$good CLI_EXIT=0 bash "$TMP/claude-shim" usage --provider claude --format json --source cli)
+[[ "$output" = "$good" ]]
+[[ "$(cat "$CALLS")" = $'oauth\ncli' ]]
+[[ -f "$TMP/claude-cache/codexbar-claude-$uid-oauth-cooldown" ]]
+[[ -s "$cache_file" ]]
+[[ ! -e "$TMP/claude-cache/codexbar-claude-$uid-cli-broken" ]]
+
+# 429 + no cache with a failing CLI records the broken CLI and returns the error.
+: > "$CALLS"; rm -f "$TMP"/claude-cache/*
+set +e
+output=$(OAUTH_OUT=$limited OAUTH_EXIT=3 CLI_OUT='[{"error":"cli dead"}]' CLI_EXIT=1 bash "$TMP/claude-shim" usage --provider claude --format json --source cli); rc=$?
+set -e
+[[ "$rc" -eq 3 ]]
+check "$output" 'rate limited'
+[[ "$(cat "$CALLS")" = $'oauth\ncli' ]]
+[[ -f "$TMP/claude-cache/codexbar-claude-$uid-oauth-cooldown" ]]
+[[ -f "$TMP/claude-cache/codexbar-claude-$uid-cli-broken" ]]
+
+# Negative cache expiry retries (via age and via CODEXBAR_CLAUDE_CLI_COOLDOWN).
+: > "$CALLS"; rm -f "$TMP"/claude-cache/*
+touch "$TMP/claude-cache/codexbar-claude-$uid-cli-broken"
+touch -d '31 minutes ago' "$TMP/claude-cache/codexbar-claude-$uid-cli-broken"
+output=$(OAUTH_OUT=$expired OAUTH_EXIT=3 CLI_OUT=$good CLI_EXIT=0 bash "$TMP/claude-shim" usage --provider claude --format json --source cli)
+[[ "$output" = "$good" ]]
+[[ "$(cat "$CALLS")" = $'oauth\ncli' ]]
+[[ ! -e "$TMP/claude-cache/codexbar-claude-$uid-cli-broken" ]]
+
+: > "$CALLS"; rm -f "$TMP"/claude-cache/*
+touch "$TMP/claude-cache/codexbar-claude-$uid-cli-broken"
+touch -d '3 seconds ago' "$TMP/claude-cache/codexbar-claude-$uid-cli-broken"
+output=$(CODEXBAR_CLAUDE_CLI_COOLDOWN=2 OAUTH_OUT=$expired OAUTH_EXIT=3 CLI_OUT=$good CLI_EXIT=0 bash "$TMP/claude-shim" usage --provider claude --format json --source cli)
+[[ "$output" = "$good" ]]
+[[ "$(cat "$CALLS")" = $'oauth\ncli' ]]
+[[ ! -e "$TMP/claude-cache/codexbar-claude-$uid-cli-broken" ]]
 
 # Gemini must report transform failure when the real CLI succeeds, and retain CLI failures.
 mkdir "$TMP/transform-bin"

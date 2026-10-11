@@ -5,8 +5,9 @@
 # What it changes, and why:
 #   * gemini  -> the Gemini CLI login was shut down for individual Google accounts, so Gemini quota is
 #                served from Antigravity (`agy`) and presented as the Gemini provider (5-hour + weekly).
-#   * claude  -> the OAuth usage endpoint is rate limited by Anthropic (exit code 3), so use the Claude CLI
-#                route, cache results for 10 minutes, and fall back to the last good result on failure.
+#   * claude  -> the OAuth usage endpoint is rate limited by Anthropic (exit code 3); when rate limited,
+#                serve the last good result immediately, try the Claude CLI route (bounded by a timeout)
+#                only when no cache exists, and remember CLI failures for 30 minutes.
 #   * others  -> passed straight through to the real CLI.
 REAL=/opt/codexbar/CodexBarCLI
 
@@ -111,13 +112,16 @@ fi
 
 # Claude: cache for 10 minutes and always answer quickly. Routes, in order:
 #   1. OAuth usage endpoint: ~1 second, but Anthropic rate limits it, so after a rate-limit answer it is
-#      left alone for 10 minutes. Other failures (notably "OAuth token expired": CodexBar never refreshes the
-#      token itself) set no cooldown and go straight to route 2.
-#   2. Claude CLI: ~18 seconds. Running `claude` also refreshes an expired OAuth token, so route 1 recovers
-#      on the next refresh. Some plans get "a subscription notice without session quota data" here, so a
-#      failure is remembered for 30 minutes to keep the slow attempt off every refresh.
-#   3. The last good result, however old. Its own usage.updatedAt is kept, so the app can show its age.
-#      With no cached result, the real error is returned rather than a generic one.
+#      left alone for 10 minutes. When in 429 cooldown and a usable cache exists, route 3 is served
+#      immediately to avoid blocking refreshes. Other failures (notably "OAuth token expired": CodexBar
+#      never refreshes the token itself) set no cooldown and go straight to route 2.
+#   2. Claude CLI: bounded by a timeout (25 s default, CODEXBAR_CLAUDE_CLI_TIMEOUT: refreshing an expired OAuth token takes ~18 s, and the app allows 30 s) so it cannot hang
+#      a refresh. Running `claude` also refreshes an expired OAuth token, so route 1 recovers on the next
+#      refresh. A failure or timeout (e.g. plans with a subscription notice without session quota) is
+#      remembered for 30 minutes (CODEXBAR_CLAUDE_CLI_COOLDOWN) to keep the slow attempt off subsequent refreshes.
+#   3. The last good result, however old. Served immediately when OAuth is in rate-limit cooldown and cached
+#      data exists, or as fallback when all active routes fail. Its own usage.updatedAt is kept, so the app
+#      can show its age. With no cached result, the real error is returned rather than a generic one.
 case " $* " in *" --provider claude "*)
   uid=$(id -u)
   key=$(printf '%s' "$*" | md5sum | cut -c1-8)
@@ -175,29 +179,48 @@ PY
   done
 
   o='[{"provider":"claude","source":"oauth","error":{"kind":"provider","code":3,"message":"Claude usage is rate limited right now; retrying shortly."}}]'
-  rc=3; oauth_tried=0
+  rc=3; oauth_tried=0; oauth_rate_limited=0
 
-  if [ -z "$cooldown_read" ] || [ "$(age "$cooldown_read")" -ge 600 ]; then
-    r=$("$REAL" "${oauth[@]}"); rc=$?; oauth_tried=1; o=$r
+  if [ -n "$cooldown_read" ] && [ "$(age "$cooldown_read")" -lt 600 ]; then
+    oauth_rate_limited=1
+  else
+    oauth_tried=1
+    if r=$("$REAL" "${oauth[@]}"); then rc=0; else rc=$?; fi
+    o=$r
     if [ $rc -eq 0 ]; then
+      [ -n "$cooldown_read" ] && owned "$cooldown_read" && rm -f "$cooldown_read"
       owned "$COOLDOWN" && rm -f "$COOLDOWN"
     elif printf '%s' "$r" | grep -Eqi 'rate.?limit|too many requests|429'; then
-      write_state "$COOLDOWN" ''
+      write_state "$COOLDOWN" '' || true
+      oauth_rate_limited=1
     fi
   fi
 
-  if [ $rc -ne 0 ] && { [ -z "$broken_read" ] || [ "$(age "$broken_read")" -ge 1800 ]; }; then
-    r=$("$REAL" "${cli[@]}"); rc2=$?
-    if [ $rc2 -eq 0 ]; then
-      o=$r; rc=0; owned "$CLI_BROKEN" && rm -f "$CLI_BROKEN"
+  if [ "$oauth_rate_limited" -eq 1 ] && [ -n "$cache_read" ] && [ -s "$cache_read" ]; then
+    cached_output "$cache_read"
+    exit $?
+  fi
+
+  cli_timeout="${CODEXBAR_CLAUDE_CLI_TIMEOUT:-${CODEXBAR_CLI_TIMEOUT:-25}}"
+  cli_cooldown="${CODEXBAR_CLAUDE_CLI_COOLDOWN:-${CODEXBAR_CLI_COOLDOWN:-1800}}"
+  if [ $rc -ne 0 ] && { [ -z "$broken_read" ] || [ "$(age "$broken_read")" -ge "$cli_cooldown" ]; }; then
+    if command -v timeout >/dev/null 2>&1; then
+      if r=$(timeout "$cli_timeout" "$REAL" "${cli[@]}"); then rc2=0; else rc2=$?; fi
     else
-      write_state "$CLI_BROKEN" ''
+      if r=$("$REAL" "${cli[@]}"); then rc2=0; else rc2=$?; fi
+    fi
+    if [ $rc2 -eq 0 ]; then
+      o=$r; rc=0
+      [ -n "$broken_read" ] && owned "$broken_read" && rm -f "$broken_read"
+      owned "$CLI_BROKEN" && rm -f "$CLI_BROKEN"
+    else
+      write_state "$CLI_BROKEN" '' || true
       # With OAuth in its rate-limit cooldown, the CLI's error is the most current explanation.
       if [ $oauth_tried -eq 0 ]; then o=$r; rc=$rc2; fi
     fi
   fi
 
-  if [ $rc -eq 0 ]; then write_state "$C" "$o"; printf '%s\n' "$o"; exit 0; fi
+  if [ $rc -eq 0 ]; then write_state "$C" "$o" || true; printf '%s\n' "$o"; exit 0; fi
   if [ -n "$cache_read" ] && [ -s "$cache_read" ]; then cached_output "$cache_read"; exit $?; fi
   printf '%s\n' "$o"; exit $rc ;;
 esac
