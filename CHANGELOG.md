@@ -7,10 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-10-14
+
 ### Added
-- Usage refreshes two seconds after the next window reset, so cleared limits appear sooner.
-- Bars play a green animation when a usage window resets: a ring draws around the bar, the old fill turns green as the ring fades, then the green collapses to the left and hands over to a glow that sweeps across.
-- Reset animation setting (Always on, Always off, Off in battery saver; default off in battery saver).
+- Usage refreshes two seconds after the next window reset (with one retry 15 seconds later if the provider has not rolled over yet), so cleared limits appear sooner. Each reset refresh is logged as a new or still-old window.
+- A usage bar plays a short green animation when its own window resets: a ring draws around the bar, the previous fill turns green as the ring fades, the green collapses to the left and hands over to a glow that sweeps across. A session reset animates only the session bar, a weekly reset only the weekly bar.
+- A Reset animation setting (Settings) with Always on, Always off, or Off in battery saver (the default). The animation is also skipped when Windows animations are off.
+
+### Known limitations
+A refresh that rebuilds the bars within 15 seconds of a detected reset can replay the animation once.
 
 ## [1.3.0] - 2026-10-11
 
@@ -229,7 +234,8 @@ Early-reset detection cannot tell an account switch from a reset; if saving earl
 - Window slide-in animation from system tray
 - Setup wizard for first-time configuration
 
-[Unreleased]: https://github.com/Wave-OCE/CodexBarWin/compare/v1.3.0...HEAD
+[Unreleased]: https://github.com/Wave-OCE/CodexBarWin/compare/v1.4.0...HEAD
+[1.4.0]: https://github.com/Wave-OCE/CodexBarWin/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/Wave-OCE/CodexBarWin/compare/v1.2.1...v1.3.0
 [1.2.1]: https://github.com/Wave-OCE/CodexBarWin/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/Wave-OCE/CodexBarWin/compare/v1.1.0...v1.2.0
