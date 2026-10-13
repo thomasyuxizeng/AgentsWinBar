@@ -34,6 +34,10 @@
     <Compile Include="..\Services\IBatterySaverMonitor.cs" Link="Linked\IBatterySaverMonitor.cs" />
     <Compile Include="..\Services\BatterySaverMonitor.cs" Link="Linked\BatterySaverMonitor.cs" />
     <Compile Include="..\Helpers\UsageResetTracker.cs" Link="Linked\UsageResetTracker.cs" />
+    <Compile Include="..\Helpers\BarResetTimeline.cs" Link="Linked\BarResetTimeline.cs" />
+    <Compile Include="..\Helpers\BarResetRingGeometry.cs" Link="Linked\BarResetRingGeometry.cs" />
+    <Compile Include="..\Helpers\BarResetColorFade.cs" Link="Linked\BarResetColorFade.cs" />
+    <Compile Include="..\Helpers\BarResetAnimationPolicy.cs" Link="Linked\BarResetAnimationPolicy.cs" />
     <Compile Include="..\Helpers\UsageFingerprint.cs" Link="Linked\UsageFingerprint.cs" />
     <Compile Include="..\Helpers\WorkingSetTrimmer.cs" Link="Linked\WorkingSetTrimmer.cs" />
     <Compile Include="..\Models\DashboardSnapshot.cs" Link="Linked\DashboardSnapshot.cs" />

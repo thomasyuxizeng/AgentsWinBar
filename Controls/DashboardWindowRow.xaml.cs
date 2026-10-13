@@ -16,6 +16,19 @@ public sealed partial class DashboardWindowRow : UserControl
         set => SetValue(DataProperty, value);
     }
 
+    /// <summary>Forwarded to the inner <see cref="UsageMeter"/>, which plays the reset animation. TODO: bind ResetDetectedAtUtc from the window model once it lands.</summary>
+    public static readonly DependencyProperty ResetDetectedAtUtcProperty = DependencyProperty.Register(nameof(ResetDetectedAtUtc),
+        typeof(DateTime?), typeof(DashboardWindowRow), new PropertyMetadata(null, OnResetDetectedAtUtcChanged));
+
+    public DateTime? ResetDetectedAtUtc
+    {
+        get => (DateTime?)GetValue(ResetDetectedAtUtcProperty);
+        set => SetValue(ResetDetectedAtUtcProperty, value);
+    }
+
+    private static void OnResetDetectedAtUtcChanged(DependencyObject d, DependencyPropertyChangedEventArgs e) =>
+        ((DashboardWindowRow)d).Meter.ResetDetectedAtUtc = (DateTime?)e.NewValue;
+
     public DashboardWindowRow()
     {
         InitializeComponent();

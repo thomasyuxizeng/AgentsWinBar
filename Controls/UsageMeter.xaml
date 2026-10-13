@@ -31,6 +31,13 @@
             RadiusX="3"
             RadiusY="3"/>
 
+        <!-- Reset animation overlays (see BarResetAnimation); collapsed and empty whenever idle. The layer is clipped to the track only while playing -->
+        <Grid x:Name="ResetLayer" IsHitTestVisible="False">
+            <Rectangle x:Name="ResetGhost" HorizontalAlignment="Left" RadiusX="3" RadiusY="3" Visibility="Collapsed"/>
+            <Rectangle x:Name="ResetGhostGreen" HorizontalAlignment="Left" RadiusX="3" RadiusY="3" Visibility="Collapsed"/>
+            <Rectangle x:Name="ResetGlow" HorizontalAlignment="Left" RadiusX="3" RadiusY="3" Visibility="Collapsed"/>
+        </Grid>
+
         <!-- Marker line at the time-elapsed position; only shown when usage is outpacing the schedule -->
         <Rectangle
             x:Name="TimeMarker"

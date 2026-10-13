@@ -15,9 +15,6 @@ namespace CodexBarWin.Controls;
 /// </summary>
 public sealed partial class UsageMeter : UserControl
 {
-    /// <summary>Data-only reset signal for code-behind consumers; no animation or rendering behavior.</summary>
-    public DateTime? ResetDetectedAtUtc { get; set; }
-
     // Soft, translucent lavender for the time-passed layer of the main bars: distinct from the blue/amber/red
     // usage colours but blends into the empty track, so it reads as a quiet background hint
     private static readonly Color MainTimeColor = Color.FromArgb(0x58, 0xA9, 0x9D, 0xEE);
@@ -86,10 +83,57 @@ public sealed partial class UsageMeter : UserControl
         set => SetValue(TimePercentProperty, value);
     }
 
+    /// <summary>
+    /// When a reset of this bar's usage window was detected (UTC). A new value that is recent (see
+    /// <see cref="BarResetAnimationPolicy"/>) plays the reset animation once; old, unchanged or null values and
+    /// unloaded/hidden bars do nothing. TODO: bind ResetDetectedAtUtc from the window model once it lands.
+    /// </summary>
+    public static readonly DependencyProperty ResetDetectedAtUtcProperty =
+        DependencyProperty.Register(
+            nameof(ResetDetectedAtUtc),
+            typeof(DateTime?),
+            typeof(UsageMeter),
+            new PropertyMetadata(null, OnResetDetectedAtUtcChanged));
+
+    public DateTime? ResetDetectedAtUtc
+    {
+        get => (DateTime?)GetValue(ResetDetectedAtUtcProperty);
+        set => SetValue(ResetDetectedAtUtcProperty, value);
+    }
+
+    private BarResetAnimation? _resetAnimation;
+    private double _fillWidth;
+    private double _previousFillWidth;
+    private Brush? _previousFillBrush;
+
     public UsageMeter()
     {
         InitializeComponent();
         SizeChanged += OnSizeChanged;
+        Unloaded += (_, _) => _resetAnimation?.Stop();
+    }
+
+    private static void OnResetDetectedAtUtcChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+    {
+        if (d is not UsageMeter meter) return;
+        var shown = meter.IsLoaded && meter.Visibility == Visibility.Visible && meter.ActualWidth > 0;
+        if (!BarResetAnimationPolicy.ShouldPlay((DateTime?)e.NewValue, (DateTime?)e.OldValue, DateTime.UtcNow, BarResetAnimation.AnimationsEnabled, shown)) return;
+        meter.PlayResetAnimation();
+    }
+
+    private void PlayResetAnimation()
+    {
+        try
+        {
+            _resetAnimation ??= new BarResetAnimation(this, ResetLayer, ResetGhost, ResetGhostGreen, ResetGlow);
+            // The usage may already have dropped to empty before this timestamp arrived, so fall back to the previous fill
+            var useCurrent = _fillWidth >= 1;
+            _resetAnimation.Play(useCurrent ? UsageBar.Fill : _previousFillBrush, useCurrent ? _fillWidth : _previousFillWidth);
+        }
+        catch (Exception ex)
+        {
+            App.Services.GetRequiredService<ILogger<UsageMeter>>().LogError(ex, "Usage meter reset animation failed");
+        }
     }
 
     private static void OnPercentChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
@@ -126,7 +170,14 @@ public sealed partial class UsageMeter : UserControl
         var visualPercent = DashboardValues.Percent(Percent);
         var honestPercent = double.IsFinite(Percent) ? Math.Max(0, Percent) : 0;
 
-        UsageBar.Width = ActualWidth * (visualPercent / 100.0);
+        var newFill = ActualWidth * (visualPercent / 100.0);
+        if (Math.Abs(newFill - _fillWidth) > 0.5)
+        {
+            _previousFillWidth = _fillWidth;
+            _previousFillBrush = UsageBar.Fill;
+        }
+        _fillWidth = newFill;
+        UsageBar.Width = newFill;
         var key = (Accent, UsageThresholds.Level(honestPercent));
         if (!_barBrushes.TryGetValue(key, out var barBrush)) _barBrushes[key] = barBrush = GetBarBrush(honestPercent, Accent);
         if (!ReferenceEquals(UsageBar.Fill, barBrush)) UsageBar.Fill = barBrush;
