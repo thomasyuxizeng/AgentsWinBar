@@ -12,6 +12,7 @@ namespace CodexBarWin.Helpers;
 public sealed record WidgetBar(string? Title, UsageWindow Window)
 {
     public DateTime? ResetDetectedAtUtc => Window.ResetDetectedAtUtc;
+    public double? ResetFromUsedPercent => Window.ResetFromUsedPercent;
 
     /// <summary>
     /// Colour family of the bar: standard blue for the main windows, a provider colour for extra windows.

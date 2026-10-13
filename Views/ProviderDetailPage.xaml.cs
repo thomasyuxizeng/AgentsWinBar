@@ -20,6 +20,7 @@ public sealed class ExtraWindowRow
     public string PercentText { get; set; } = string.Empty;
     public string ResetText { get; set; } = string.Empty;
     public DateTime? ResetDetectedAtUtc { get; set; }
+    public double? ResetFromUsedPercent { get; set; }
     public Helpers.BurndownSeries History { get; set; } = new();
     public string EarlyDetail { get; set; } = string.Empty;
     public Visibility EarlyVisibility => string.IsNullOrEmpty(EarlyDetail) ? Visibility.Collapsed : Visibility.Visible;
@@ -156,9 +157,6 @@ public sealed partial class ProviderDetailPage : Page
         TertiarySectionTitle.Text = _data.TertiaryLabel;
 
         var earlyResets = App.Services.GetService<Services.IEarlyResetStore>()?.GetActive(DateTime.UtcNow) ?? [];
-        SessionMeter.ResetDetectedAtUtc = _data.Session?.ResetDetectedAtUtc;
-        WeeklyMeter.ResetDetectedAtUtc = _data.Weekly?.ResetDetectedAtUtc;
-        TertiaryMeter.ResetDetectedAtUtc = _data.Tertiary?.ResetDetectedAtUtc;
 
         // Session usage
         if (_data.Session != null)
@@ -170,6 +168,8 @@ public sealed partial class ProviderDetailPage : Page
             SessionPercentText.Text = $"{_data.Session.PercentText} used";
             SessionResetText.Text = _data.Session.ResetText;
             ShowEarlyReset(SessionEarlyChip, SessionEarlyDetail, earlyResets, "session", _data.Session.Percent);
+            SessionMeter.ResetFromPercent = _data.Session.ResetFromUsedPercent;
+            SessionMeter.ResetDetectedAtUtc = _data.Session.ResetDetectedAtUtc;
         }
         else
         {
@@ -186,6 +186,8 @@ public sealed partial class ProviderDetailPage : Page
             WeeklyPercentText.Text = $"{_data.Weekly.PercentText} used";
             WeeklyResetText.Text = _data.Weekly.ResetText;
             ShowEarlyReset(WeeklyEarlyChip, WeeklyEarlyDetail, earlyResets, "weekly", _data.Weekly.Percent);
+            WeeklyMeter.ResetFromPercent = _data.Weekly.ResetFromUsedPercent;
+            WeeklyMeter.ResetDetectedAtUtc = _data.Weekly.ResetDetectedAtUtc;
         }
         else
         {
@@ -203,6 +205,8 @@ public sealed partial class ProviderDetailPage : Page
             TertiaryPercentText.Text = $"{_data.Tertiary.PercentText} used";
             TertiaryResetText.Text = _data.Tertiary.ResetText;
             ShowEarlyReset(TertiaryEarlyChip, TertiaryEarlyDetail, earlyResets, "tertiary", _data.Tertiary.Percent);
+            TertiaryMeter.ResetFromPercent = _data.Tertiary.ResetFromUsedPercent;
+            TertiaryMeter.ResetDetectedAtUtc = _data.Tertiary.ResetDetectedAtUtc;
         }
         else
         {
@@ -220,6 +224,7 @@ public sealed partial class ProviderDetailPage : Page
             PercentText = $"{x.Window.PercentText} used",
             ResetText = x.Window.ResetText,
             ResetDetectedAtUtc = x.Window.ResetDetectedAtUtc,
+            ResetFromUsedPercent = x.Window.ResetFromUsedPercent,
             EarlyDetail = EarlyDetailFor(earlyResets, Services.UsageHistoryStore.ExtraWindowKey(x), x.Window.Percent),
             History = Helpers.BurndownBuilder.Build(_history?.Get(_data.Provider, Services.UsageHistoryStore.ExtraWindowKey(x)) ?? [],
                 x.Window, DateTime.UtcNow)

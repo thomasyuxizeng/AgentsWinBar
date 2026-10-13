@@ -11,9 +11,10 @@ internal static class BarResetAnimationPolicy
     /// <summary>How far into the future a timestamp may be before it is treated as clock skew and ignored.</summary>
     public static readonly TimeSpan MaxFutureSkew = TimeSpan.FromSeconds(2);
 
-    public static bool ShouldPlay(DateTime? newValue, DateTime? oldValue, DateTime nowUtc, bool animationsEnabled, bool isShown)
+    /// <param name="playbackEnabled">The user's global reset-animation setting (see BarResetAnimation.PlaybackEnabled); false never plays.</param>
+    public static bool ShouldPlay(DateTime? newValue, DateTime? oldValue, DateTime nowUtc, bool animationsEnabled, bool isShown, bool playbackEnabled = true)
     {
-        if (!animationsEnabled || !isShown) return false;
+        if (!playbackEnabled || !animationsEnabled || !isShown) return false;
         if (newValue is not { } value || value == oldValue) return false;
 
         var age = nowUtc - value.ToUniversalTime();

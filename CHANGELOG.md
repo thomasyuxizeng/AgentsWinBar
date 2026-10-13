@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - Usage refreshes two seconds after the next window reset, so cleared limits appear sooner.
 - Bars play a green animation when a usage window resets: a ring draws around the bar, the old fill turns green as the ring fades, then the green collapses to the left and hands over to a glow that sweeps across.
+- Reset animation setting (Always on, Always off, Off in battery saver; default off in battery saver).
 
 ## [1.3.0] - 2026-10-11
 

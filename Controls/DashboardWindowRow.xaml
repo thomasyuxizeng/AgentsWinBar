@@ -39,12 +39,13 @@
             <TextBlock HorizontalAlignment="Right" FontSize="14" FontWeight="SemiBold"
                        Text="{x:Bind views:DashboardFormat.Used(Data.UsedPercent), Mode=OneWay}"/>
         </Grid>
-        <!-- Bind ResetDetectedAtUtc from the window model here once DashboardWindow.ResetDetectedAtUtc exists -->
         <controls:UsageMeter x:Name="Meter" Height="10"
             Percent="{x:Bind Data.UsedPercent, Mode=OneWay}"
             TimePercent="{x:Bind views:DashboardFormat.Time(Data.ElapsedPercent), Mode=OneWay}"
             Accent="{x:Bind Data.Accent, Mode=OneWay}"
-            PaceText="{x:Bind Data.PaceSummary, Mode=OneWay}"/>
+            PaceText="{x:Bind Data.PaceSummary, Mode=OneWay}"
+            ResetFromPercent="{x:Bind Data.ResetFromUsedPercent, Mode=OneWay}"
+            ResetDetectedAtUtc="{x:Bind Data.ResetDetectedAtUtc, Mode=OneWay}"/>
         <Grid ColumnSpacing="12">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*"/>

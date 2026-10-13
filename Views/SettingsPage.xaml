@@ -60,6 +60,36 @@
                     </ComboBox>
                 </Grid>
 
+                <!-- Reset animation Card -->
+                <Grid
+                    Padding="16,12"
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                    BorderThickness="1"
+                    CornerRadius="8">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+
+                    <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,16,0">
+                        <TextBlock Text="Reset animation" Style="{StaticResource BodyTextBlockStyle}"/>
+                        <TextBlock
+                            x:Name="ResetAnimationDescriptionText"
+                            Style="{StaticResource CaptionTextBlockStyle}"
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                            TextWrapping="Wrap"/>
+                    </StackPanel>
+
+                    <ComboBox
+                        Grid.Column="1"
+                        x:Name="ResetAnimationComboBox" AutomationProperties.Name="Reset animation"
+                        Width="150"
+                        VerticalAlignment="Center"
+                        DisplayMemberPath="DisplayName"
+                        SelectedValuePath="Mode"/>
+                </Grid>
+
                 <!-- Providers Section -->
                 <TextBlock
                     Text="Providers"

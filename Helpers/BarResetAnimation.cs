@@ -49,6 +49,18 @@ internal sealed class BarResetAnimation : IDisposable
         ElementCompositionPreview.SetIsTranslationEnabled(_glow, true);
     }
 
+    private static volatile bool s_playbackEnabled = true;
+
+    /// <summary>
+    /// The user's reset-animation setting (MainViewModel.ShouldPlayResetAnimation), kept in sync by the app. While false
+    /// no bar ever creates a ring or overlay. Thread-safe; defaults to true.
+    /// </summary>
+    public static bool PlaybackEnabled
+    {
+        get => s_playbackEnabled;
+        set => s_playbackEnabled = value;
+    }
+
     /// <summary>False when the user turned Windows animations off (reduced motion).</summary>
     public static bool AnimationsEnabled
     {

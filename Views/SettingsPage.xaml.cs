@@ -49,6 +49,11 @@ public sealed partial class SettingsPage : Page
         // Set theme
         ThemeComboBox.SelectedIndex = ViewModel.SelectedThemeIndex;
 
+        // Set reset animation
+        ResetAnimationComboBox.ItemsSource = ViewModel.ResetAnimationOptions;
+        ResetAnimationComboBox.SelectedValue = ViewModel.SelectedResetAnimationMode;
+        ResetAnimationDescriptionText.Text = ViewModel.ResetAnimationDescription;
+
         // Set refresh interval
         foreach (ComboBoxItem item in RefreshIntervalComboBox.Items)
         {
@@ -95,6 +100,10 @@ public sealed partial class SettingsPage : Page
 
             // Update ViewModel from UI
             ViewModel.SelectedThemeIndex = ThemeComboBox.SelectedIndex;
+            if (ResetAnimationComboBox.SelectedValue is Models.ResetAnimationMode resetMode)
+            {
+                ViewModel.SelectedResetAnimationMode = resetMode;
+            }
 
             if (RefreshIntervalComboBox.SelectedItem is ComboBoxItem item && item.Tag is string tag && int.TryParse(tag, out var seconds))
             {

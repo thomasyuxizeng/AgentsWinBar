@@ -87,4 +87,22 @@ public class BarResetAnimationPolicyTests
         var local = Now.AddSeconds(-2).ToLocalTime();
         BarResetAnimationPolicy.ShouldPlay(local, null, Now, true, true).Should().BeTrue();
     }
+
+    [TestMethod]
+    public void ShouldPlay_PlaybackDisabled_ReturnsFalse()
+    {
+        BarResetAnimationPolicy.ShouldPlay(Now.AddSeconds(-1), null, Now, true, true, playbackEnabled: false).Should().BeFalse();
+    }
+
+    [TestMethod]
+    public void ShouldPlay_PlaybackEnabled_ReturnsTrue()
+    {
+        BarResetAnimationPolicy.ShouldPlay(Now.AddSeconds(-1), null, Now, true, true, playbackEnabled: true).Should().BeTrue();
+    }
+
+    [TestMethod]
+    public void ShouldPlay_PlaybackDefaultsToEnabled()
+    {
+        BarResetAnimationPolicy.ShouldPlay(Now.AddSeconds(-1), null, Now, true, true).Should().BeTrue();
+    }
 }

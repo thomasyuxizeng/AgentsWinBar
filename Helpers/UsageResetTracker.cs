@@ -7,7 +7,7 @@ namespace CodexBarWin.Helpers;
 public sealed class UsageResetTracker
 {
     private readonly Dictionary<string, EarlyResetWindowReading> _baselines = new(StringComparer.OrdinalIgnoreCase);
-    private readonly Dictionary<string, DateTime> _detected = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, (DateTime At, double FromPercent)> _detected = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, DateTime> _lastObservation = new(StringComparer.OrdinalIgnoreCase);
 
     public void Clear()
@@ -62,7 +62,7 @@ public sealed class UsageResetTracker
                     continue;
                 _baselines.TryGetValue(key, out var baseline);
                 if (baseline != null && at <= DashboardValues.Utc(baseline.ReadingAtUtc)) continue;
-                if (Detect(baseline, reading, now)) _detected[key] = now;
+                if (Detect(baseline, reading, now)) _detected[key] = (now, baseline!.UsedPercent);
                 _baselines[key] = reading;
             }
         }
@@ -70,7 +70,8 @@ public sealed class UsageResetTracker
         // Each bar owns a provider + window-kind key; never propagate a provider aggregate to siblings.
         UsageWindow? Mark(string windowKey, UsageWindow? window) => window == null ? null : window with
         {
-            ResetDetectedAtUtc = _detected.TryGetValue(provider + "|" + windowKey, out var at) ? at : null
+            ResetDetectedAtUtc = _detected.TryGetValue(provider + "|" + windowKey, out var hit) ? hit.At : null,
+            ResetFromUsedPercent = _detected.TryGetValue(provider + "|" + windowKey, out var from) ? from.FromPercent : null
         };
         return data with
         {

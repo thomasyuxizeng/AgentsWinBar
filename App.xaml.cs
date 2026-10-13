@@ -157,6 +157,14 @@ public partial class App : Application
 
             // Start the main view model
             var mainViewModel = Services.GetRequiredService<MainViewModel>();
+
+            // Global reset-animation gate: initial value, then every change (raised on the UI thread by the view model)
+            Helpers.BarResetAnimation.PlaybackEnabled = mainViewModel.ShouldPlayResetAnimation;
+            mainViewModel.PropertyChanged += (_, e) =>
+            {
+                if (e.PropertyName == nameof(MainViewModel.ShouldPlayResetAnimation))
+                    Helpers.BarResetAnimation.PlaybackEnabled = mainViewModel.ShouldPlayResetAnimation;
+            };
             mainViewModel.StartAsync().SafeFireAndForget(
                 onError: ex => logger.LogError(ex, "MainViewModel.StartAsync failed"));
 

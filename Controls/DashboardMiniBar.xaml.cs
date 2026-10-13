@@ -16,7 +16,7 @@ public sealed partial class DashboardMiniBar : UserControl
         set => SetValue(DataProperty, value);
     }
 
-    /// <summary>Forwarded to the inner <see cref="UsageMeter"/>, which plays the reset animation. TODO: bind ResetDetectedAtUtc from the window model once it lands.</summary>
+    /// <summary>Forwarded to the inner <see cref="UsageMeter"/>, which plays the reset animation.</summary>
     public static readonly DependencyProperty ResetDetectedAtUtcProperty = DependencyProperty.Register(nameof(ResetDetectedAtUtc),
         typeof(DateTime?), typeof(DashboardMiniBar), new PropertyMetadata(null, OnResetDetectedAtUtcChanged));
 
@@ -25,6 +25,18 @@ public sealed partial class DashboardMiniBar : UserControl
         get => (DateTime?)GetValue(ResetDetectedAtUtcProperty);
         set => SetValue(ResetDetectedAtUtcProperty, value);
     }
+
+    public static readonly DependencyProperty ResetFromPercentProperty = DependencyProperty.Register(nameof(ResetFromPercent),
+        typeof(double?), typeof(DashboardMiniBar), new PropertyMetadata(null, OnResetFromPercentChanged));
+
+    public double? ResetFromPercent
+    {
+        get => (double?)GetValue(ResetFromPercentProperty);
+        set => SetValue(ResetFromPercentProperty, value);
+    }
+
+    private static void OnResetFromPercentChanged(DependencyObject d, DependencyPropertyChangedEventArgs e) =>
+        ((DashboardMiniBar)d).Meter.ResetFromPercent = (double?)e.NewValue;
 
     private static void OnResetDetectedAtUtcChanged(DependencyObject d, DependencyPropertyChangedEventArgs e) =>
         ((DashboardMiniBar)d).Meter.ResetDetectedAtUtc = (DateTime?)e.NewValue;

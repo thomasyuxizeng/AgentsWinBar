@@ -64,7 +64,9 @@
                             Percent="{x:Bind SessionPercent}"
                             TimePercent="{x:Bind SessionTimePercent}"
                             PaceText="{x:Bind SessionPace}"
-                            Accent="{x:Bind SessionAccent}"/>
+                            Accent="{x:Bind SessionAccent}"
+                            ResetFromPercent="{x:Bind SessionWindow.ResetFromUsedPercent}"
+                            ResetDetectedAtUtc="{x:Bind SessionWindow.ResetDetectedAtUtc}"/>
                         <TextBlock
                             Grid.Column="2"
                             Text="{x:Bind SessionText}"
@@ -80,7 +82,9 @@
                             Percent="{x:Bind WeeklyPercent}"
                             TimePercent="{x:Bind WeeklyTimePercent}"
                             PaceText="{x:Bind WeeklyPace}"
-                            Accent="{x:Bind WeeklyAccent}"/>
+                            Accent="{x:Bind WeeklyAccent}"
+                            ResetFromPercent="{x:Bind WeeklyWindow.ResetFromUsedPercent}"
+                            ResetDetectedAtUtc="{x:Bind WeeklyWindow.ResetDetectedAtUtc}"/>
                         <TextBlock
                             Grid.Column="4"
                             Text="{x:Bind WeeklyText}"

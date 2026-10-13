@@ -86,7 +86,7 @@ public sealed partial class UsageMeter : UserControl
     /// <summary>
     /// When a reset of this bar's usage window was detected (UTC). A new value that is recent (see
     /// <see cref="BarResetAnimationPolicy"/>) plays the reset animation once; old, unchanged or null values and
-    /// unloaded/hidden bars do nothing. TODO: bind ResetDetectedAtUtc from the window model once it lands.
+    /// unloaded/hidden bars do nothing.
     /// </summary>
     public static readonly DependencyProperty ResetDetectedAtUtcProperty =
         DependencyProperty.Register(
@@ -101,6 +101,23 @@ public sealed partial class UsageMeter : UserControl
         set => SetValue(ResetDetectedAtUtcProperty, value);
     }
 
+    /// <summary>
+    /// The used percent just before the reset in <see cref="ResetDetectedAtUtc"/>. Set it BEFORE the timestamp: it is the
+    /// source of the old fill the animation turns green. Null falls back to this meter's own memory of its previous fill.
+    /// </summary>
+    public static readonly DependencyProperty ResetFromPercentProperty =
+        DependencyProperty.Register(
+            nameof(ResetFromPercent),
+            typeof(double?),
+            typeof(UsageMeter),
+            new PropertyMetadata(null));
+
+    public double? ResetFromPercent
+    {
+        get => (double?)GetValue(ResetFromPercentProperty);
+        set => SetValue(ResetFromPercentProperty, value);
+    }
+
     private BarResetAnimation? _resetAnimation;
     private double _fillWidth;
     private double _previousFillWidth;
@@ -111,14 +128,30 @@ public sealed partial class UsageMeter : UserControl
         InitializeComponent();
         SizeChanged += OnSizeChanged;
         Unloaded += (_, _) => _resetAnimation?.Stop();
+        Loaded += (_, _) => PlayPendingReset();
     }
+
+    // The last timestamp this bar played, so a persistent bar that is re-loaded (page navigation) never replays it
+    private DateTime? _playedResetAt;
 
     private static void OnResetDetectedAtUtcChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
     {
         if (d is not UsageMeter meter) return;
-        var shown = meter.IsLoaded && meter.Visibility == Visibility.Visible && meter.ActualWidth > 0;
-        if (!BarResetAnimationPolicy.ShouldPlay((DateTime?)e.NewValue, (DateTime?)e.OldValue, DateTime.UtcNow, BarResetAnimation.AnimationsEnabled, shown)) return;
-        meter.PlayResetAnimation();
+        meter.TryPlayReset((DateTime?)e.NewValue, (DateTime?)e.OldValue);
+    }
+
+    // Bars in rebuilt row templates get their timestamp before they are loaded, so a fresh one waits for Loaded / first size
+    private void PlayPendingReset()
+    {
+        if (ResetDetectedAtUtc is { } value && value != _playedResetAt) TryPlayReset(value, null);
+    }
+
+    private void TryPlayReset(DateTime? newValue, DateTime? oldValue)
+    {
+        var shown = IsLoaded && Visibility == Visibility.Visible && ActualWidth > 0;
+        if (!BarResetAnimationPolicy.ShouldPlay(newValue, oldValue, DateTime.UtcNow, BarResetAnimation.AnimationsEnabled, shown, BarResetAnimation.PlaybackEnabled)) return;
+        _playedResetAt = newValue;
+        PlayResetAnimation();
     }
 
     private void PlayResetAnimation()
@@ -127,6 +160,12 @@ public sealed partial class UsageMeter : UserControl
         {
             _resetAnimation ??= new BarResetAnimation(this, ResetLayer, ResetGhost, ResetGhostGreen, ResetGlow);
             // The usage may already have dropped to empty before this timestamp arrived, so fall back to the previous fill
+            if (BarResetGhost.ColourPercent(ResetFromPercent) is { } fromPercent && BarResetGhost.Width(ActualWidth, ResetFromPercent) is { } fromWidth)
+            {
+                _resetAnimation.Play(BarBrushFor(fromPercent), fromWidth);
+                return;
+            }
+
             var useCurrent = _fillWidth >= 1;
             _resetAnimation.Play(useCurrent ? UsageBar.Fill : _previousFillBrush, useCurrent ? _fillWidth : _previousFillWidth);
         }
@@ -146,7 +185,11 @@ public sealed partial class UsageMeter : UserControl
 
     private void OnSizeChanged(object sender, SizeChangedEventArgs e)
     {
-        try { UpdateBar(); }
+        try
+        {
+            UpdateBar();
+            PlayPendingReset();
+        }
         catch (Exception ex) { App.Services.GetRequiredService<ILogger<UsageMeter>>().LogError(ex, "Usage meter size update failed"); }
     }
 
@@ -160,6 +203,13 @@ public sealed partial class UsageMeter : UserControl
         if (_tooltip == text) return;
         _tooltip = text;
         ToolTipService.SetToolTip(this, text);
+    }
+
+    private Brush BarBrushFor(double honestPercent)
+    {
+        var key = (Accent, UsageThresholds.Level(honestPercent));
+        if (!_barBrushes.TryGetValue(key, out var barBrush)) _barBrushes[key] = barBrush = GetBarBrush(honestPercent, Accent);
+        return barBrush;
     }
 
     private void UpdateBar()
@@ -178,8 +228,7 @@ public sealed partial class UsageMeter : UserControl
         }
         _fillWidth = newFill;
         UsageBar.Width = newFill;
-        var key = (Accent, UsageThresholds.Level(honestPercent));
-        if (!_barBrushes.TryGetValue(key, out var barBrush)) _barBrushes[key] = barBrush = GetBarBrush(honestPercent, Accent);
+        var barBrush = BarBrushFor(honestPercent);
         if (!ReferenceEquals(UsageBar.Fill, barBrush)) UsageBar.Fill = barBrush;
 
         if (!double.IsFinite(TimePercent) || TimePercent < 0)

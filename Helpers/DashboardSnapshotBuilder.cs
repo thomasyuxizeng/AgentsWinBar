@@ -88,6 +88,7 @@ public static class DashboardSnapshotBuilder
                         ? [] : history.Where(s => s.WindowKey == historyKey), window, now),
                     EarlyResetAtUtc = windowReset != null ? Utc(windowReset.DetectedAtUtc) : null,
                     ResetDetectedAtUtc = Utc(window.ResetDetectedAtUtc),
+                    ResetFromUsedPercent = window.ResetFromUsedPercent,
                     EarlyResetFromPercent = windowReset?.PreviousPercent,
                     EarlyResetToPercent = windowReset?.CurrentPercent
                 });

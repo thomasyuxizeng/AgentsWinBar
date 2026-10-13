@@ -38,6 +38,7 @@
     <Compile Include="..\Helpers\BarResetRingGeometry.cs" Link="Linked\BarResetRingGeometry.cs" />
     <Compile Include="..\Helpers\BarResetColorFade.cs" Link="Linked\BarResetColorFade.cs" />
     <Compile Include="..\Helpers\BarResetAnimationPolicy.cs" Link="Linked\BarResetAnimationPolicy.cs" />
+    <Compile Include="..\Helpers\BarResetGhost.cs" Link="Linked\BarResetGhost.cs" />
     <Compile Include="..\Helpers\UsageFingerprint.cs" Link="Linked\UsageFingerprint.cs" />
     <Compile Include="..\Helpers\WorkingSetTrimmer.cs" Link="Linked\WorkingSetTrimmer.cs" />
     <Compile Include="..\Models\DashboardSnapshot.cs" Link="Linked\DashboardSnapshot.cs" />

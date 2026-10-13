@@ -308,7 +308,9 @@
                                     Accent="{x:Bind Accent}"
                                     Percent="{x:Bind Percent}"
                                     TimePercent="{x:Bind TimePercent}"
-                                    PaceText="{x:Bind PaceText}"/>
+                                    PaceText="{x:Bind PaceText}"
+                                    ResetFromPercent="{x:Bind ResetFromUsedPercent}"
+                                    ResetDetectedAtUtc="{x:Bind ResetDetectedAtUtc}"/>
 
                                 <Grid Grid.Row="2" Margin="0,6,0,0">
                                     <Grid.ColumnDefinitions>

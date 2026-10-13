@@ -132,6 +132,10 @@ public record UsageWindow
     [System.Text.Json.Serialization.JsonIgnore]
     public DateTime? ResetDetectedAtUtc { get; init; }
 
+    /// <summary>Used percent just before the reset in <see cref="ResetDetectedAtUtc"/>; null whenever that is null. Session-only.</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public double? ResetFromUsedPercent { get; init; }
+
     /// <summary>
     /// How far through the window we are (0-100), or null if the window length or reset time is unknown.
     /// Compare with <see cref="Percent"/> to see whether usage is running ahead of or behind time.

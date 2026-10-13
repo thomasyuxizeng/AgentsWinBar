@@ -21,11 +21,12 @@
         </Grid.ColumnDefinitions>
         <TextBlock Text="{x:Bind Data.Title, Mode=OneWay}" FontSize="12" VerticalAlignment="Center"
                    TextTrimming="CharacterEllipsis"/>
-        <!-- Bind ResetDetectedAtUtc from the window model here once DashboardWindow.ResetDetectedAtUtc exists -->
         <controls:UsageMeter x:Name="Meter" Grid.Column="1" Height="8" VerticalAlignment="Center"
             Percent="{x:Bind Data.UsedPercent, Mode=OneWay}"
             TimePercent="{x:Bind views:DashboardFormat.Time(Data.ElapsedPercent), Mode=OneWay}"
-            Accent="{x:Bind Data.Accent, Mode=OneWay}"/>
+            Accent="{x:Bind Data.Accent, Mode=OneWay}"
+            ResetFromPercent="{x:Bind Data.ResetFromUsedPercent, Mode=OneWay}"
+            ResetDetectedAtUtc="{x:Bind Data.ResetDetectedAtUtc, Mode=OneWay}"/>
         <TextBlock Grid.Column="2" FontSize="12" FontWeight="SemiBold" TextAlignment="Right" VerticalAlignment="Center"
                    Text="{x:Bind views:DashboardFormat.Percent(Data.UsedPercent), Mode=OneWay}"/>
         <TextBlock Grid.Column="3" FontSize="11" TextAlignment="Right" VerticalAlignment="Center"

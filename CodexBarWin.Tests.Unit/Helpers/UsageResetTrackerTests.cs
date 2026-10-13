@@ -142,6 +142,83 @@ public class UsageResetTrackerTests
     }
 
     [TestMethod]
+    public void Annotate_NaturalReset_SetsPreviousPercent()
+    {
+        var tracker = new UsageResetTracker();
+        tracker.Annotate(Data(90, Now.AddMinutes(-5), Now.AddSeconds(-5)), Now.AddMinutes(-5));
+        tracker.Annotate(Data(2, Now, Now.AddHours(5)), Now).Session!.ResetFromUsedPercent.Should().Be(90);
+    }
+
+    [TestMethod]
+    public void Annotate_EarlyReset_SetsPreviousPercent()
+    {
+        var tracker = new UsageResetTracker();
+        tracker.Annotate(Data(90, Now.AddMinutes(-5), Now.AddHours(2)), Now.AddMinutes(-5));
+        tracker.Annotate(Data(0, Now, Now.AddHours(4)), Now).Session!.ResetFromUsedPercent.Should().Be(90);
+    }
+
+    [TestMethod]
+    public void Annotate_NoReset_LeavesPreviousPercentNull()
+    {
+        var tracker = new UsageResetTracker();
+        tracker.Annotate(Data(10, Now.AddMinutes(-5), Now.AddHours(2)), Now.AddMinutes(-5));
+        var window = tracker.Annotate(Data(12, Now, Now.AddHours(2)), Now).Session!;
+        window.ResetDetectedAtUtc.Should().BeNull();
+        window.ResetFromUsedPercent.Should().BeNull();
+    }
+
+    [TestMethod]
+    public void Annotate_IncomingPreviousPercent_IsNotTrusted()
+    {
+        var incoming = Data(0, Now, Now.AddHours(5));
+        incoming = incoming with { Session = incoming.Session! with { ResetFromUsedPercent = 50 } };
+        new UsageResetTracker().Annotate(incoming, Now).Session!.ResetFromUsedPercent.Should().BeNull();
+    }
+
+    [TestMethod]
+    public void Annotate_SecondReset_ReplacesPreviousPercent()
+    {
+        var tracker = new UsageResetTracker();
+        var next = Now.AddHours(6);
+        tracker.Annotate(Data(90, Now.AddMinutes(-5), Now.AddSeconds(-5)), Now.AddMinutes(-5));
+        tracker.Annotate(Data(2, Now, Now.AddHours(5)), Now).Session!.ResetFromUsedPercent.Should().Be(90);
+        tracker.Annotate(Data(40, next.AddMinutes(-5), next.AddSeconds(-5)), next.AddMinutes(-5));
+        tracker.Annotate(Data(1, next, next.AddHours(5)), next).Session!.ResetFromUsedPercent.Should().Be(40);
+    }
+
+    [TestMethod]
+    public void Annotate_SessionOnlyReset_GivesWeeklyNoPreviousPercent()
+    {
+        var tracker = new UsageResetTracker();
+        UsageData With(UsageData d, double weekly) => d with { Weekly = new() { ReportedPercent = weekly, ResetAt = Now.AddDays(3), WindowMinutes = 10080 } };
+        tracker.Annotate(With(Data(90, Now.AddMinutes(-5), Now.AddSeconds(-5)), 50), Now.AddMinutes(-5));
+        var current = tracker.Annotate(With(Data(2, Now, Now.AddHours(5)), 51), Now);
+        current.Session!.ResetFromUsedPercent.Should().Be(90);
+        current.Weekly!.ResetFromUsedPercent.Should().BeNull();
+        WidgetBarSelector.Pick(current, Now).Select(b => b.ResetFromUsedPercent).Should().Equal(90, null);
+    }
+
+    [TestMethod]
+    public void Annotate_AllWindowKinds_ProjectsPreviousPercentPerWindow()
+    {
+        UsageData All(UsageData data) => data with { Weekly = data.Session, Tertiary = data.Session,
+            ExtraWindows = [new() { Key = "fable", Title = "Fable", Window = data.Session! }] };
+        var tracker = new UsageResetTracker();
+        tracker.Annotate(All(Data(90, Now.AddMinutes(-5), Now)), Now.AddMinutes(-5));
+        var current = tracker.Annotate(All(Data(0, Now, Now.AddHours(5))), Now);
+        DashboardSnapshotBuilder.Build(new() { Providers = [current], NowUtc = Now }).Providers.Single().Windows
+            .Should().HaveCount(4).And.AllSatisfy(w => w.ResetFromUsedPercent.Should().Be(90));
+        current.ExtraWindows.Single().Window.ResetFromUsedPercent.Should().Be(90);
+        WidgetBarSelector.Pick(current, Now).Should().AllSatisfy(w => w.ResetFromUsedPercent.Should().Be(90));
+    }
+
+    [TestMethod]
+    public void Serialize_PreviousPercent_IsExcludedFromCache()
+    {
+        JsonSerializer.Serialize(new UsageWindow { ResetFromUsedPercent = 50 }).Should().NotContain(nameof(UsageWindow.ResetFromUsedPercent));
+    }
+
+    [TestMethod]
     public void Annotate_FirstReading_DoesNotSignalReset()
     {
         new UsageResetTracker().Annotate(Data(0, Now, Now.AddHours(5)), Now)
