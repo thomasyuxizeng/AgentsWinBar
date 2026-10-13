@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Bars play a green animation when a usage window resets: a ring draws around the bar, the old fill turns green as the ring fades, then the green collapses to the left and hands over to a glow that sweeps across.
+
 ## [1.3.0] - 2026-10-11
 
 ### Added
