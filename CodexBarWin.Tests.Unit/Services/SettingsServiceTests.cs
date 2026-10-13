@@ -14,6 +14,32 @@ namespace CodexBarWin.Tests.Unit.Services;
 [TestClass]
 public class SettingsServiceTests
 {
+    [TestMethod]
+    [DataRow(ResetAnimationMode.WhenNotBatterySaver)]
+    [DataRow(ResetAnimationMode.Always)]
+    [DataRow(ResetAnimationMode.Never)]
+    public async Task SaveAndLoadAsync_ResetAnimationMode_PersistsInSettingsJson(ResetAnimationMode mode)
+    {
+        var service = new TestableSettingsService(_mockLogger.Object, _testDirectory);
+        service.Settings.ResetAnimationMode = mode;
+        await service.SaveAsync();
+        (await File.ReadAllTextAsync(_testSettingsPath)).Should().Contain("resetAnimationMode");
+        var loaded = new TestableSettingsService(_mockLogger.Object, _testDirectory);
+        await loaded.LoadAsync();
+        loaded.Settings.ResetAnimationMode.Should().Be(mode);
+    }
+
+    [TestMethod]
+    [DataRow("{}")]
+    [DataRow("{\"resetAnimationMode\":99}")]
+    public async Task LoadAsync_OldOrInvalidResetAnimationMode_UsesDefault(string json)
+    {
+        await File.WriteAllTextAsync(_testSettingsPath, json);
+        var service = new TestableSettingsService(_mockLogger.Object, _testDirectory);
+        await service.LoadAsync();
+        service.Settings.ResetAnimationMode.Should().Be(ResetAnimationMode.WhenNotBatterySaver);
+    }
+
     private Mock<ILogger<SettingsService>> _mockLogger = null!;
     private string _testDirectory = null!;
     private string _testSettingsPath = null!;

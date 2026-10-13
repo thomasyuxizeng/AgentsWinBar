@@ -19,6 +19,7 @@ public sealed class ExtraWindowRow
     public string PaceText { get; set; } = string.Empty;
     public string PercentText { get; set; } = string.Empty;
     public string ResetText { get; set; } = string.Empty;
+    public DateTime? ResetDetectedAtUtc { get; set; }
     public Helpers.BurndownSeries History { get; set; } = new();
     public string EarlyDetail { get; set; } = string.Empty;
     public Visibility EarlyVisibility => string.IsNullOrEmpty(EarlyDetail) ? Visibility.Collapsed : Visibility.Visible;
@@ -155,6 +156,9 @@ public sealed partial class ProviderDetailPage : Page
         TertiarySectionTitle.Text = _data.TertiaryLabel;
 
         var earlyResets = App.Services.GetService<Services.IEarlyResetStore>()?.GetActive(DateTime.UtcNow) ?? [];
+        SessionMeter.ResetDetectedAtUtc = _data.Session?.ResetDetectedAtUtc;
+        WeeklyMeter.ResetDetectedAtUtc = _data.Weekly?.ResetDetectedAtUtc;
+        TertiaryMeter.ResetDetectedAtUtc = _data.Tertiary?.ResetDetectedAtUtc;
 
         // Session usage
         if (_data.Session != null)
@@ -215,6 +219,7 @@ public sealed partial class ProviderDetailPage : Page
             PaceText = x.Window.PaceSummary,
             PercentText = $"{x.Window.PercentText} used",
             ResetText = x.Window.ResetText,
+            ResetDetectedAtUtc = x.Window.ResetDetectedAtUtc,
             EarlyDetail = EarlyDetailFor(earlyResets, Services.UsageHistoryStore.ExtraWindowKey(x), x.Window.Percent),
             History = Helpers.BurndownBuilder.Build(_history?.Get(_data.Provider, Services.UsageHistoryStore.ExtraWindowKey(x)) ?? [],
                 x.Window, DateTime.UtcNow)

@@ -15,6 +15,9 @@ namespace CodexBarWin.Controls;
 /// </summary>
 public sealed partial class UsageMeter : UserControl
 {
+    /// <summary>Data-only reset signal for code-behind consumers; no animation or rendering behavior.</summary>
+    public DateTime? ResetDetectedAtUtc { get; set; }
+
     // Soft, translucent lavender for the time-passed layer of the main bars: distinct from the blue/amber/red
     // usage colours but blends into the empty track, so it reads as a quiet background hint
     private static readonly Color MainTimeColor = Color.FromArgb(0x58, 0xA9, 0x9D, 0xEE);

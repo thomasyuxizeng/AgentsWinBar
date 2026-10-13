@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Usage refreshes two seconds after the next window reset, so cleared limits appear sooner.
+
 ## [1.3.0] - 2026-10-11
 
 ### Added

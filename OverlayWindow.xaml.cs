@@ -25,6 +25,9 @@ public sealed class OverlayRow
     public string StatusDescription { get; set; } = string.Empty;
     public Microsoft.UI.Xaml.Media.Geometry Icon { get; set; } = null!;
     public double SessionPercent { get; set; }
+    /// <summary>The selected windows, including their session-only ResetDetectedAtUtc signals.</summary>
+    public UsageWindow? SessionWindow { get; set; }
+    public UsageWindow? WeeklyWindow { get; set; }
     public double SessionTimePercent { get; set; } = -1;
     public string SessionText { get; set; } = string.Empty;
     public double WeeklyPercent { get; set; }
@@ -257,6 +260,8 @@ public sealed partial class OverlayWindow : Window
             IncidentVisibility = ProviderStatusPresentation.IsIncident(data.ServiceStatus) ? Visibility.Visible : Visibility.Collapsed,
             StatusDescription = StatusDetailCaption.Tooltip(data.ServiceStatus, DateTime.UtcNow),
             SessionPercent = firstCell.Percent,
+            SessionWindow = first?.Window,
+            WeeklyWindow = second?.Window,
             SessionTimePercent = first?.Window.ElapsedPercent ?? -1,
             SessionText = firstCell.Text,
             WeeklyPercent = secondCell.Percent,

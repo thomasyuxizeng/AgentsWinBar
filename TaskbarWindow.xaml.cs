@@ -27,6 +27,9 @@ public sealed class TaskbarItem
     public Geometry Icon { get; set; } = null!;
     public double SessionPercent { get; set; }
     public double WeeklyPercent { get; set; }
+    /// <summary>The selected windows, including their session-only ResetDetectedAtUtc signals.</summary>
+    public UsageWindow? SessionWindow { get; set; }
+    public UsageWindow? WeeklyWindow { get; set; }
     public double SessionTimePercent { get; set; } = -1;
     public double WeeklyTimePercent { get; set; } = -1;
     public string SessionPace { get; set; } = string.Empty;
@@ -236,6 +239,8 @@ public sealed partial class TaskbarWindow : Window
                 StatusDescription = StatusDetailCaption.Tooltip(data.ServiceStatus, DateTime.UtcNow),
                 SessionPercent = first?.Window.Percent ?? 0,
                 WeeklyPercent = second?.Window.Percent ?? 0,
+                SessionWindow = first?.Window,
+                WeeklyWindow = second?.Window,
                 SessionTimePercent = first?.Window.ElapsedPercent ?? -1,
                 WeeklyTimePercent = second?.Window.ElapsedPercent ?? -1,
                 SessionPace = first?.TooltipText ?? string.Empty,

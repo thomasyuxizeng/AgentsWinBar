@@ -43,6 +43,18 @@ public partial class SettingsViewModel : ObservableObject
     private int _selectedThemeIndex;
 
     [ObservableProperty]
+    private ResetAnimationMode _selectedResetAnimationMode = ResetAnimationMode.WhenNotBatterySaver;
+
+    public IReadOnlyList<ResetAnimationOption> ResetAnimationOptions { get; } =
+    [
+        new(ResetAnimationMode.Always, "Always on"),
+        new(ResetAnimationMode.Never, "Always off"),
+        new(ResetAnimationMode.WhenNotBatterySaver, "Off in battery saver")
+    ];
+
+    public string ResetAnimationDescription => "Always on / Always off / Off in battery saver";
+
+    [ObservableProperty]
     private bool _developerModeEnabled;
 
     public event EventHandler? SaveRequested;
@@ -83,6 +95,7 @@ public partial class SettingsViewModel : ObservableObject
         AlertsEnabled = settings.AlertsEnabled;
         ShowCostTotals = settings.ShowCostTotals;
         SelectedThemeIndex = (int)settings.Theme;
+        SelectedResetAnimationMode = settings.ResetAnimationMode;
         DeveloperModeEnabled = settings.DeveloperModeEnabled;
     }
 
@@ -123,7 +136,7 @@ public partial class SettingsViewModel : ObservableObject
         var previousProviders = settings.Providers.Select(p => p with { }).ToList();
         var previous = (settings.RefreshIntervalSeconds, settings.StartWithWindows, settings.StartMinimized,
             settings.AlwaysOnOverlayEnabled, settings.TaskbarDisplayEnabled, settings.AlertsEnabled,
-            settings.ShowCostTotals, settings.Theme, settings.DeveloperModeEnabled);
+            settings.ShowCostTotals, settings.Theme, settings.DeveloperModeEnabled, settings.ResetAnimationMode);
 
         // Update providers (including order)
         foreach (var provider in Providers)
@@ -144,6 +157,8 @@ public partial class SettingsViewModel : ObservableObject
         settings.AlertsEnabled = AlertsEnabled;
         settings.ShowCostTotals = ShowCostTotals;
         settings.Theme = (AppTheme)SelectedThemeIndex;
+        settings.ResetAnimationMode = Enum.IsDefined(SelectedResetAnimationMode)
+            ? SelectedResetAnimationMode : ResetAnimationMode.WhenNotBatterySaver;
         settings.DeveloperModeEnabled = DeveloperModeEnabled;
 
         try { await _settingsService.SaveAsync(); }
@@ -153,7 +168,7 @@ public partial class SettingsViewModel : ObservableObject
             settings.Providers = previousProviders;
             (settings.RefreshIntervalSeconds, settings.StartWithWindows, settings.StartMinimized,
                 settings.AlwaysOnOverlayEnabled, settings.TaskbarDisplayEnabled, settings.AlertsEnabled,
-                settings.ShowCostTotals, settings.Theme, settings.DeveloperModeEnabled) = previous;
+                settings.ShowCostTotals, settings.Theme, settings.DeveloperModeEnabled, settings.ResetAnimationMode) = previous;
             throw;
         }
 
@@ -190,6 +205,8 @@ public partial class SettingsViewModel : ObservableObject
         }
     }
 }
+
+public sealed record ResetAnimationOption(ResetAnimationMode Mode, string DisplayName);
 
 /// <summary>
 /// ViewModel for a provider configuration item.

@@ -260,6 +260,8 @@ public partial class App : Application
         services.AddSingleton<ISetupChecker, SetupChecker>();
         services.AddSingleton<ISetupMemoService, SetupMemoService>();
         services.AddSingleton<ISessionStateSource, SessionStateSource>();
+        services.AddSingleton<IBatterySaverStatusSource, WindowsBatterySaverStatusSource>();
+        services.AddSingleton<IBatterySaverMonitor, BatterySaverMonitor>();
         services.AddSingleton<ISampleDataLoader, SampleDataLoader>();
         services.AddSingleton<UsageAlertEvaluator>();
         services.AddSingleton<UsageHistoryStore>();

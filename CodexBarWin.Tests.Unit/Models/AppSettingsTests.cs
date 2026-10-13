@@ -7,6 +7,39 @@ namespace CodexBarWin.Tests.Unit.Models;
 public class AppSettingsTests
 {
     [TestMethod]
+    [DataRow(ResetAnimationMode.WhenNotBatterySaver)]
+    [DataRow(ResetAnimationMode.Always)]
+    [DataRow(ResetAnimationMode.Never)]
+    public void Normalize_ResetAnimationMode_ValidModesRoundTrip(ResetAnimationMode mode)
+    {
+        var settings = new AppSettings { ResetAnimationMode = mode };
+        settings.Normalize();
+        var json = System.Text.Json.JsonSerializer.Serialize(settings, AppJsonSerializerContext.Default.AppSettings);
+        System.Text.Json.JsonSerializer.Deserialize(json, AppJsonSerializerContext.Default.AppSettings)!
+            .ResetAnimationMode.Should().Be(mode);
+        json.Should().Contain("resetAnimationMode");
+    }
+
+    [TestMethod]
+    [DataRow(-1)]
+    [DataRow(99)]
+    public void Normalize_UndefinedResetAnimationMode_FallsBackToDefault(int value)
+    {
+        var settings = new AppSettings { ResetAnimationMode = (ResetAnimationMode)value };
+        settings.Normalize();
+        settings.ResetAnimationMode.Should().Be(ResetAnimationMode.WhenNotBatterySaver);
+    }
+
+    [TestMethod]
+    public void Deserialize_OldSettingsWithoutResetAnimationMode_UsesDefault()
+    {
+        new AppSettings().ResetAnimationMode.Should().Be(ResetAnimationMode.WhenNotBatterySaver);
+        AppSettings.GetDefaults().ResetAnimationMode.Should().Be(ResetAnimationMode.WhenNotBatterySaver);
+        System.Text.Json.JsonSerializer.Deserialize("{}", AppJsonSerializerContext.Default.AppSettings)!
+            .ResetAnimationMode.Should().Be(ResetAnimationMode.WhenNotBatterySaver);
+    }
+
+    [TestMethod]
     [DataRow(-1, 30)]
     [DataRow(1441, 30)]
     [DataRow(0, 0)]

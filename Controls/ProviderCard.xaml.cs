@@ -18,6 +18,7 @@ public sealed class CardExtraRow
     public string PaceText { get; set; } = string.Empty;
     public string PercentText { get; set; } = string.Empty;
     public string ResetText { get; set; } = string.Empty;
+    public DateTime? ResetDetectedAtUtc { get; set; }
 
     /// <summary>Shared label column width of the card, so every bar ends at the same x.</summary>
     public double LabelWidth { get; set; }
@@ -83,6 +84,8 @@ public sealed partial class ProviderCard : UserControl
             ? Helpers.CostFormatter.Summary(Data.Cost) + "\nList-price estimates, not billing." : null);
 
         // Check state
+        SessionMeter.ResetDetectedAtUtc = Data.Session?.ResetDetectedAtUtc;
+        WeeklyMeter.ResetDetectedAtUtc = Data.Weekly?.ResetDetectedAtUtc;
         var isLoading = Data.IsLoading;
         var hasError = Data.HasError && Data.Session == null;
 
@@ -121,7 +124,8 @@ public sealed partial class ProviderCard : UserControl
             TimePercent = x.Window.ElapsedPercent ?? -1,
             PaceText = x.Window.PaceSummary,
             PercentText = x.Window.PercentText,
-            ResetText = x.Window.ResetText
+            ResetText = x.Window.ResetText,
+            ResetDetectedAtUtc = x.Window.ResetDetectedAtUtc
         }).ToList();
         ExtraList.Visibility = extras.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
 

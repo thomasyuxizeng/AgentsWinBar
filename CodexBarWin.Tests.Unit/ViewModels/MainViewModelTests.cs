@@ -2,6 +2,7 @@ using System.Runtime.CompilerServices;
 using System.Reflection;
 using System.Text.Json;
 using AwesomeAssertions;
+using CodexBarWin.Helpers;
 using CodexBarWin.Models;
 using CodexBarWin.Services;
 using CodexBarWin.ViewModels;
@@ -22,6 +23,8 @@ public class MainViewModelTests
     private readonly Mock<ICacheService> _cache = new();
     private readonly Mock<ISetupMemoService> _memo = new();
     private readonly Mock<IEarlyResetStore> _earlyResets = new();
+    private readonly Mock<IBatterySaverMonitor> _batterySaver = new();
+    private readonly Mock<Microsoft.Extensions.Logging.ILogger<MainViewModel>> _logger = new();
     private readonly FakeSessionStateSource _session = new();
     private AppSettings _values = null!;
     private UsageHistoryPersistence _persistence = null!;
@@ -43,7 +46,7 @@ public class MainViewModelTests
         _usage.Setup(s => s.GetCostsAsync(It.IsAny<IReadOnlyList<string>>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()))
             .Returns((IReadOnlyList<string> providers, bool force, CancellationToken ct) => CostResults(providers, force, ct));
         _viewModel = new(_usage.Object, _settings.Object, new UsageAlertEvaluator(), _toast.Object,
-            NullLogger<MainViewModel>.Instance, _history, _persistence, _activity, _session, _cache.Object, _memo.Object, _earlyResets.Object);
+            _logger.Object, _history, _persistence, _activity, _session, _cache.Object, _memo.Object, _earlyResets.Object, _batterySaver.Object);
         _earlyResets.Setup(s => s.FlushAsync(It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
     }
 
@@ -93,11 +96,242 @@ public class MainViewModelTests
 
     private Task PeriodicRefreshAsync() => (Task)typeof(MainViewModel)
         .GetMethod("RefreshCoreAsync", BindingFlags.Instance | BindingFlags.NonPublic)!
-        .Invoke(_viewModel, [false])!;
+        .Invoke(_viewModel, [false, null])!;
 
     private Task CostScanCompletion(bool background = true) => ((TaskCompletionSource)typeof(MainViewModel)
         .GetField(background ? "_backgroundCostRefreshCompletion" : "_costRefreshCompletion",
             BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(_viewModel)!).Task;
+
+    private Task RunResetScheduleAsync(DateTime reset, bool retry = false, CancellationToken ct = default) =>
+        (Task)typeof(MainViewModel).GetMethod("RunPeriodicRefreshAsync", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .Invoke(_viewModel, [new ResetRefreshSchedule(TimeSpan.Zero, reset, retry), ct])!;
+
+    [TestMethod]
+    public void ShouldPlayResetAnimation_BatteryAndSettingsChanges_NotifiesAndRecomputes()
+    {
+        var notifications = 0;
+        _viewModel.PropertyChanged += (_, e) => { if (e.PropertyName == nameof(MainViewModel.ShouldPlayResetAnimation)) notifications++; };
+        _viewModel.ShouldPlayResetAnimation.Should().BeTrue();
+        _batterySaver.SetupGet(m => m.BatterySaverActive).Returns(true);
+        _batterySaver.Raise(m => m.BatterySaverChanged += null, EventArgs.Empty);
+        _viewModel.ShouldPlayResetAnimation.Should().BeFalse();
+        _values.ResetAnimationMode = ResetAnimationMode.Always;
+        _viewModel.Stop(); // The preference still updates when refresh work is stopped.
+        _settings.Raise(s => s.SettingsChanged += null, EventArgs.Empty);
+        _viewModel.ShouldPlayResetAnimation.Should().BeTrue();
+        _values.ResetAnimationMode = ResetAnimationMode.Never;
+        _settings.Raise(s => s.SettingsChanged += null, EventArgs.Empty);
+        _viewModel.ShouldPlayResetAnimation.Should().BeFalse();
+        notifications.Should().Be(3);
+        _viewModel.Dispose();
+        _batterySaver.Raise(m => m.BatterySaverChanged += null, EventArgs.Empty);
+        notifications.Should().Be(3);
+        _batterySaver.VerifyRemove(m => m.BatterySaverChanged -= It.IsAny<EventHandler>(), Times.Once);
+    }
+
+    [TestMethod]
+    public async Task RunPeriodicRefreshAsync_TargetedResult_LogsEachWindowOnceAtInformationAndActivity()
+    {
+        var reset = DateTime.UtcNow.AddSeconds(-2);
+        var before = Data(90) with
+        {
+            FetchedAt = reset.AddMinutes(-1), UsageFetchOutcome = FetchOutcome.Success,
+            Session = new() { ReportedPercent = 90, ResetAt = reset },
+            Weekly = new() { ReportedPercent = 90, ResetAt = reset },
+            Tertiary = new() { ReportedPercent = 90, ResetAt = reset.AddHours(1) }
+        };
+        var after = before with { FetchedAt = DateTime.UtcNow,
+            Session = before.Session! with { ReportedPercent = 0, ResetAt = reset.AddHours(5) } };
+        _usage.SetupSequence(s => s.GetAllUsageStreamAsync(It.IsAny<CancellationToken>()))
+            .Returns(Stream(Task.CompletedTask, before)).Returns(Stream(Task.CompletedTask, after));
+        await _viewModel.StartAsync();
+        await RunResetScheduleAsync(reset);
+        _activity.RecentRefreshes.Should().HaveCount(2);
+        var entry = _activity.RecentRefreshes.Single(e => e.Message?.StartsWith("Reset refresh:") == true);
+        entry.Message!.Should().Contain("session NEW +").And.Contain("weekly OLD +").And.NotContain("tertiary");
+        _logger.Verify(l => l.Log(Microsoft.Extensions.Logging.LogLevel.Information,
+            It.IsAny<Microsoft.Extensions.Logging.EventId>(),
+            It.Is<It.IsAnyType>((state, _) => state!.ToString()!.Contains("Reset refresh claude: session NEW +") &&
+                state!.ToString()!.Contains("weekly OLD +")), It.IsAny<Exception?>(),
+            It.IsAny<Func<It.IsAnyType, Exception?, string>>()), Times.Once);
+    }
+
+    [TestMethod]
+    public async Task RunPeriodicRefreshAsync_FirstAttemptStillRunning_RetryWaitsAndRemainsAvailable()
+    {
+        var reset = DateTime.UtcNow.AddSeconds(-2);
+        var before = Data(90) with { UsageFetchOutcome = FetchOutcome.Success,
+            Session = new() { ReportedPercent = 90, ResetAt = reset } };
+        var gate = Signal();
+        _usage.SetupSequence(s => s.GetAllUsageStreamAsync(It.IsAny<CancellationToken>()))
+            .Returns(Stream(Task.CompletedTask, before)).Returns(Stream(gate.Task, before))
+            .Returns(Stream(Task.CompletedTask, before));
+        await _viewModel.StartAsync();
+        var first = RunResetScheduleAsync(reset);
+        try
+        {
+            _viewModel.IsLoading.Should().BeTrue();
+            _viewModel.NextRefreshUtc.Should().BeNull();
+            // Simulate a 16-second first fetch without a real timer wait.
+            var attempts = (Dictionary<DateTime, ResetRefreshAttempt>)typeof(MainViewModel)
+                .GetField("_resetRefreshAttempts", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(_viewModel)!;
+            attempts[reset] = new(DateTime.UtcNow.AddSeconds(-16));
+            await RunResetScheduleAsync(reset, retry: true);
+            attempts[reset].RetryTriggered.Should().BeFalse();
+            _usage.Verify(s => s.GetAllUsageStreamAsync(It.IsAny<CancellationToken>()), Times.Exactly(2));
+        }
+        finally { gate.SetResult(); await first; }
+        _viewModel.EffectiveRefreshInterval.Should().Be(TimeSpan.FromSeconds(2));
+        await RunResetScheduleAsync(reset, retry: true);
+        await RunResetScheduleAsync(reset, retry: true);
+        await RunResetScheduleAsync(reset);
+        _usage.Verify(s => s.GetAllUsageStreamAsync(It.IsAny<CancellationToken>()), Times.Exactly(3));
+        _viewModel.EffectiveRefreshInterval.Should().BeGreaterThan(TimeSpan.FromSeconds(15));
+    }
+
+    [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task StartAsync_ZeroIntervals_ClampsTimerToTwoSeconds(bool locked)
+    {
+        _values.RefreshIntervalSeconds = 0;
+        _values.LockedRefreshIntervalMinutes = 0;
+        _values.AdaptiveRefreshEnabled = false;
+        _session.QueryLocked = locked;
+        SetupImmediateUsage();
+        await _viewModel.StartAsync();
+        _viewModel.EffectiveRefreshInterval.Should().Be(TimeSpan.FromSeconds(2));
+    }
+
+    [TestMethod]
+    public async Task RunPeriodicRefreshAsync_AlreadyLoading_DoesNotFetchOrConsumeAttempt()
+    {
+        var reset = DateTime.UtcNow.AddSeconds(30);
+        var data = Data(90) with { Session = new() { ResetAt = reset } };
+        var gate = Signal();
+        _usage.Setup(s => s.GetAllUsageStreamAsync(It.IsAny<CancellationToken>()))
+            .Returns((CancellationToken ct) => Stream(gate.Task, data, ct));
+        var starting = _viewModel.StartAsync();
+        try
+        {
+            await RunResetScheduleAsync(reset);
+            _usage.Verify(s => s.GetAllUsageStreamAsync(It.IsAny<CancellationToken>()), Times.Once);
+        }
+        finally
+        {
+            gate.SetResult();
+            await starting;
+        }
+        _viewModel.NextRefreshUtc.Should().Be(reset.AddSeconds(2));
+    }
+
+    [TestMethod]
+    public async Task StartAsync_NearestResetInExtraWindow_PublishesActualNextRefresh()
+    {
+        var reset = DateTime.UtcNow.AddSeconds(30);
+        var data = Data(80) with { ExtraWindows = [new() { Key = "extra", Window = new() { ResetAt = reset } }] };
+        _usage.Setup(s => s.GetAllUsageStreamAsync(It.IsAny<CancellationToken>()))
+            .Returns((CancellationToken ct) => Stream(Task.CompletedTask, data, ct));
+        await _viewModel.StartAsync();
+        _viewModel.NextRefreshUtc.Should().Be(reset.AddSeconds(2));
+        _viewModel.EffectiveRefreshInterval.Should().BeLessThan(TimeSpan.FromSeconds(33));
+        _viewModel.Stop();
+        _viewModel.NextRefreshUtc.Should().BeNull();
+    }
+
+    [TestMethod]
+    public async Task StartAsync_DisabledProviderReset_DoesNotShortenEnabledProviderSchedule()
+    {
+        _values.RefreshIntervalSeconds = 300;
+        _values.AdaptiveRefreshEnabled = false;
+        var reset = DateTime.UtcNow.AddSeconds(30);
+        _values.Providers.Add(new() { Id = "codex", IsEnabled = false });
+        SetupImmediateUsage();
+        await _viewModel.StartAsync();
+        _viewModel.Providers.Add(Data(90) with { Provider = "codex", Session = new() { ResetAt = reset } });
+        typeof(MainViewModel).GetMethod("RecreateTimer", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .Invoke(_viewModel, [null]);
+        _viewModel.EffectiveRefreshInterval.Should().Be(TimeSpan.FromMinutes(5));
+    }
+
+    [TestMethod]
+    public async Task RunPeriodicRefreshAsync_StaleReset_PerformsOneRetryThenNormalCadence()
+    {
+        _values.AdaptiveRefreshEnabled = false;
+        var reset = DateTime.UtcNow.AddSeconds(30);
+        var data = Data(90) with { Session = new() { ResetAt = reset, ReportedPercent = 90 } };
+        _usage.Setup(s => s.GetAllUsageStreamAsync(It.IsAny<CancellationToken>()))
+            .Returns((CancellationToken ct) => Stream(Task.CompletedTask, data, ct));
+        await _viewModel.StartAsync();
+        await RunResetScheduleAsync(reset);
+        _viewModel.EffectiveRefreshInterval.TotalSeconds.Should().BeInRange(2, 15);
+        _activity.RecentRefreshes.Should().HaveCount(2);
+        await RunResetScheduleAsync(reset, retry: true);
+        _viewModel.EffectiveRefreshInterval.Should().Be(TimeSpan.FromSeconds(_values.RefreshIntervalSeconds));
+        _activity.RecentRefreshes.Should().HaveCount(3);
+        _usage.Verify(s => s.GetAllUsageStreamAsync(It.IsAny<CancellationToken>()), Times.Exactly(3));
+    }
+
+    [TestMethod]
+    public async Task RunPeriodicRefreshAsync_CanceledTimer_DoesNotFetchOrConsumeAttempt()
+    {
+        var reset = DateTime.UtcNow.AddSeconds(30);
+        var data = Data(90) with { Session = new() { ResetAt = reset } };
+        _usage.Setup(s => s.GetAllUsageStreamAsync(It.IsAny<CancellationToken>()))
+            .Returns((CancellationToken ct) => Stream(Task.CompletedTask, data, ct));
+        await _viewModel.StartAsync();
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+        await RunResetScheduleAsync(reset, ct: cts.Token);
+        _viewModel.NextRefreshUtc.Should().Be(reset.AddSeconds(2));
+        _usage.Verify(s => s.GetAllUsageStreamAsync(It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [TestMethod]
+    public async Task RunPeriodicRefreshAsync_LockWithoutEvent_UsesLockedCadenceWithoutConsumingAttempt()
+    {
+        var reset = DateTime.UtcNow.AddSeconds(30);
+        var data = Data(90) with { Session = new() { ResetAt = reset } };
+        _usage.Setup(s => s.GetAllUsageStreamAsync(It.IsAny<CancellationToken>()))
+            .Returns((CancellationToken ct) => Stream(Task.CompletedTask, data, ct));
+        await _viewModel.StartAsync();
+        _session.QueryLocked = true;
+        await RunResetScheduleAsync(reset);
+        _viewModel.EffectiveRefreshInterval.Should().Be(TimeSpan.FromSeconds(_values.RefreshIntervalSeconds));
+        _session.QueryLocked = false;
+        typeof(MainViewModel).GetMethod("RecreateTimer", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .Invoke(_viewModel, [null]);
+        _viewModel.NextRefreshUtc.Should().Be(reset.AddSeconds(2));
+        _usage.Verify(s => s.GetAllUsageStreamAsync(It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [TestMethod]
+    public async Task RunPeriodicRefreshAsync_Stopped_DoesNotFetch()
+    {
+        SetupImmediateUsage();
+        await _viewModel.StartAsync();
+        _viewModel.Stop();
+        await RunResetScheduleAsync(DateTime.UtcNow);
+        _viewModel.NextRefreshUtc.Should().BeNull();
+        _usage.Verify(s => s.GetAllUsageStreamAsync(It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [TestMethod]
+    public async Task RefreshCoreAsync_NaturalReset_UpdatesSessionSignalAndActivityThroughNormalPath()
+    {
+        var now = DateTime.UtcNow;
+        var previous = Data(90) with { FetchedAt = now.AddMinutes(-1), DataUpdatedAt = now.AddMinutes(-1),
+            UsageFetchOutcome = FetchOutcome.Success, Session = new() { ResetAt = now.AddSeconds(-5), ReportedPercent = 90 } };
+        var current = previous with { FetchedAt = now, DataUpdatedAt = now,
+            Session = previous.Session! with { ResetAt = now.AddHours(5), ReportedPercent = 0 } };
+        _usage.SetupSequence(s => s.GetAllUsageStreamAsync(It.IsAny<CancellationToken>()))
+            .Returns(Stream(Task.CompletedTask, previous)).Returns(Stream(Task.CompletedTask, current));
+        await _viewModel.StartAsync();
+        _viewModel.Providers.Single().Session!.ResetDetectedAtUtc.Should().BeNull();
+        await PeriodicRefreshAsync();
+        _viewModel.Providers.Single().Session!.ResetDetectedAtUtc.Should().NotBeNull();
+        _activity.RecentRefreshes.Should().HaveCount(2);
+    }
 
     [TestMethod]
     public async Task StartAsync_OverQuotaHistory_RestoresLatest105WhileFetchIsPending()
@@ -417,7 +651,7 @@ public class MainViewModelTests
         _viewModel.EffectiveRefreshInterval.Should().Be(TimeSpan.FromMinutes(30));
         _session.QueryLocked = false; // Windows unlocked, but no Unlocked event arrived.
         await (Task)typeof(MainViewModel).GetMethod("RunPeriodicRefreshAsync", BindingFlags.Instance | BindingFlags.NonPublic)!
-            .Invoke(_viewModel, [TimeSpan.Zero, CancellationToken.None])!;
+            .Invoke(_viewModel, [new ResetRefreshSchedule(TimeSpan.Zero), CancellationToken.None])!;
         _viewModel.EffectiveRefreshInterval.Should().Be(TimeSpan.FromMinutes(5));
         typeof(MainViewModel).GetField("_sessionLocked", BindingFlags.Instance | BindingFlags.NonPublic)!
             .GetValue(_viewModel).Should().Be(false);

@@ -87,6 +87,7 @@ public static class DashboardSnapshotBuilder
                     History = BurndownBuilder.Build(ambiguousKeys.Contains(historyKey)
                         ? [] : history.Where(s => s.WindowKey == historyKey), window, now),
                     EarlyResetAtUtc = windowReset != null ? Utc(windowReset.DetectedAtUtc) : null,
+                    ResetDetectedAtUtc = Utc(window.ResetDetectedAtUtc),
                     EarlyResetFromPercent = windowReset?.PreviousPercent,
                     EarlyResetToPercent = windowReset?.CurrentPercent
                 });
@@ -135,6 +136,7 @@ public static class DashboardSnapshotBuilder
                 Windows = windows, Cost = settings.ShowCostTotals && cost?.HasData == true ? BuildCost(cost, today, now) : null,
                 HistorySampleCount = history.Length, HistoryOldestUtc = Oldest(history),
                 EarlyResetAtUtc = mostRecentProviderReset != null ? Utc(mostRecentProviderReset.DetectedAtUtc) : null,
+                ResetDetectedAtUtc = windows.Select(w => w.ResetDetectedAtUtc).Max(),
                 EarlyResetFromPercent = mostRecentProviderReset?.PreviousPercent,
                 EarlyResetToPercent = mostRecentProviderReset?.CurrentPercent
             };

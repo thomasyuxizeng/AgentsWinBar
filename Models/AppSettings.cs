@@ -10,6 +10,13 @@ public enum AppTheme
     Dark = 2
 }
 
+public enum ResetAnimationMode
+{
+    WhenNotBatterySaver = 0,
+    Always = 1,
+    Never = 2
+}
+
 /// <summary>
 /// Timeout settings for various operations.
 /// </summary>
@@ -47,6 +54,7 @@ public class AppSettings
     public bool StartWithWindows { get; set; } = false;
     public bool StartMinimized { get; set; } = false;
     public AppTheme Theme { get; set; } = AppTheme.System;
+    public ResetAnimationMode ResetAnimationMode { get; set; } = ResetAnimationMode.WhenNotBatterySaver;
     public int CacheExpiryMinutes { get; set; } = 5;
     public TimeoutSettings Timeouts { get; set; } = new();
     public AnimationSettings Animation { get; set; } = new();
@@ -89,6 +97,7 @@ public class AppSettings
             .DistinctBy(p => p.Id)
             .ToList();
         if (!Enum.IsDefined(Theme)) Theme = AppTheme.System;
+        if (!Enum.IsDefined(ResetAnimationMode)) ResetAnimationMode = ResetAnimationMode.WhenNotBatterySaver;
         RefreshIntervalSeconds = ValidRange(RefreshIntervalSeconds, 86400, 120);
         if (LockedRefreshIntervalMinutes < 0 || LockedRefreshIntervalMinutes > 1440)
             LockedRefreshIntervalMinutes = 30;

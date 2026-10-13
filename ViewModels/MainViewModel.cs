@@ -26,6 +26,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private readonly ICacheService _cacheService;
     private readonly ISetupMemoService _setupMemo;
     private readonly IEarlyResetStore? _earlyResetStore;
+    private readonly IBatterySaverMonitor? _batterySaverMonitor;
+
+    public bool ShouldPlayResetAnimation => ResetAnimationGate.ShouldAnimate(
+        _settingsService.Settings.ResetAnimationMode, _batterySaverMonitor?.BatterySaverActive ?? false);
     private bool _sessionLocked;
     private CancellationTokenSource? _refreshCts;
     private CancellationTokenSource? _timerCts;
@@ -52,6 +56,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private TaskCompletionSource? _backgroundCostRefreshCompletion;
     private Task _retiredCostRefreshes = Task.CompletedTask;
     private bool _forceCostRefreshPending;
+    private readonly UsageResetTracker _resetTracker = new();
+    private readonly Dictionary<DateTime, ResetRefreshAttempt> _resetRefreshAttempts = [];
+    private bool? _resetTrackerDeveloperMode;
 
     [ObservableProperty]
     private DateTime? _nextRefreshUtc;
@@ -88,7 +95,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
         ISessionStateSource sessionState,
         ICacheService cacheService,
         ISetupMemoService setupMemo,
-        IEarlyResetStore? earlyResetStore = null)
+        IEarlyResetStore? earlyResetStore = null,
+        IBatterySaverMonitor? batterySaverMonitor = null)
     {
         _codexBarService = codexBarService;
         _settingsService = settingsService;
@@ -102,6 +110,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _cacheService = cacheService;
         _setupMemo = setupMemo;
         _earlyResetStore = earlyResetStore;
+        _batterySaverMonitor = batterySaverMonitor;
+        if (_batterySaverMonitor != null) _batterySaverMonitor.BatterySaverChanged += OnBatterySaverChanged;
 
         _settingsService.SettingsChanged += OnSettingsChanged;
         _sessionState.Locked += OnSessionLocked;
@@ -497,7 +507,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
     }
 
-    private async Task RefreshCoreAsync(bool forceCostRefresh = false)
+    private async Task RefreshCoreAsync(bool forceCostRefresh = false, IReadOnlyList<EarlyResetWindowReading>? resetTargets = null)
     {
         if (_stopped || _disposed || _exiting)
         {
@@ -531,6 +541,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
         var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         _refreshCompletion = completion;
         var developerMode = _settingsService.Settings.DeveloperModeEnabled;
+        if (_resetTrackerDeveloperMode != developerMode) _resetTracker.Clear();
+        _resetTrackerDeveloperMode = developerMode;
         List<string>? costProviders = null;
         var refreshStarted = Stopwatch.GetTimestamp();
 
@@ -546,6 +558,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
             if (enabledProviders.Count == 0)
             {
+                _resetTracker.RetainProviders([]);
                 ResetAdaptiveRefresh();
                 Providers.Clear();
                 ErrorMessage = "No providers enabled. Go to Settings to enable providers.";
@@ -553,6 +566,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             }
 
             // Follow Settings on every refresh: add newly enabled providers, drop disabled ones, keep the order
+            _resetTracker.RetainProviders(enabledProviders.Select(p => p.Id));
             ProviderListSynchronizer.Sync(Providers, enabledProviders.Select(p => p.Id).ToList());
 
             // Everything is loading again (existing data stays visible while it refreshes)
@@ -568,13 +582,16 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 ct.ThrowIfCancellationRequested();
                 if (data.CommandNotFound) await _setupMemo.InvalidateAsync(ct);
                 ct.ThrowIfCancellationRequested();
+                var resultAtUtc = DateTime.UtcNow;
+                var resetOutcome = resetTargets == null ? null : ResetRefreshOutcome.Describe(resetTargets, data, resultAtUtc);
+                if (resetOutcome != null) _logger.LogInformation("Reset refresh {Provider}: {Outcome}", data.Provider, resetOutcome);
                 try
                 {
                     _activityLog.RecordRefresh(new DashboardRefreshEntry
                     {
-                        TimestampUtc = DateTime.UtcNow, ProviderId = data.Provider, Success = !data.HasError,
+                        TimestampUtc = resultAtUtc, ProviderId = data.Provider, Success = !data.HasError,
                         DurationMs = (int)Math.Min(int.MaxValue, Stopwatch.GetElapsedTime(refreshStarted).TotalMilliseconds),
-                        Message = data.Error
+                        Message = resetOutcome == null ? data.Error : $"Reset refresh: {resetOutcome}"
                     });
                 }
                 catch (Exception ex) { _logger.LogDebug(ex, "Refresh activity could not be recorded"); }
@@ -594,7 +611,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 {
                     // Remember which bars moved, so the compact widgets can show the ones that matter
                     var previous = Providers[index];
-                    Providers[index] = UsageChangeTracker.Annotate(data, previous, DateTime.UtcNow) with
+                    Providers[index] = _resetTracker.Annotate(
+                        UsageChangeTracker.Annotate(data, previous, DateTime.UtcNow), DateTime.UtcNow) with
                     {
                         Cost = _settingsService.Settings.ShowCostTotals
                             ? CacheRetention.RetainedCost(previous.Cost, DateTime.UtcNow) : null
@@ -736,15 +754,36 @@ public partial class MainViewModel : ObservableObject, IDisposable
         ExitRequested?.Invoke(this, EventArgs.Empty);
     }
 
-    private async Task RunPeriodicRefreshAsync(TimeSpan delay, CancellationToken ct)
+    private async Task RunPeriodicRefreshAsync(ResetRefreshSchedule schedule, CancellationToken ct)
     {
         try
         {
-            await Task.Delay(delay, ct);
+            await Task.Delay(schedule.Delay, ct);
             ct.ThrowIfCancellationRequested();
             // Recover from a missed unlock event before scheduling the next refresh.
             if (_sessionLocked && !QuerySessionLocked()) _sessionLocked = false;
-            await RefreshCoreAsync();
+            if (_disposed || _stopped || _exiting || IsLoading) return;
+            IReadOnlyList<EarlyResetWindowReading>? targets = null;
+            if (schedule.TargetResetAtUtc is { } reset)
+            {
+                if (_sessionLocked || QuerySessionLocked())
+                {
+                    RecreateTimer();
+                    return;
+                }
+                // An obsolete/duplicate callback must not consume another attempt for this instant.
+                var attempted = _resetRefreshAttempts.TryGetValue(reset, out var attempt);
+                if (schedule.IsRetry ? !attempted || attempt!.RetryTriggered : attempted) return;
+                var enabled = _settingsService.Settings.Providers.Where(p => p.IsEnabled)
+                    .Select(p => p.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
+                targets = Providers.Where(p => enabled.Contains(p.Provider)).SelectMany(EarlyResetDetector.Readings)
+                    .Where(r => r.ResetAt.HasValue && DashboardValues.Utc(r.ResetAt.Value) == reset).ToArray();
+                _resetRefreshAttempts[reset] = schedule.IsRetry
+                    ? _resetRefreshAttempts[reset] with { RetryTriggered = true }
+                    : new ResetRefreshAttempt(DateTime.UtcNow);
+                _logger.LogInformation("Refreshing after usage reset {ResetAtUtc}; retry: {IsRetry}", reset, schedule.IsRetry);
+            }
+            await RefreshCoreAsync(resetTargets: targets);
         }
         catch (OperationCanceledException)
         {
@@ -769,10 +808,27 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         try
         {
-            OnUiThread(() => HandleSettingsChangeAsync().SafeFireAndForget(
-                onError: ex => _logger.LogError(ex, "Failed to handle settings change")));
+            OnUiThread(() =>
+            {
+                if (_disposed) return;
+                OnPropertyChanged(nameof(ShouldPlayResetAnimation));
+                HandleSettingsChangeAsync().SafeFireAndForget(
+                    onError: ex => _logger.LogError(ex, "Failed to handle settings change"));
+            });
         }
         catch (Exception ex) { _logger.LogError(ex, "Failed to dispatch settings change"); }
+    }
+
+    private void OnBatterySaverChanged(object? sender, EventArgs e)
+    {
+        try
+        {
+            OnUiThread(() =>
+            {
+                if (!_disposed) OnPropertyChanged(nameof(ShouldPlayResetAnimation));
+            });
+        }
+        catch (Exception ex) { _logger.LogError(ex, "Failed to dispatch battery saver change"); }
     }
 
     private async Task HandleSettingsChangeAsync()
@@ -781,6 +837,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         {
             if (_disposed || _stopped || _exiting) return;
             _logger.LogDebug("Settings changed, recreating timer and refreshing data");
+            _resetTracker.RetainProviders(_settingsService.Settings.Providers.Where(p => p.IsEnabled).Select(p => p.Id));
             ResetAdaptiveRefresh();
             _costRefreshCts?.Cancel();
             _backgroundCostRefreshCts?.Cancel();
@@ -800,17 +857,29 @@ public partial class MainViewModel : ObservableObject, IDisposable
     /// </summary>
     private void RecreateTimer(TimeSpan? firstDelay = null)
     {
-        EffectiveRefreshInterval = firstDelay ?? GetScheduledDelay();
-        if (_sessionLocked || QuerySessionLocked())
+        if (_disposed || _stopped || _exiting || IsLoading) return;
+        var now = DateTime.UtcNow;
+        var normalDelay = firstDelay ?? GetScheduledDelay();
+        if (normalDelay < ResetRefreshScheduler.MinimumDelay) normalDelay = ResetRefreshScheduler.MinimumDelay;
+        var locked = _sessionLocked || QuerySessionLocked();
+        if (locked)
         {
             var lockedInterval = TimeSpan.FromMinutes(_settingsService.Settings.LockedRefreshIntervalMinutes);
-            if (lockedInterval > EffectiveRefreshInterval) EffectiveRefreshInterval = lockedInterval;
+            if (lockedInterval > normalDelay) normalDelay = lockedInterval;
         }
+        var enabled = _settingsService.Settings.Providers.Where(p => p.IsEnabled).Select(p => p.Id)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var resetTimes = Providers.Where(p => enabled.Contains(p.Provider))
+            .SelectMany(p => new[] { p.Session, p.Weekly, p.Tertiary }
+                .Concat(p.ExtraWindows.Select(e => e.Window))).Select(w => w?.ResetAt);
+        var schedule = locked ? new ResetRefreshSchedule(normalDelay)
+            : ResetRefreshScheduler.GetSchedule(resetTimes, now, normalDelay, _resetRefreshAttempts);
+        EffectiveRefreshInterval = schedule.Delay;
         _timerCts?.Cancel();
         _timerCts?.Dispose();
         _timerCts = new CancellationTokenSource();
-        NextRefreshUtc = DateTime.UtcNow + EffectiveRefreshInterval;
-        RunPeriodicRefreshAsync(EffectiveRefreshInterval, _timerCts.Token).SafeFireAndForget(
+        NextRefreshUtc = now + EffectiveRefreshInterval;
+        RunPeriodicRefreshAsync(schedule, _timerCts.Token).SafeFireAndForget(
             onError: ex => _logger.LogError(ex, "Periodic refresh task failed"));
         // Unlock events are not reliable (they never reached the app in testing), and a locked session sleeps for up
         // to LockedRefreshIntervalMinutes: while locked, poll cheaply so an unlock is noticed within seconds.
@@ -856,6 +925,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         {
             Stop();
             _settingsService.SettingsChanged -= OnSettingsChanged;
+            if (_batterySaverMonitor != null) _batterySaverMonitor.BatterySaverChanged -= OnBatterySaverChanged;
             _sessionState.Locked -= OnSessionLocked;
             _sessionState.Unlocked -= OnSessionActivated;
             _sessionState.Resumed -= OnSessionActivated;

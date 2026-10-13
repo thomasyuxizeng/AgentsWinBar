@@ -128,6 +128,10 @@ public record UsageWindow
     /// </summary>
     public DateTime? LastChangedAt { get; init; }
 
+    /// <summary>Latest reset detected in this app session. Retained until the next detection; never persisted.</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public DateTime? ResetDetectedAtUtc { get; init; }
+
     /// <summary>
     /// How far through the window we are (0-100), or null if the window length or reset time is unknown.
     /// Compare with <see cref="Percent"/> to see whether usage is running ahead of or behind time.

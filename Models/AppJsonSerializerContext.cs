@@ -10,6 +10,7 @@ namespace CodexBarWin.Models;
     PropertyNameCaseInsensitive = true,
     WriteIndented = true)]
 [JsonSerializable(typeof(AppSettings))]
+[JsonSerializable(typeof(ResetAnimationMode))]
 [JsonSerializable(typeof(CacheData))]
 [JsonSerializable(typeof(UsageDataDto))]
 [JsonSerializable(typeof(List<UsageDataDto>))]

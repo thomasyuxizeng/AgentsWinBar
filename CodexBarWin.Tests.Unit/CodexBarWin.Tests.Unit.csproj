@@ -28,6 +28,12 @@
   <ItemGroup>
     <Compile Include="..\Helpers\AsyncHelper.cs" Link="Linked\AsyncHelper.cs" />
     <Compile Include="..\Helpers\AdaptiveRefreshPolicy.cs" Link="Linked\AdaptiveRefreshPolicy.cs" />
+    <Compile Include="..\Helpers\ResetRefreshScheduler.cs" Link="Linked\ResetRefreshScheduler.cs" />
+    <Compile Include="..\Helpers\ResetRefreshOutcome.cs" Link="Linked\ResetRefreshOutcome.cs" />
+    <Compile Include="..\Helpers\ResetAnimationGate.cs" Link="Linked\ResetAnimationGate.cs" />
+    <Compile Include="..\Services\IBatterySaverMonitor.cs" Link="Linked\IBatterySaverMonitor.cs" />
+    <Compile Include="..\Services\BatterySaverMonitor.cs" Link="Linked\BatterySaverMonitor.cs" />
+    <Compile Include="..\Helpers\UsageResetTracker.cs" Link="Linked\UsageResetTracker.cs" />
     <Compile Include="..\Helpers\UsageFingerprint.cs" Link="Linked\UsageFingerprint.cs" />
     <Compile Include="..\Helpers\WorkingSetTrimmer.cs" Link="Linked\WorkingSetTrimmer.cs" />
     <Compile Include="..\Models\DashboardSnapshot.cs" Link="Linked\DashboardSnapshot.cs" />

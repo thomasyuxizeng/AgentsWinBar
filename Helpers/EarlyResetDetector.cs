@@ -65,58 +65,11 @@ public static class EarlyResetDetector
     /// <returns>An <see cref="EarlyReset"/> event if an early reset was detected; otherwise, null.</returns>
     public static EarlyReset? Detect(EarlyResetWindowReading? previous, EarlyResetWindowReading? current, DateTime nowUtc)
     {
-        if (previous == null || current == null)
-        {
-            return null;
-        }
+        if (!AreComparable(previous, current, nowUtc)) return null;
 
-        if (!ProviderConstants.IsValidProvider(previous.Provider) ||
-            !ProviderConstants.IsValidProvider(current.Provider))
-        {
-            return null;
-        }
-
-        var prevProvider = ProviderConstants.ValidateAndNormalize(previous.Provider);
-        var curProvider = ProviderConstants.ValidateAndNormalize(current.Provider);
-        if (!string.Equals(prevProvider, curProvider, StringComparison.OrdinalIgnoreCase))
-        {
-            return null;
-        }
-
-        if (string.IsNullOrWhiteSpace(previous.WindowKey) ||
-            !string.Equals(previous.WindowKey, current.WindowKey, StringComparison.OrdinalIgnoreCase))
-        {
-            return null;
-        }
-
-        // Both readings must be fresh successful readings (not cached/stale replays or failures)
-        if (previous.IsCached || previous.IsStale || previous.FetchOutcome != FetchOutcome.Success)
-        {
-            return null;
-        }
-
-        if (current.IsCached || current.IsStale || current.FetchOutcome != FetchOutcome.Success)
-        {
-            return null;
-        }
-
-        var prevReadingAt = DashboardValues.Utc(previous.ReadingAtUtc);
-        var curReadingAt = DashboardValues.Utc(current.ReadingAtUtc);
+        var prevProvider = ProviderConstants.ValidateAndNormalize(previous!.Provider);
+        var curReadingAt = DashboardValues.Utc(current!.ReadingAtUtc);
         var now = DashboardValues.Utc(nowUtc);
-
-        if (curReadingAt <= prevReadingAt ||
-            curReadingAt > now + CacheRetention.ClockSkewTolerance ||
-            prevReadingAt > now + CacheRetention.ClockSkewTolerance ||
-            curReadingAt - prevReadingAt > MaxPreviousReadingAge || now - prevReadingAt > MaxPreviousReadingAge ||
-            previous.Plan != current.Plan || previous.Limit != current.Limit || previous.WindowMinutes != current.WindowMinutes)
-        {
-            return null;
-        }
-
-        if (!double.IsFinite(previous.UsedPercent) || !double.IsFinite(current.UsedPercent))
-        {
-            return null;
-        }
 
         var drop = previous.UsedPercent - current.UsedPercent;
 
@@ -151,6 +104,65 @@ public static class EarlyResetDetector
         }
 
         return null;
+    }
+
+    /// <summary>Shared identity, freshness, metadata and observation-order guards for reset comparisons.</summary>
+    internal static bool AreComparable(EarlyResetWindowReading? previous, EarlyResetWindowReading? current, DateTime nowUtc)
+    {
+        if (previous == null || current == null)
+        {
+            return false;
+        }
+
+        if (!ProviderConstants.IsValidProvider(previous.Provider) ||
+            !ProviderConstants.IsValidProvider(current.Provider))
+        {
+            return false;
+        }
+
+        var prevProvider = ProviderConstants.ValidateAndNormalize(previous.Provider);
+        var curProvider = ProviderConstants.ValidateAndNormalize(current.Provider);
+        if (!string.Equals(prevProvider, curProvider, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(previous.WindowKey) ||
+            !string.Equals(previous.WindowKey, current.WindowKey, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        // Both readings must be fresh successful readings (not cached/stale replays or failures)
+        if (previous.IsCached || previous.IsStale || previous.FetchOutcome != FetchOutcome.Success)
+        {
+            return false;
+        }
+
+        if (current.IsCached || current.IsStale || current.FetchOutcome != FetchOutcome.Success)
+        {
+            return false;
+        }
+
+        var prevReadingAt = DashboardValues.Utc(previous.ReadingAtUtc);
+        var curReadingAt = DashboardValues.Utc(current.ReadingAtUtc);
+        var now = DashboardValues.Utc(nowUtc);
+
+        if (curReadingAt <= prevReadingAt ||
+            curReadingAt > now + CacheRetention.ClockSkewTolerance ||
+            prevReadingAt > now + CacheRetention.ClockSkewTolerance ||
+            curReadingAt - prevReadingAt > MaxPreviousReadingAge || now - prevReadingAt > MaxPreviousReadingAge ||
+            previous.Plan != current.Plan || previous.Limit != current.Limit || previous.WindowMinutes != current.WindowMinutes)
+        {
+            return false;
+        }
+
+        if (!double.IsFinite(previous.UsedPercent) || !double.IsFinite(current.UsedPercent))
+        {
+            return false;
+        }
+
+        return true;
     }
 
     /// <summary>

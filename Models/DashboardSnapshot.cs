@@ -104,6 +104,8 @@ public sealed record DashboardProvider
 
     /// <summary>Timestamp of an active early reset (within 24h) for this provider, if any.</summary>
     public DateTime? EarlyResetAtUtc { get; init; }
+    /// <summary>Provider aggregate only. Bars must read their own window's ResetDetectedAtUtc, never this value.</summary>
+    public DateTime? ResetDetectedAtUtc { get; init; }
     public double? EarlyResetFromPercent { get; init; }
     public double? EarlyResetToPercent { get; init; }
 }
@@ -144,6 +146,7 @@ public sealed record DashboardWindow
 
     /// <summary>Timestamp of an active early reset (within 24h) for this window, if any.</summary>
     public DateTime? EarlyResetAtUtc { get; init; }
+    public DateTime? ResetDetectedAtUtc { get; init; }
     public double? EarlyResetFromPercent { get; init; }
     public double? EarlyResetToPercent { get; init; }
 }
