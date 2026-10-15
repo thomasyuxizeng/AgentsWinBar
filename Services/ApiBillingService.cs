@@ -25,7 +25,6 @@ public sealed class ApiBillingService : IApiBillingService, IDisposable
     private readonly SemaphoreSlim _gate = new(1, 1);
     private ApiCreditsInfo? _cached;
     private ApiCreditsInfo? _lastGood;
-    private ApiCreditsInfo? _lastBreakdown;
     private Ownership? _ownership;
     private sealed record Ownership(ApiOrganizationKey[] Keys, Dictionary<string, string> Names, DateTime FetchedAt);
     private DateTime _attemptedAt;
@@ -69,7 +68,7 @@ public sealed class ApiBillingService : IApiBillingService, IDisposable
                 _cached = null;
                 if (_scope is not { } previous || previous.CycleStart != scope.CycleStart ||
                     previous.Day != scope.Day || previous.Developer != scope.Developer)
-                { _lastGood = null; _lastBreakdown = null; }
+                { _lastGood = null; }
                 _scope = scope;
             }
             if (developer)
@@ -92,7 +91,7 @@ public sealed class ApiBillingService : IApiBillingService, IDisposable
                 key = _readEnvironment(AdminKeyEnvironmentVariable, EnvironmentVariableTarget.User);
             if (string.IsNullOrWhiteSpace(key))
             {
-                _cached = null; _lastGood = null; _lastBreakdown = null; _ownership = null;
+                _cached = null; _lastGood = null; _ownership = null;
                 _credentialFingerprint = null;
                 _logger.LogDebug("Anthropic admin key environment variable is not set");
                 return ApiCreditsCalculator.BuildNoKey(monthly, day, now);
@@ -100,7 +99,7 @@ public sealed class ApiBillingService : IApiBillingService, IDisposable
             var fingerprint = ComputeFingerprint(key);
             if (!string.Equals(_credentialFingerprint, fingerprint, StringComparison.Ordinal))
             {
-                _cached = null; _lastGood = null; _lastBreakdown = null; _ownership = null;
+                _cached = null; _lastGood = null; _ownership = null;
                 _credentialFingerprint = fingerprint;
             }
             if (!force && _cached != null && now >= _attemptedAt && now - _attemptedAt < CacheTtl)
@@ -125,9 +124,10 @@ public sealed class ApiBillingService : IApiBillingService, IDisposable
                 request.Headers.Add("anthropic-version", "2023-06-01");
                 request.Headers.UserAgent.ParseAdd("CodexBarWin/" + version);
                 using var response = await _http.SendAsync(request, deadline.Token).ConfigureAwait(false);
+                ct.ThrowIfCancellationRequested();
                 if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
                 {
-                    _lastGood = null; _lastBreakdown = null; _ownership = null;
+                    _lastGood = null; _ownership = null;
                     _logger.LogWarning("Anthropic admin key rejected (HTTP {Status})", (int)response.StatusCode);
                     return Store(ApiCreditsCalculator.BuildRejected(monthly, day, now, (int)response.StatusCode), now);
                 }
@@ -152,6 +152,7 @@ public sealed class ApiBillingService : IApiBillingService, IDisposable
                     var total = ApiCreditsCalculator.BuildOk(monthly, totalCents / 100m, day, now, fetched);
                     var result = await AddBreakdownAsync(total, costLines, key, force, window.StartUtc,
                         now.Date.AddDays(1), ct).ConfigureAwait(false);
+                    ct.ThrowIfCancellationRequested();
                     return Store(result, fetched);
                 }
                 if (string.IsNullOrWhiteSpace(next) || !seenPages.Add(next)) break;
@@ -161,6 +162,8 @@ public sealed class ApiBillingService : IApiBillingService, IDisposable
             _logger.LogWarning("Anthropic cost report pagination was incomplete");
             return Failure(monthly, day, now);
         }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        { return ApiCreditsCalculator.BuildUnavailable(monthly, day, now); }
         catch (Exception)
         {
             // Transport/parse exceptions can embed credentials, headers or response bodies. Never log them.
@@ -194,7 +197,6 @@ public sealed class ApiBillingService : IApiBillingService, IDisposable
             var you = ApiCreditsAttribution.ResolveYou(ownership.Keys, key);
             if (you == null)
             {
-                _lastBreakdown = null;
                 _logger.LogWarning("Anthropic API spend breakdown ownership could not be resolved");
                 return total with { UnattributedUsd = Math.Max(0, total.SpentUsd) };
             }
@@ -211,20 +213,19 @@ public sealed class ApiBillingService : IApiBillingService, IDisposable
             if (attribution.UnpricedTokenGroups > 0)
                 _logger.LogDebug("Anthropic attribution has {Count} unpriced token groups ({Tokens} tokens)",
                     attribution.UnpricedTokenGroups, attribution.UnpricedTokens);
+            // Signed adjustments can make the token allocation exceed the authoritative total.
+            // Withhold attribution rather than silently dropping the negative reconciliation.
+            if (!attribution.Reconciled)
+                return total with { UnattributedUsd = Math.Max(0, total.SpentUsd) };
             if (!attribution.Contributors.Any(member => member.IsYou)) throw new InvalidOperationException();
             var result = total with { Contributors = attribution.Contributors, UnattributedUsd = attribution.UnattributedUsd, HasBreakdown = true };
-            _lastBreakdown = result;
             return result;
         }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (Exception)
         {
             // Optional reports must never hide a successful total, or expose untrusted response/exception text.
             _logger.LogWarning("Anthropic API spend breakdown unavailable or ownership could not be resolved");
-            if (_lastBreakdown is { HasBreakdown: true } previous && previous.CycleStart == total.CycleStart && previous.CycleEnd == total.CycleEnd &&
-                _ownership != null && previous.Contributors.Any(member => member.IsYou &&
-                    member.UserId == ApiCreditsAttribution.ResolveYou(_ownership.Keys, key)))
-                return total with { Contributors = previous.Contributors, HasBreakdown = true,
-                    UnattributedUsd = Math.Max(0, total.SpentUsd - previous.Contributors.Sum(member => member.SpentUsd)) };
             return total with { UnattributedUsd = Math.Max(0, total.SpentUsd) };
         }
     }
@@ -239,6 +240,7 @@ public sealed class ApiBillingService : IApiBillingService, IDisposable
         string? page = null;
         for (var count = 0; count < 5; count++)
         {
+            ct.ThrowIfCancellationRequested();
             using var request = new HttpRequestMessage(HttpMethod.Get, "https://api.anthropic.com/v1/organizations/" + path
                 + (page == null ? "" : "&" + cursorParameter + "=" + Uri.EscapeDataString(page)));
             request.Headers.Add("x-api-key", key);
@@ -247,6 +249,7 @@ public sealed class ApiBillingService : IApiBillingService, IDisposable
                 ?.InformationalVersion?.Split('+')[0] ?? typeof(ApiBillingService).Assembly.GetName().Version?.ToString() ?? "1.0";
             request.Headers.UserAgent.ParseAdd("CodexBarWin/" + version);
             using var response = await _http.SendAsync(request, ct).ConfigureAwait(false);
+            ct.ThrowIfCancellationRequested();
             response.EnsureSuccessStatusCode();
             var json = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
             var report = JsonSerializer.Deserialize(json, type) ?? throw new JsonException();

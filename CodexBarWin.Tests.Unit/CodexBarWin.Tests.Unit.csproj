@@ -107,6 +107,7 @@
     <Compile Include="..\Services\ISampleDataLoader.cs" Link="Linked\ISampleDataLoader.cs" />
     <Compile Include="..\Services\WslService.cs" Link="Linked\WslService.cs" />
     <Compile Include="..\Services\WslBatchProtocol.cs" Link="Linked\WslBatchProtocol.cs" />
+    <Compile Include="..\Services\WslOutputReader.cs" Link="Linked\WslOutputReader.cs" />
     <Compile Include="..\Services\CodexBarService.cs" Link="Linked\CodexBarService.cs" />
     <Compile Include="..\Helpers\IncidentTextSanitizer.cs" Link="Linked\IncidentTextSanitizer.cs" />
     <Compile Include="..\Services\IGeminiStatusFallback.cs" Link="Linked\IGeminiStatusFallback.cs" />

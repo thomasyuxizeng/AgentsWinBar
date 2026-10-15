@@ -58,6 +58,117 @@ public class MainViewModelTests
     }
 
     private static TaskCompletionSource Signal() => new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    private void UseDashboard(IDashboardService dashboard)
+    {
+        _viewModel.Dispose();
+        _viewModel = new(_usage.Object, _settings.Object, new UsageAlertEvaluator(), _toast.Object,
+            _logger.Object, _history, _persistence, _activity, _session, _cache.Object, _memo.Object,
+            dashboardService: dashboard);
+        SetupImmediateUsage();
+    }
+
+    [TestMethod]
+    [DataRow("stop")]
+    [DataRow("dispose")]
+    [DataRow("settings")]
+    public async Task RefreshApiCredits_LifetimeEnds_CancelsBillingToken(string action)
+    {
+        var pending = Signal();
+        var token = CancellationToken.None;
+        var dashboard = new Mock<IDashboardService>();
+        dashboard.Setup(s => s.RefreshApiCreditsAsync(true, It.IsAny<CancellationToken>()))
+            .Returns((bool _, CancellationToken ct) => { token = ct; return pending.Task; });
+        UseDashboard(dashboard.Object);
+        await _viewModel.RefreshCommand.ExecuteAsync(null);
+        try
+        {
+            token.CanBeCanceled.Should().BeTrue();
+            if (action == "stop") _viewModel.Stop();
+            else if (action == "dispose") _viewModel.Dispose();
+            else { _values.DeveloperModeEnabled = true; _settings.Raise(s => s.SettingsChanged += null, EventArgs.Empty); }
+            token.IsCancellationRequested.Should().BeTrue();
+        }
+        finally { pending.TrySetResult(); }
+    }
+
+    [TestMethod]
+    public async Task RefreshApiCredits_SettingsChangeDuringUsageCancellation_CancelsBillingImmediately()
+    {
+        var pending = Signal(); var usageGate = Signal(); var token = CancellationToken.None;
+        var dashboard = new Mock<IDashboardService>();
+        dashboard.Setup(s => s.RefreshApiCreditsAsync(true, It.IsAny<CancellationToken>()))
+            .Returns((bool _, CancellationToken ct) => { token = ct; return pending.Task; });
+        UseDashboard(dashboard.Object);
+        _usage.Setup(s => s.GetAllUsageStreamAsync(It.IsAny<CancellationToken>())).Returns(Stream(usageGate.Task, Data(20)));
+        var refresh = _viewModel.RefreshCommand.ExecuteAsync(null);
+        try
+        {
+            _viewModel.IsLoading.Should().BeTrue();
+            _settings.Raise(s => s.SettingsChanged += null, EventArgs.Empty);
+            token.IsCancellationRequested.Should().BeTrue();
+            usageGate.Task.IsCompleted.Should().BeFalse();
+        }
+        finally
+        {
+            _viewModel.Stop(); pending.TrySetResult(); usageGate.TrySetResult();
+            await refresh.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+    }
+
+    [TestMethod]
+    public async Task RefreshApiCredits_RepeatedForcedRequests_CoalescesPendingCalls()
+    {
+        var pending = Signal(); var second = Signal(); var calls = 0;
+        var dashboard = new Mock<IDashboardService>();
+        dashboard.Setup(s => s.RefreshApiCreditsAsync(true, It.IsAny<CancellationToken>()))
+            .Returns(() => Interlocked.Increment(ref calls) == 1 ? pending.Task : CompleteSecond());
+        Task CompleteSecond() { second.TrySetResult(); return Task.CompletedTask; }
+        UseDashboard(dashboard.Object);
+        try
+        {
+            for (var i = 0; i < 4; i++) await _viewModel.RefreshCommand.ExecuteAsync(null);
+            calls.Should().Be(1);
+        }
+        finally { pending.TrySetResult(); }
+        await second.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        calls.Should().Be(2);
+    }
+
+    [TestMethod]
+    public async Task ExitAsync_CompletedScanLedgerWritePending_WaitsBeforeExitRequested()
+    {
+        _viewModel.Dispose();
+        _values.ShowCostTotals = true;
+        var writing = Signal(); var written = Signal(); var exited = false;
+        var ledger = new Mock<ICostLedger>();
+        ledger.Setup(s => s.RecordScansAsync(It.IsAny<IReadOnlyList<CostData>>(), It.IsAny<DateTime?>(), It.IsAny<CancellationToken>()))
+            .Returns(() => { writing.TrySetResult(); return written.Task; });
+        var wsl = new CodexBarWin.Tests.Unit.Mocks.MockWslService();
+        wsl.BatchHandler = (commands, callback, _) =>
+        {
+            var result = new WslResult { Success = true, Output = commands[0].Command.Contains(" cost ")
+                ? """{"provider":"claude","sessionCostUSD":1,"sessionTokens":100,"last30DaysCostUSD":1,"last30DaysTokens":100,"daily":[{"date":"2026-10-15","totalCost":1,"totalTokens":100}]}"""
+                : """[{"provider":"claude","usage":{"primary":{"usedPercent":20}}}]""" };
+            callback!(0, result); return Task.FromResult<IReadOnlyList<WslResult>>([result]);
+        };
+        var service = new CodexBarService(wsl, _cache.Object, _settings.Object, new CodexBarWin.Tests.Unit.Mocks.MockSampleDataLoader(),
+            NullLogger<CodexBarService>.Instance, costLedger: ledger.Object);
+        _viewModel = new(service, _settings.Object, new UsageAlertEvaluator(), _toast.Object, _logger.Object,
+            _history, _persistence, _activity, _session, _cache.Object, _memo.Object);
+        _viewModel.ExitRequested += (_, _) => exited = true;
+        await _viewModel.RefreshCommand.ExecuteAsync(null);
+        Task? exit = null;
+        try
+        {
+            await writing.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            exit = _viewModel.ExitCommand.ExecuteAsync(null);
+            await Task.WhenAny(exit, Task.Delay(150));
+            exited.Should().BeFalse(); exit.IsCompleted.Should().BeFalse();
+        }
+        finally { written.TrySetResult(); if (exit != null) await exit.WaitAsync(TimeSpan.FromSeconds(5)); }
+        exited.Should().BeTrue();
+    }
     private async IAsyncEnumerable<(string Provider, CostData? Cost)> CostResults(IReadOnlyList<string> providers,
         bool force, [EnumeratorCancellation] CancellationToken ct)
     {

@@ -1294,4 +1294,100 @@ public class CodexBarServiceTests
     }
 
     #endregion
+
+    [TestMethod]
+    [DataRow(true, false)]
+    [DataRow(false, false)]
+    [DataRow(true, true)]
+    public async Task GetAllUsageStreamAsync_StatusPending_PublishesFastProviderBeforeSlowBatch(bool completeStatus, bool batchFails)
+    {
+        _mockSettingsService.SetProviders([new() { Id = "claude" }, new() { Id = "gemini" }]);
+        var status = new TaskCompletionSource<ProviderStatus?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var frame = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var incidents = new Mock<IProviderIncidentFetcher>();
+        incidents.Setup(s => s.GetIncidentAsync("claude", It.IsAny<CancellationToken>())).Returns(status.Task);
+        static WslResult Usage(string provider) => new() { Success = true,
+            Output = "[{\"provider\":\"" + provider + "\",\"usage\":{\"primary\":{\"usedPercent\":20}}}]" };
+        _mockWslService.BatchHandler = async (_, callback, ct) =>
+        {
+            callback!(0, Usage("claude")); frame.SetResult();
+            await release.Task.WaitAsync(ct);
+            if (batchFails) throw new InvalidDataException("missing sibling frame");
+            callback(1, Usage("gemini"));
+            return [Usage("claude"), Usage("gemini")];
+        };
+        _mockWslService.CommandHandler = (_, _) => Task.FromResult(Usage("gemini"));
+        var service = new CodexBarService(_mockWslService, _mockCacheService, _mockSettingsService,
+            _mockSampleDataLoader, _mockLogger.Object, incidentFetcher: incidents.Object);
+        await using var stream = service.GetAllUsageStreamAsync().GetAsyncEnumerator();
+        var first = stream.MoveNextAsync().AsTask();
+        try
+        {
+            await frame.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            if (completeStatus) status.SetResult(new() { Indicator = ProviderStatusIndicator.Minor });
+            (await first.WaitAsync(TimeSpan.FromSeconds(2))).Should().BeTrue();
+            stream.Current.Provider.Should().Be("claude");
+            stream.Current.Session!.Percent.Should().Be(20);
+            if (completeStatus) stream.Current.ServiceStatus!.Indicator.Should().Be(ProviderStatusIndicator.Minor);
+            release.Task.IsCompleted.Should().BeFalse();
+        }
+        finally
+        {
+            status.TrySetResult(null); release.TrySetResult();
+            await first.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        (await stream.MoveNextAsync()).Should().BeTrue(); stream.Current.Provider.Should().Be("gemini");
+        (await stream.MoveNextAsync()).Should().BeFalse();
+        _mockCacheService.SetCallCount.Should().Be(2);
+    }
+
+    [TestMethod]
+    public async Task GetCostsAsync_DisposedDuringScan_DrainsCompletedLedgerWrites()
+    {
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var written = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var ledger = new Mock<ICostLedger>();
+        ledger.Setup(l => l.RecordScansAsync(It.IsAny<IReadOnlyList<CostData>>(), It.IsAny<DateTime?>(), It.IsAny<CancellationToken>()))
+            .Returns((IReadOnlyList<CostData> scans, DateTime? _, CancellationToken ct) =>
+            {
+                scans.Should().ContainSingle().Which.Provider.Should().Be("claude");
+                ct.IsCancellationRequested.Should().BeFalse(); started.SetResult(); return written.Task;
+            });
+        _mockWslService.BatchHandler = async (_, callback, ct) =>
+        {
+            callback!(0, CostResult("claude", tokens: 100));
+            await Task.Delay(Timeout.Infinite, ct);
+            return [];
+        };
+        var stream = LedgerCostService(ledger.Object).GetCostsAsync(["claude", "codex"]).GetAsyncEnumerator();
+        (await stream.MoveNextAsync()).Should().BeTrue();
+        var disposal = stream.DisposeAsync().AsTask();
+        try
+        {
+            await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await Task.WhenAny(disposal, Task.Delay(150));
+            disposal.IsCompleted.Should().BeFalse();
+        }
+        finally { written.TrySetResult(); await disposal.WaitAsync(TimeSpan.FromSeconds(5)); }
+    }
+
+    [TestMethod]
+    public async Task GetCostsAsync_LedgerWriteFails_ReleasesGateAndAllowsNextScan()
+    {
+        var ledger = new Mock<ICostLedger>();
+        ledger.Setup(l => l.RecordScansAsync(It.IsAny<IReadOnlyList<CostData>>(), It.IsAny<DateTime?>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new IOException("disk unavailable"));
+        _mockWslService.BatchHandler = (_, callback, _) =>
+        {
+            var cost = CostResult("claude", tokens: 100); callback!(0, cost);
+            return Task.FromResult<IReadOnlyList<WslResult>>([cost]);
+        };
+        var service = LedgerCostService(ledger.Object);
+        (await CollectCostsAsync(service, ["claude"])).Single().Cost.Should().NotBeNull();
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        await foreach (var result in service.GetCostsAsync(["claude"], forceRefresh: true).WithCancellation(deadline.Token))
+            result.Cost.Should().NotBeNull();
+        ledger.Verify(l => l.RecordScansAsync(It.IsAny<IReadOnlyList<CostData>>(), It.IsAny<DateTime?>(), It.IsAny<CancellationToken>()), Times.Exactly(2));
+    }
 }

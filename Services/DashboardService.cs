@@ -27,6 +27,13 @@ public sealed class DashboardService : IDashboardService
     private readonly IApiBillingService? _apiBilling;
     private ApiCreditsInfo? _apiCredits;
     private int _billingGeneration;
+    private BillingScope? _billingScope;
+    private readonly record struct BillingScope(decimal Monthly, int Day, bool Developer);
+
+    private BillingScope CurrentBillingScope() => new(
+        ApiCreditsCalculator.NormalizeMonthlyUsd(_settings.Settings.ApiCreditsMonthlyUsd),
+        _settings.Settings.ApiCreditsCycleStartDay is >= 1 and <= 28 ? _settings.Settings.ApiCreditsCycleStartDay : 1,
+        _settings.Settings.DeveloperModeEnabled);
 
     public DashboardService(ISettingsService settings, UsageHistoryStore history, UsageHistoryPersistence persistence,
         IActivityLog activity, ICodexBarService cli, ILogger<DashboardService> logger, TimeProvider? timeProvider = null,
@@ -64,22 +71,39 @@ public sealed class DashboardService : IDashboardService
 
     private ApiCreditsInfo? CurrentApiCredits()
     {
-        var credits = Volatile.Read(ref _apiCredits);
-        if (credits?.State == ApiCreditsState.Ok && credits.FetchedAtUtc is { } fetched)
-            return credits with { IsStale = credits.IsStale || _clock.GetUtcNow().UtcDateTime - fetched > TimeSpan.FromMinutes(15) };
-        return credits;
+        lock (_gate)
+        {
+            var credits = _apiCredits;
+            var scope = CurrentBillingScope();
+            var now = _clock.GetUtcNow().UtcDateTime;
+            var window = ApiCreditsCalculator.GetCycleWindow(scope.Day, now);
+            if (credits == null || _billingScope != scope || credits.CycleStart != DateOnly.FromDateTime(window.StartUtc) ||
+                credits.CycleEnd != DateOnly.FromDateTime(window.EndUtc)) return null;
+            if (credits.State == ApiCreditsState.Ok && credits.FetchedAtUtc is { } fetched)
+            {
+                var current = ApiCreditsCalculator.BuildOk(scope.Monthly, credits.SpentUsd, scope.Day, now, fetched);
+                return credits with { DaysLeft = current.DaysLeft, PaceUsdPerDay = current.PaceUsdPerDay,
+                    IsStale = credits.IsStale || current.IsStale };
+            }
+            return credits;
+        }
     }
 
     /// <summary>Independent of usage/CLI cost scans; all billing work runs away from the UI context.</summary>
     public async Task RefreshApiCreditsAsync(bool force, CancellationToken ct = default)
     {
         if (_apiBilling == null) return;
-        var generation = Interlocked.Increment(ref _billingGeneration);
+        int generation;
+        BillingScope scope;
+        lock (_gate) { generation = ++_billingGeneration; scope = CurrentBillingScope(); }
         try
         {
             var result = await Task.Run(() => _apiBilling.GetAsync(force, ct), ct).ConfigureAwait(false);
-            if (!ct.IsCancellationRequested && generation == Volatile.Read(ref _billingGeneration))
-                Volatile.Write(ref _apiCredits, result);
+            lock (_gate)
+            {
+                if (!ct.IsCancellationRequested && generation == _billingGeneration && scope == CurrentBillingScope())
+                { _apiCredits = result; _billingScope = scope; }
+            }
         }
         catch (Exception)
         {

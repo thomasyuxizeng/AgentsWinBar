@@ -182,6 +182,20 @@ public class WslBatchProtocolTests
     }
 
     [TestMethod]
+    [TestCategory("BashIntegration")]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task BuildScript_RealBashOversizedOutput_ReturnsFailedFrameAndPreservesSibling(bool stderr)
+    {
+        var command = "head -c 4198400 /dev/zero" + (stderr ? " >&2" : "");
+        var results = await RunInBashAsync([new(command, TimeSpan.FromSeconds(5)),
+            new("printf sibling", TimeSpan.FromSeconds(5))], WslBatchProtocol.CreateMarker());
+        results[0]!.Success.Should().BeFalse(); results[0]!.Output.Should().BeEmpty();
+        results[0]!.Error.Should().Contain("output limit exceeded");
+        results[1]!.Success.Should().BeTrue(); results[1]!.Output.Should().Be("sibling");
+    }
+
+    [TestMethod]
     public void TryParseLine_InvalidUtf8_UsesReplacementCharactersWithoutLosingFrame()
     {
         var marker = WslBatchProtocol.CreateMarker();
@@ -191,6 +205,8 @@ public class WslBatchProtocolTests
 
     private static async Task<WslResult?[]> RunInBashAsync(WslBatchCommand[] commands, string marker)
     {
+        if (Environment.GetEnvironmentVariable("CODEXBARWIN_SKIP_BASH_INTEGRATION") == "1")
+            Assert.Inconclusive("Bash/WSL execution disabled for this test run");
         const string prerequisites = "command -v timeout && command -v flock && command -v base64";
         // Prefer the real thing: WSL launched exactly like production (--exec, no default-shell re-parsing).
         // Otherwise a Unix-style bash, but never the System32 bash.exe stub, which is the WSL launcher and
@@ -306,10 +322,63 @@ public class WslBatchProtocolTests
 
     private sealed class ChannelReader(System.Threading.Channels.ChannelReader<string> channel) : TextReader
     {
-        public override async ValueTask<string?> ReadLineAsync(CancellationToken cancellationToken)
+        private string _pending = "";
+        public override async ValueTask<int> ReadAsync(Memory<char> buffer, CancellationToken cancellationToken = default)
         {
-            if (!await channel.WaitToReadAsync(cancellationToken)) return null;
-            return await channel.ReadAsync(cancellationToken);
+            if (_pending.Length == 0)
+            {
+                if (!await channel.WaitToReadAsync(cancellationToken)) return 0;
+                _pending = await channel.ReadAsync(cancellationToken) + "\n";
+            }
+            var count = Math.Min(buffer.Length, _pending.Length);
+            _pending.AsMemory(0, count).CopyTo(buffer);
+            _pending = _pending[count..];
+            return count;
         }
+    }
+
+    [TestMethod]
+    public async Task ReadResultsAsync_OversizedStartupLine_RejectsBeforeBufferingWholeLine()
+    {
+        using var reader = new StringReader(new string('x', WslBatchProtocol.MaxFrameChars + 1));
+        Func<Task> read = () => WslBatchProtocol.ReadResultsAsync(reader, WslBatchProtocol.CreateMarker(), new WslResult?[1], null, default);
+        await read.Should().ThrowAsync<WslOutputLimitException>().WithMessage("*output limit exceeded*");
+    }
+
+    [TestMethod]
+    public async Task ReadResultsAsync_BatchBudgetExceeded_PreservesAlreadyPublishedFrame()
+    {
+        var marker = WslBatchProtocol.CreateMarker();
+        var first = Frame(marker, 0, 0, "ok", "");
+        // Keep the first chunk within budget; the following chunk crosses it.
+        using var reader = new StringReader(first + "\n" + new string('\n', 8192));
+        var results = new WslResult?[2];
+        Func<Task> read = () => WslBatchProtocol.ReadResultsAsync(reader, marker, results, null, default,
+            new WslOutputReader.Budget(4096));
+        await read.Should().ThrowAsync<WslOutputLimitException>();
+        results[0]!.Output.Should().Be("ok"); results[1].Should().BeNull();
+    }
+
+    [TestMethod]
+    public void TryParseLine_CombinedPayloadExceedsCommandBudget_ReturnsScopedFailure()
+    {
+        var marker = WslBatchProtocol.CreateMarker();
+        var line = Frame(marker, 0, 0, new string('x', WslOutputReader.CommandLimitBytes / 2),
+            new string('y', WslOutputReader.CommandLimitBytes / 2 + 1));
+        WslBatchProtocol.TryParseLine(line, marker, 1, out var index, out var result).Should().BeTrue();
+        index.Should().Be(0); result!.Success.Should().BeFalse();
+        result.Output.Should().BeEmpty(); result.Error.Should().Contain("output limit exceeded");
+    }
+
+    [TestMethod]
+    public void BuildScript_OutputBounds_LimitsTemporaryFilesBeforeBase64AndBoundsBatchSize()
+    {
+        var script = WslBatchProtocol.BuildScript([new("true", TimeSpan.FromSeconds(5))], WslBatchProtocol.CreateMarker());
+        script.Should().Contain("ulimit -f 4096 || exit 125");
+        script.IndexOf("cbw_size=").Should().BeLessThan(script.IndexOf("cbw_out=$(base64"));
+        script.Should().Contain("cbw_exit=122").And.Contain("output limit exceeded");
+        Action oversized = () => WslBatchProtocol.BuildScript(Enumerable.Repeat(new WslBatchCommand("true", TimeSpan.FromSeconds(5)),
+            WslBatchProtocol.MaxCommands + 1).ToArray(), WslBatchProtocol.CreateMarker());
+        oversized.Should().Throw<ArgumentOutOfRangeException>();
     }
 }

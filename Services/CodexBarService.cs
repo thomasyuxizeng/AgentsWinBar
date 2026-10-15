@@ -287,19 +287,21 @@ public class CodexBarService : ICodexBarService
             }
             // Results that completed before a cancellation (e.g. the dashboard closed mid-scan) are complete and
             // worth keeping; the snapshot only ever holds complete results.
-            await SaveCostStoreAsync();
-            if (_costLedger != null)
+            try
             {
-                List<CostData> scansToRecord;
-                lock (_costCache) scansToRecord = [.. ledgerScans];
-                if (scansToRecord.Count > 0)
+                await SaveCostStoreAsync();
+                if (_costLedger != null)
                 {
-                    Helpers.AsyncHelper.SafeFireAndForget(
-                        _costLedger.RecordScansAsync(scansToRecord, _timeProvider.GetUtcNow().UtcDateTime),
-                        onError: ex => _logger.LogDebug(ex, "Cost ledger update failed"));
+                    List<CostData> scansToRecord;
+                    lock (_costCache) scansToRecord = [.. ledgerScans];
+                    if (scansToRecord.Count > 0)
+                    {
+                        try { await _costLedger.RecordScansAsync(scansToRecord, _timeProvider.GetUtcNow().UtcDateTime); }
+                        catch (Exception ex) { _logger.LogDebug(ex, "Cost ledger update failed"); }
+                    }
                 }
             }
-            _costGate.Release();
+            finally { _costGate.Release(); }
         }
     }
 
@@ -522,9 +524,12 @@ public class CodexBarService : ICodexBarService
         void Complete(int index, UsageData data)
         {
             ct.ThrowIfCancellationRequested();
-            if (results[index] != null) return;
-            results[index] = data;
-            onCompleted?.Invoke(data);
+            lock (results)
+            {
+                if (results[index] != null) return;
+                results[index] = data;
+                onCompleted?.Invoke(data);
+            }
         }
 
         if (_settingsService.Settings.DeveloperModeEnabled)
@@ -538,6 +543,17 @@ public class CodexBarService : ICodexBarService
             ct.ThrowIfCancellationRequested();
             var commands = providers.Select(BuildProviderCommand).ToArray();
             var retryInIndividualShell = new bool[providers.Count];
+            var publications = new Task?[providers.Count];
+            async Task PublishAsync(int index, WslResult result)
+            {
+                var status = await AwaitPrefetchedStatusAsync(providers[index], prefetchTasks, ct);
+                ct.ThrowIfCancellationRequested();
+                Complete(index, InterpretProviderResult(providers[index], result, status, generations[index]));
+            }
+            void SchedulePublication(int index, WslResult result)
+            {
+                if (publications[index] == null) publications[index] = PublishAsync(index, result);
+            }
             async Task RetryProviderAsync(int index)
             {
                 if (retryInIndividualShell[index])
@@ -561,18 +577,7 @@ public class CodexBarService : ICodexBarService
                         retryInIndividualShell[index] = true;
                         return;
                     }
-                    if (results[index] == null)
-                    {
-                        ProviderStatus? pStatus = null;
-                        if (prefetchTasks.TryGetValue(providers[index], out var task))
-                        {
-                            // The callback runs on the UI thread. Leave pending statuses to the
-                            // bounded asynchronous wait after the batch has finished.
-                            if (!task.IsCompleted) return;
-                            pStatus = task.IsCompletedSuccessfully ? task.Result : null;
-                        }
-                        Complete(index, InterpretProviderResult(providers[index], result, pStatus, generations[index]));
-                    }
+                    SchedulePublication(index, result);
                 }, ct);
                 ct.ThrowIfCancellationRequested();
                 if (batch == null || batch.Count != commands.Length)
@@ -586,10 +591,10 @@ public class CodexBarService : ICodexBarService
                     }
                     else
                     {
-                        var pStatus = await AwaitPrefetchedStatusAsync(providers[i], prefetchTasks, ct);
-                        Complete(i, InterpretProviderResult(providers[i], batch[i], pStatus, generations[i]));
+                        SchedulePublication(i, batch[i]);
                     }
                 }
+                await Task.WhenAll(publications.OfType<Task>());
                 await Task.WhenAll(Enumerable.Range(0, providers.Count)
                     .Where(i => results[i] == null && retryInIndividualShell[i]).Select(RetryProviderAsync));
             }
@@ -599,9 +604,11 @@ public class CodexBarService : ICodexBarService
                 ct.ThrowIfCancellationRequested();
                 _logger.LogWarning(ex, "WSL batch unavailable; retrying unfinished providers individually");
                 RecordBatchFallback("wsl", ex.Message);
+                await Task.WhenAll(publications.OfType<Task>());
                 await Task.WhenAll(Enumerable.Range(0, providers.Count).Where(i => results[i] == null)
                     .Select(RetryProviderAsync));
             }
+            finally { await Task.WhenAll(publications.OfType<Task>()); }
         }
         ct.ThrowIfCancellationRequested();
         Interlocked.Exchange(ref _isFirstFetch, 0);

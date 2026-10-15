@@ -78,6 +78,121 @@ public class DashboardServiceTests
         _service.GetSnapshot([new() { Provider = "claude" }], null).Providers.Should().HaveCount(1);
     }
 
+    private void UseBilling(Mock<IApiBillingService> billing) =>
+        _service = new(_settings.Object, _history, _persistence, _activity, _cli.Object,
+            NullLogger<DashboardService>.Instance, _clock, apiBilling: billing.Object);
+
+    private ApiCreditsInfo? Credits() => _service.GetSnapshot([new() { Provider = "claude" }], null).Providers.Single().ApiCredits;
+    private ApiCreditsInfo BillingResult(decimal spent = 100) => CodexBarWin.Helpers.ApiCreditsCalculator.BuildOk(
+        _settings.Object.Settings.ApiCreditsMonthlyUsd, spent, _settings.Object.Settings.ApiCreditsCycleStartDay,
+        _clock.Now.UtcDateTime, _clock.Now.UtcDateTime);
+
+    [TestMethod]
+    public async Task GetSnapshot_CycleRollsOver_WithholdsPreviousCycleSpend()
+    {
+        _clock.Now = new(2026, 10, 31, 23, 59, 0, TimeSpan.Zero);
+        var billing = new Mock<IApiBillingService>();
+        billing.Setup(s => s.GetAsync(false, It.IsAny<CancellationToken>())).ReturnsAsync(BillingResult(190));
+        UseBilling(billing);
+        await _service.RefreshApiCreditsAsync(false);
+        Credits()!.SpentUsd.Should().Be(190);
+        _clock.Now = _clock.Now.AddMinutes(2);
+        Credits().Should().BeNull();
+    }
+
+    [TestMethod]
+    public async Task GetSnapshot_UtcMidnightWithinCycle_RecomputesDaysAndPace()
+    {
+        _clock.Now = new(2026, 10, 15, 23, 59, 0, TimeSpan.Zero);
+        var billing = new Mock<IApiBillingService>();
+        billing.Setup(s => s.GetAsync(false, It.IsAny<CancellationToken>())).ReturnsAsync(BillingResult());
+        UseBilling(billing);
+        await _service.RefreshApiCreditsAsync(false);
+        var before = Credits()!;
+        _clock.Now = _clock.Now.AddMinutes(2);
+        var after = Credits()!;
+        after.DaysLeft.Should().Be(before.DaysLeft - 1);
+        after.PaceUsdPerDay.Should().Be(after.RemainingUsd / after.DaysLeft);
+        after.FetchedAtUtc.Should().Be(before.FetchedAtUtc); after.IsStale.Should().BeFalse();
+    }
+
+    [TestMethod]
+    [DataRow("pool")]
+    [DataRow("day")]
+    [DataRow("mode")]
+    public async Task GetSnapshot_SettingsChangeWhileReplacementPending_WithholdsIncompatibleResult(string setting)
+    {
+        var pending = new TaskCompletionSource<ApiCreditsInfo>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var billing = new Mock<IApiBillingService>();
+        billing.SetupSequence(s => s.GetAsync(false, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(BillingResult()).Returns(pending.Task);
+        UseBilling(billing);
+        await _service.RefreshApiCreditsAsync(false);
+        Credits().Should().NotBeNull();
+        var values = _settings.Object.Settings;
+        if (setting == "pool") values.ApiCreditsMonthlyUsd = 300;
+        else if (setting == "day") values.ApiCreditsCycleStartDay = 5;
+        else values.DeveloperModeEnabled = true;
+        var refresh = _service.RefreshApiCreditsAsync(false);
+        Credits().Should().BeNull();
+        pending.SetResult(BillingResult());
+        await refresh;
+        Credits().Should().NotBeNull();
+    }
+
+    [TestMethod]
+    public async Task RefreshApiCreditsAsync_OldRequestFinishesLast_PreservesNewerPublication()
+    {
+        var old = new TaskCompletionSource<ApiCreditsInfo>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var billing = new Mock<IApiBillingService>();
+        billing.Setup(s => s.GetAsync(false, It.IsAny<CancellationToken>())).Returns(() => { started.SetResult(); return old.Task; });
+        billing.Setup(s => s.GetAsync(true, It.IsAny<CancellationToken>())).ReturnsAsync(BillingResult(120));
+        UseBilling(billing);
+        var refresh = _service.RefreshApiCreditsAsync(false);
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await _service.RefreshApiCreditsAsync(true);
+        old.SetResult(BillingResult(10)); await refresh;
+        Credits()!.SpentUsd.Should().Be(120);
+    }
+
+    [TestMethod]
+    public async Task RefreshApiCreditsAsync_GenerationAllocation_UsesPublicationLock()
+    {
+        var billing = new Mock<IApiBillingService>();
+        billing.Setup(s => s.GetAsync(false, It.IsAny<CancellationToken>())).ReturnsAsync(BillingResult());
+        UseBilling(billing);
+        var flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+        var gate = typeof(DashboardService).GetField("_gate", flags)!.GetValue(_service)!;
+        var generation = typeof(DashboardService).GetField("_billingGeneration", flags)!;
+        using var attempting = new ManualResetEventSlim();
+        Task refresh;
+        lock (gate)
+        {
+            refresh = Task.Run(() => { attempting.Set(); return _service.RefreshApiCreditsAsync(false); });
+            attempting.Wait(TimeSpan.FromSeconds(5)).Should().BeTrue();
+            // A request cannot advance the generation while a publication owns the same gate.
+            SpinWait.SpinUntil(() => (int)generation.GetValue(_service)! != 0, TimeSpan.FromMilliseconds(200)).Should().BeFalse();
+        }
+        await refresh.WaitAsync(TimeSpan.FromSeconds(5));
+        Credits()!.SpentUsd.Should().Be(100);
+    }
+
+    [TestMethod]
+    public async Task RefreshApiCreditsAsync_CanceledUncooperativeBilling_DoesNotPublishLateResult()
+    {
+        var pending = new TaskCompletionSource<ApiCreditsInfo>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var billing = new Mock<IApiBillingService>();
+        billing.Setup(s => s.GetAsync(false, It.IsAny<CancellationToken>())).Returns(() => { started.SetResult(); return pending.Task; });
+        UseBilling(billing);
+        using var cts = new CancellationTokenSource();
+        var refresh = _service.RefreshApiCreditsAsync(false, cts.Token);
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        cts.Cancel(); pending.SetResult(BillingResult()); await refresh;
+        Credits().Should().BeNull();
+    }
+
     [TestMethod]
     public void GetSnapshot_CapturedState_PassesHistoryActivityCostCacheAndClockWithoutCallingCli()
     {

@@ -28,6 +28,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private readonly IEarlyResetStore? _earlyResetStore;
     private readonly IBatterySaverMonitor? _batterySaverMonitor;
     private readonly IDashboardService? _dashboardService;
+    private CancellationTokenSource? _apiCreditsCts;
+    private Task _apiCreditsTask = Task.CompletedTask;
+    private bool _apiCreditsPending;
+    private bool _apiCreditsForcePending;
 
     public bool ShouldPlayResetAnimation => ResetAnimationGate.ShouldAnimate(
         _settingsService.Settings.ResetAnimationMode, _batterySaverMonitor?.BatterySaverActive ?? false);
@@ -214,6 +218,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         _stopVersion++;
         _stopped = true;
+        CancelApiCredits();
         _refreshPending = false;
         _refreshCts?.Cancel();
         _timerCts?.Cancel();
@@ -736,9 +741,41 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         // Only the dashboard shows the API credits: without a visible one (or on a locked screen) a background poll is
         // wasted network wake-ups. The dashboard asks again when it becomes visible; a manual refresh (force) always goes through.
-        if (_dashboardService == null || (!force && (Volatile.Read(ref _dashboardVisibility) == 0 || IsSessionLocked))) return;
-        _dashboardService.RefreshApiCreditsAsync(force).SafeFireAndForget(
+        if (_dashboardService == null || _disposed || _stopped || _exiting ||
+            (!force && (Volatile.Read(ref _dashboardVisibility) == 0 || IsSessionLocked))) return;
+        if (_apiCreditsCts != null)
+        {
+            _apiCreditsPending = true;
+            _apiCreditsForcePending |= force;
+            return;
+        }
+        var cts = new CancellationTokenSource();
+        _apiCreditsCts = cts;
+        _apiCreditsTask = RefreshApiCreditsCoreAsync(force, cts);
+        _apiCreditsTask.SafeFireAndForget(
             onError: _ => _logger.LogDebug("Background API billing refresh did not complete"));
+    }
+
+    private async Task RefreshApiCreditsCoreAsync(bool force, CancellationTokenSource cts)
+    {
+        try { await _dashboardService!.RefreshApiCreditsAsync(force, cts.Token); }
+        finally
+        {
+            _apiCreditsCts = null;
+            cts.Dispose();
+            var pending = _apiCreditsPending;
+            var forcePending = _apiCreditsForcePending;
+            _apiCreditsPending = false;
+            _apiCreditsForcePending = false;
+            if (pending) RefreshApiCredits(forcePending);
+        }
+    }
+
+    private void CancelApiCredits()
+    {
+        _apiCreditsPending = false;
+        _apiCreditsForcePending = false;
+        _apiCreditsCts?.Cancel();
     }
 
     /// <summary>
@@ -782,6 +819,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _logger.LogInformation("Exit requested");
         var activeRefresh = _refreshCompletion?.Task;
         var activeDemand = _costRefreshCompletion?.Task;
+        var activeBilling = _apiCreditsTask;
         var activeBackground = Task.WhenAll(_retiredCostRefreshes,
             _backgroundCostRefreshCompletion?.Task ?? Task.CompletedTask);
         Stop();
@@ -789,6 +827,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
         // Iterator disposal waits for the service producer to persist completed costs even on cancellation.
         if (activeDemand != null) await activeDemand;
         await activeBackground;
+        try { await activeBilling; }
+        catch (Exception) { _logger.LogDebug("Background API billing refresh did not complete on exit"); }
         if (!_settingsService.Settings.DeveloperModeEnabled) await _historyPersistence.SaveAsync(force: true);
         if (_earlyResetStore != null) await _earlyResetStore.FlushAsync();
         ExitRequested?.Invoke(this, EventArgs.Empty);
@@ -883,6 +923,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
         try
         {
             if (_disposed || _stopped || _exiting) return;
+            CancelApiCredits();
+            RefreshApiCredits(false);
             _logger.LogDebug("Settings changed, recreating timer and refreshing data");
             _resetTracker.RetainProviders(_settingsService.Settings.Providers.Where(p => p.IsEnabled).Select(p => p.Id));
             ResetAdaptiveRefresh();

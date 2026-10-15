@@ -39,6 +39,32 @@ public partial class ApiBillingServiceTests
     private int RequestCount(string path) => _handler.Requests.Count(url => new Uri(url).AbsolutePath.EndsWith(path, StringComparison.Ordinal));
 
     [TestMethod]
+    [DataRow("cost_report")]
+    [DataRow("api_keys")]
+    [DataRow("users")]
+    [DataRow("usage_report/messages")]
+    public async Task GetAsync_CanceledDuringUncooperativeResponse_StopsFollowupsAndKeepsPreviousCache(string endpoint)
+    {
+        EnableBreakdown();
+        var previous = await _service.GetAsync(false, default);
+        using var cts = new CancellationTokenSource();
+        _handler.Requests.Clear();
+        Task<HttpResponseMessage> Respond(HttpRequestMessage request, CancellationToken _)
+        {
+            if (request.RequestUri!.AbsolutePath.EndsWith(endpoint, StringComparison.Ordinal)) cts.Cancel();
+            return JsonResponse(request.RequestUri.AbsolutePath.EndsWith("cost_report", StringComparison.Ordinal)
+                ? TokenCosts.Replace("9517", "15000") : ReportFor(request));
+        }
+        _handler.Respond = Respond; _handler.BreakdownRespond = Respond;
+        (await _service.GetAsync(true, cts.Token)).State.Should().Be(ApiCreditsState.Unavailable);
+        _handler.Requests.Last().Should().Contain(endpoint);
+        var requestCount = _handler.Requests.Count;
+        var cached = await _service.GetAsync(false, default);
+        cached.Should().BeEquivalentTo(previous);
+        _handler.Requests.Should().HaveCount(requestCount);
+    }
+
+    [TestMethod]
     public async Task GetAsync_OwnershipStopsMatching_DiscardsPreviousYouBreakdown()
     {
         EnableBreakdown();
@@ -168,16 +194,37 @@ public partial class ApiBillingServiceTests
     }
 
     [TestMethod]
-    public async Task GetAsync_BreakdownFailsAfterSuccess_ReusesOnlySameCycleBreakdown()
+    [DataRow(150)]
+    [DataRow(80)]
+    public async Task GetAsync_BreakdownFailsAfterSuccess_OmitsOldAmountsFromFreshTotal(int spent)
     {
-        EnableBreakdown(); var first = await _service.GetAsync(false, default);
+        EnableBreakdown();
+        (await _service.GetAsync(false, default)).HasBreakdown.Should().BeTrue();
+        _clock.Now = _clock.Now.AddDays(1);
+        _handler.Respond = (_, _) => JsonResponse("{\"data\":[{\"results\":[{\"currency\":\"USD\",\"amount\":\"" + spent * 100 + "\"}]}],\"has_more\":false}");
         _handler.BreakdownRespond = (_, _) => JsonResponse("", HttpStatusCode.ServiceUnavailable);
         var fallback = await _service.GetAsync(true, default);
-        fallback.State.Should().Be(ApiCreditsState.Ok); fallback.HasBreakdown.Should().BeTrue();
-        fallback.Contributors.Should().Equal(first.Contributors);
-        _clock.Now = _clock.Now.AddMonths(1);
-        var next = await _service.GetAsync(true, default);
-        next.State.Should().Be(ApiCreditsState.Ok); next.HasBreakdown.Should().BeFalse(); next.Contributors.Should().BeEmpty();
+        fallback.State.Should().Be(ApiCreditsState.Ok); fallback.IsStale.Should().BeFalse();
+        fallback.SpentUsd.Should().Be(spent); fallback.FetchedAtUtc.Should().Be(_clock.Now.UtcDateTime);
+        fallback.HasBreakdown.Should().BeFalse(); fallback.Contributors.Should().BeEmpty();
+        fallback.UnattributedUsd.Should().Be(spent);
+        (await _service.GetAsync(false, default)).HasBreakdown.Should().BeFalse();
+    }
+
+    [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task GetAsync_NegativeAdjustmentExceedsUnattributedCost_WithholdsUnreconciledBreakdown(bool onlyAdjustment)
+    {
+        EnableBreakdown();
+        var costs = onlyAdjustment ? """{"data":[{"results":[{"currency":"USD","amount":"-2000","cost_type":"adjustment"}]}],"has_more":false}"""
+            : TokenCosts.Replace("9517", "10000").Replace("\"16\"", "\"-2000\"");
+        _handler.Respond = (_, _) => JsonResponse(costs);
+        var result = await _service.GetAsync(false, default);
+        result.State.Should().Be(ApiCreditsState.Ok); result.IsStale.Should().BeFalse();
+        result.SpentUsd.Should().Be(onlyAdjustment ? -20m : 80m);
+        result.RemainingUsd.Should().Be(onlyAdjustment ? 220m : 120m);
+        result.HasBreakdown.Should().BeFalse(); result.Contributors.Should().BeEmpty();
     }
 
     [TestMethod]

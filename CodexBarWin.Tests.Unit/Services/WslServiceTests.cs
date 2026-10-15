@@ -203,6 +203,7 @@ public class WslServiceTests
     [TestCategory("Integration")]
     public async Task ExecuteAsync_SimpleCommand_ReturnsResult()
     {
+        RequireWslExecution();
         // This test requires WSL to be installed
         // Arrange
         var service = new WslService(_mockLogger.Object, _mockSettingsService);
@@ -219,7 +220,7 @@ public class WslServiceTests
     public async Task ExecuteAsync_EmptyCommand_ReturnsResult()
     {
         // Arrange
-        var service = new WslService(_mockLogger.Object, _mockSettingsService);
+        var service = new WslService(_mockLogger.Object, TimeProvider.System, (_, _) => Task.FromResult(new WslResult()));
 
         // Act
         var result = await service.ExecuteAsync("");
@@ -236,6 +237,7 @@ public class WslServiceTests
     [TestCategory("Integration")]
     public async Task CheckWslStatusAsync_ReturnsStatusResult()
     {
+        RequireWslExecution();
         // Arrange
         var service = new WslService(_mockLogger.Object, _mockSettingsService);
 
@@ -271,6 +273,7 @@ public class WslServiceTests
     [TestCategory("Integration")]
     public async Task IsWslInstalledAsync_ReturnsBool()
     {
+        RequireWslExecution();
         // Arrange
         var service = new WslService(_mockLogger.Object, _mockSettingsService);
 
@@ -290,6 +293,7 @@ public class WslServiceTests
     [TestCategory("Integration")]
     public async Task GetDistrosAsync_ReturnsList()
     {
+        RequireWslExecution();
         // Arrange
         var service = new WslService(_mockLogger.Object, _mockSettingsService);
 
@@ -540,7 +544,7 @@ public class WslServiceTests
     public async Task ExecuteAsync_LogsCommandExecution()
     {
         // Arrange
-        var service = new WslService(_mockLogger.Object, _mockSettingsService);
+        var service = new WslService(_mockLogger.Object, TimeProvider.System, (_, _) => Task.FromResult(new WslResult()));
 
         // Act
         await service.ExecuteAsync("test command");
@@ -557,4 +561,34 @@ public class WslServiceTests
     }
 
     #endregion
+
+    private static void RequireWslExecution()
+    {
+        if (Environment.GetEnvironmentVariable("CODEXBARWIN_SKIP_BASH_INTEGRATION") == "1")
+            Assert.Inconclusive("Bash/WSL execution disabled for this test run");
+    }
+
+    [TestMethod]
+    public async Task ReadOutputAsync_OutputLimitExceeded_CancelsProcessLifetimeAndReturnsClearFailure()
+    {
+        using var cts = new CancellationTokenSource();
+        using var reader = new StringReader("too much output");
+        Func<Task> read = () => WslService.ReadOutputAsync(reader, new WslOutputReader.Budget(4), cts);
+        var failure = await read.Should().ThrowAsync<WslOutputLimitException>();
+        cts.IsCancellationRequested.Should().BeTrue();
+        var result = WslService.ExecutionFailure(failure.Which);
+        result.Success.Should().BeFalse(); result.Output.Should().BeEmpty();
+        result.Error.Should().Contain("output limit exceeded");
+    }
+
+    [TestMethod]
+    public async Task ExecuteAsync_CanceledBeforeStart_DoesNotInvokeExecutor()
+    {
+        var calls = 0;
+        var service = new WslService(_mockLogger.Object, TimeProvider.System, (_, _) =>
+        { calls++; return Task.FromResult(new WslResult { Success = true }); });
+        using var cts = new CancellationTokenSource(); cts.Cancel();
+        var result = await service.ExecuteAsync("unused command", cts.Token);
+        calls.Should().Be(0); result.Success.Should().BeFalse();
+    }
 }

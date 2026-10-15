@@ -95,14 +95,17 @@ public class WslService : IWslService
         Process? process = null;
         try
         {
+            ct.ThrowIfCancellationRequested();
             if (_commandExecutor != null) return await _commandExecutor(command, cts.Token);
             process = new Process { StartInfo = psi };
             process.Start();
 
-            var outputTask = process.StandardOutput.ReadToEndAsync(cts.Token);
-            var errorTask = process.StandardError.ReadToEndAsync(cts.Token);
-
-            await process.WaitForExitAsync(cts.Token);
+            var budget = new WslOutputReader.Budget(WslOutputReader.CommandLimitBytes);
+            var outputTask = ReadOutputAsync(process.StandardOutput, budget, cts);
+            var errorTask = ReadOutputAsync(process.StandardError, budget, cts);
+            try { await Task.WhenAll(outputTask, errorTask, process.WaitForExitAsync(cts.Token)); }
+            catch (Exception) when (OutputLimitExceeded(outputTask, errorTask))
+            { return ExecutionFailure(new WslOutputLimitException()); }
 
             var output = await outputTask;
             var error = await errorTask;
@@ -176,10 +179,14 @@ public class WslService : IWslService
         {
             process = new Process { StartInfo = psi };
             if (!process.Start()) throw new InvalidOperationException("WSL batch process did not start");
-            errorTask = process.StandardError.ReadToEndAsync(watchdog.Token);
+            var budget = new WslOutputReader.Budget(WslOutputReader.BatchLimitBytes);
+            errorTask = ReadOutputAsync(process.StandardError, budget, watchdog);
             outputTask = WslBatchProtocol.ReadResultsAsync(process.StandardOutput, marker, results,
-                onCompleted, watchdog.Token);
+                onCompleted, watchdog.Token, budget);
             // Read while the jobs run, rather than waiting for the slowest provider.
+            // A failed reader must also stop the process and its sibling reader.
+            var first = await Task.WhenAny(outputTask, errorTask, process.WaitForExitAsync(watchdog.Token));
+            if (first.IsFaulted) await first;
             await outputTask;
             await process.WaitForExitAsync(watchdog.Token);
             var error = await errorTask;
@@ -193,7 +200,7 @@ public class WslService : IWslService
         }
         catch (Exception ex)
         {
-            failure = ex;
+            failure = OutputLimitExceeded(outputTask, errorTask) ? new WslOutputLimitException() : ex;
         }
         finally
         {
@@ -209,6 +216,16 @@ public class WslService : IWslService
         ct.ThrowIfCancellationRequested();
         if (failure != null)
         {
+            if (failure is WslOutputLimitException)
+            {
+                for (var i = 0; i < results.Length; i++)
+                {
+                    if (results[i] != null) continue;
+                    results[i] = ExecutionFailure(failure);
+                    onCompleted?.Invoke(i, results[i]!);
+                }
+                return results.Select(r => r!).ToArray();
+            }
             _logger.LogWarning(failure, "WSL batch unavailable; retrying unfinished commands individually");
             _activityLog?.RecordRefresh(new DashboardRefreshEntry
             {
@@ -243,6 +260,16 @@ public class WslService : IWslService
         Success = false, ExitCode = -1, Output = result?.Output ?? "", Error = "Command timed out"
     };
 
+    private static bool OutputLimitExceeded(params Task?[] tasks) => tasks.Any(task =>
+        task?.Exception?.Flatten().InnerExceptions.Any(ex => ex is WslOutputLimitException) == true);
+
+    internal static async Task<string> ReadOutputAsync(TextReader reader, WslOutputReader.Budget budget,
+        CancellationTokenSource cancellation)
+    {
+        try { return await WslOutputReader.ReadToEndAsync(reader, budget, cancellation.Token); }
+        catch (WslOutputLimitException) { cancellation.Cancel(); throw; }
+    }
+
     internal static WslResult ExecutionFailure(Exception exception) => new()
     {
         Success = false, Error = exception.Message,
@@ -261,6 +288,7 @@ public class WslService : IWslService
         Process? process = null;
         try
         {
+            ct.ThrowIfCancellationRequested();
             var psi = new ProcessStartInfo
             {
                 FileName = "wsl",
@@ -280,10 +308,10 @@ public class WslService : IWslService
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             cts.CancelAfter(StatusCheckTimeout);
 
-            var outputTask = process.StandardOutput.ReadToEndAsync(cts.Token);
-            var errorTask = process.StandardError.ReadToEndAsync(cts.Token);
-
-            await process.WaitForExitAsync(cts.Token);
+            var budget = new WslOutputReader.Budget(WslOutputReader.CommandLimitBytes);
+            var outputTask = ReadOutputAsync(process.StandardOutput, budget, cts);
+            var errorTask = ReadOutputAsync(process.StandardError, budget, cts);
+            await Task.WhenAll(outputTask, errorTask, process.WaitForExitAsync(cts.Token));
 
             var output = await outputTask;
             var error = await errorTask;
@@ -349,6 +377,7 @@ public class WslService : IWslService
         Process? process = null;
         try
         {
+            ct.ThrowIfCancellationRequested();
             var psi = new ProcessStartInfo
             {
                 FileName = "wsl",
@@ -365,7 +394,8 @@ public class WslService : IWslService
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             cts.CancelAfter(StatusCheckTimeout);
 
-            var output = await process.StandardOutput.ReadToEndAsync(cts.Token);
+            var output = await ReadOutputAsync(process.StandardOutput,
+                new WslOutputReader.Budget(WslOutputReader.CommandLimitBytes), cts);
             await process.WaitForExitAsync(cts.Token);
 
             return output

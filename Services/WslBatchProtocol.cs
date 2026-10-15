@@ -9,6 +9,9 @@ namespace CodexBarWin.Services;
 /// </summary>
 internal static class WslBatchProtocol
 {
+    internal const int MaxFrameChars = ((WslOutputReader.CommandLimitBytes + 2) / 3) * 4 + 256;
+    // At most 32 MiB of temporary stdout/stderr files, even if all jobs overflow together.
+    internal const int MaxCommands = 4;
     internal static string CreateMarker() => "CBW_" + Guid.NewGuid().ToString("N");
 
     internal static string Quote(string value) => "'" + value.Replace("'", "'\"'\"'") + "'";
@@ -16,13 +19,14 @@ internal static class WslBatchProtocol
     internal static string BuildScript(IReadOnlyList<WslBatchCommand> commands, string marker)
     {
         ArgumentNullException.ThrowIfNull(commands);
+        if (commands.Count > MaxCommands) throw new ArgumentOutOfRangeException(nameof(commands), "Too many WSL batch commands");
         if (!marker.StartsWith("CBW_", StringComparison.Ordinal) || marker.Length != 36 ||
             !Guid.TryParseExact(marker[4..], "N", out _))
             throw new ArgumentException("Invalid batch marker", nameof(marker));
 
         var script = new StringBuilder("""
             set +e +u +m
-            command -v timeout >/dev/null && command -v flock >/dev/null && command -v base64 >/dev/null || exit 125
+            command -v timeout >/dev/null && command -v flock >/dev/null && command -v base64 >/dev/null && command -v wc >/dev/null || exit 125
             umask 077
             cbw_dir=$(mktemp -d) || exit 125
             cbw_pids=()
@@ -54,13 +58,18 @@ internal static class WslBatchProtocol
             // are terminated too. Its background PID is also the process group ID.
             // Kill remaining descendants even if their immediate parent exits early.
             script.Append("(\n cbw_start=$SECONDS\n timeout --kill-after=2s ").Append(seconds)
-                .Append("s bash -c 'exec >\"$1\" 2>\"$2\"; exec bash -c \"$3\"' cbw \"$cbw_dir/")
+                .Append("s bash -c 'ulimit -f 4096 || exit 125; exec >\"$1\" 2>\"$2\"; exec bash -c \"$3\"' cbw \"$cbw_dir/")
                 .Append(i).Append(".out\" \"$cbw_dir/").Append(i).Append(".err\" ")
                 .Append(Quote(command.Command)).Append(" &\n cbw_job=$!\n printf '%s\\n' \"$cbw_job\" >\"$cbw_dir/")
                 .Append(i).Append(".pid\"\n wait \"$cbw_job\"\n cbw_exit=$?\n kill -KILL -- \"-$cbw_job\" 2>/dev/null || :\n rm -f -- \"$cbw_dir/")
                 .Append(i).Append(".pid\"\n cbw_elapsed=$((SECONDS - cbw_start))\n")
                 .Append(" case \"$cbw_exit\" in 137|124|143) if [ \"$cbw_elapsed\" -ge ")
                 .Append(timeoutThreshold).Append(" ]; then cbw_exit=124; fi ;; esac\n")
+                .Append(" cbw_size=$(( $(wc -c <\"$cbw_dir/").Append(i).Append(".out\") + $(wc -c <\"$cbw_dir/")
+                .Append(i).Append(".err\") ))\n")
+                .Append(" if [ \"$cbw_exit\" -eq 153 ] || [ \"$cbw_size\" -ge ").Append(WslOutputReader.CommandLimitBytes)
+                .Append(" ]; then cbw_exit=122; : >\"$cbw_dir/").Append(i).Append(".out\"; printf '%s' 'WSL command output limit exceeded (4 MiB)' >\"$cbw_dir/")
+                .Append(i).Append(".err\"; fi\n")
                 .Append(" cbw_out=$(base64 -w 0 <\"$cbw_dir/").Append(i).Append(".out\") || exit 125\n")
                 .Append(" cbw_err=$(base64 -w 0 <\"$cbw_dir/").Append(i).Append(".err\") || exit 125\n")
                 .Append(" ( flock -x 9 || exit 125\n printf '\\n%s|%s|%s|%s|%s\\n' ")
@@ -76,6 +85,7 @@ internal static class WslBatchProtocol
     {
         index = -1;
         result = null;
+        if (line.Length > MaxFrameChars) throw new WslOutputLimitException();
         if (!line.StartsWith(marker + "|", StringComparison.Ordinal)) return false;
         var parts = line.Split('|');
         if (parts.Length != 5 ||
@@ -85,8 +95,23 @@ internal static class WslBatchProtocol
             throw new InvalidDataException("Invalid WSL batch frame header");
         try
         {
-            var output = Encoding.UTF8.GetString(Convert.FromBase64String(parts[3]));
-            var error = Encoding.UTF8.GetString(Convert.FromBase64String(parts[4]));
+            // Check decoded lengths before allocating either payload.
+            static int DecodedLength(string value) => value.Length / 4 * 3 -
+                (value.EndsWith("==", StringComparison.Ordinal) ? 2 : value.EndsWith('=') ? 1 : 0);
+            if ((long)DecodedLength(parts[3]) + DecodedLength(parts[4]) > WslOutputReader.CommandLimitBytes)
+            {
+                result = new WslResult { ExitCode = -1, Error = new WslOutputLimitException().Message };
+                return true;
+            }
+            var outputBytes = Convert.FromBase64String(parts[3]);
+            var errorBytes = Convert.FromBase64String(parts[4]);
+            if ((long)outputBytes.Length + errorBytes.Length > WslOutputReader.CommandLimitBytes)
+            {
+                result = new WslResult { ExitCode = -1, Error = new WslOutputLimitException().Message };
+                return true;
+            }
+            var output = Encoding.UTF8.GetString(outputBytes);
+            var error = Encoding.UTF8.GetString(errorBytes);
             if (exit == 124)
                 error = string.IsNullOrEmpty(error) ? "Command timed out" : error + "\nCommand timed out";
             result = new WslResult { Success = exit == 0, Output = output, Error = error, ExitCode = exit };
@@ -99,9 +124,10 @@ internal static class WslBatchProtocol
     }
 
     internal static async Task ReadResultsAsync(TextReader reader, string marker, WslResult?[] results,
-        Action<int, WslResult>? onCompleted, CancellationToken ct)
+        Action<int, WslResult>? onCompleted, CancellationToken ct, WslOutputReader.Budget? budget = null)
     {
-        while (await reader.ReadLineAsync(ct) is { } line)
+        await foreach (var line in WslOutputReader.ReadLinesAsync(reader, MaxFrameChars,
+            budget ?? new WslOutputReader.Budget(WslOutputReader.BatchLimitBytes), ct))
         {
             ct.ThrowIfCancellationRequested();
             if (!TryParseLine(line, marker, results.Length, out var index, out var result)) continue;
