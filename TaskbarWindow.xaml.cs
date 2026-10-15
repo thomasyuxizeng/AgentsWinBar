@@ -5,6 +5,7 @@ using CodexBarWin.Models;
 using CodexBarWin.Services;
 using CodexBarWin.ViewModels;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.UI;
 using Microsoft.UI.Composition.SystemBackdrops;
 using Microsoft.UI.Windowing;
@@ -31,6 +32,9 @@ public sealed class TaskbarItem
     /// <summary>The selected windows, including their session-only ResetDetectedAtUtc signals.</summary>
     public UsageWindow? SessionWindow { get; set; }
     public UsageWindow? WeeklyWindow { get; set; }
+    /// <summary>Identifies each bar across rebuilds, so a reset the strip already played is not played again.</summary>
+    public string SessionResetKey => Name + "|first";
+    public string WeeklyResetKey => Name + "|second";
     public double SessionTimePercent { get; set; } = -1;
     public double WeeklyTimePercent { get; set; } = -1;
     public string SessionPace { get; set; } = string.Empty;
@@ -75,6 +79,7 @@ public sealed partial class TaskbarWindow : Window
     private bool _hiddenForFullscreen;
     private bool _wasLocked;
     private bool _closed;
+    private Microsoft.UI.Dispatching.DispatcherQueueTimer? _rebuildHold;
     private WindowZOrder.ForegroundWatcher? _foregroundWatcher;
     private DesktopAcrylicController? _acrylicController;
     private SystemBackdropConfiguration? _backdropConfiguration;
@@ -390,8 +395,34 @@ public sealed partial class TaskbarWindow : Window
         return sb.ToString();
     }
 
+    /// <summary>
+    /// A rebuild recreates every bar, which would cut a running reset animation short: while one of this window's bars
+    /// plays, the rebuild waits until it is over (the bars it then creates do not replay it, see UsageMeter.ResetKey).
+    /// </summary>
+    private bool DeferRebuildWhileResetPlays()
+    {
+        var remaining = BarResetAnimation.RemainingBusy(RootGrid.XamlRoot);
+        if (_closed || remaining <= TimeSpan.Zero) return false;
+
+        if (_rebuildHold == null)
+        {
+            _rebuildHold = DispatcherQueue.CreateTimer();
+            _rebuildHold.IsRepeating = false;
+            _rebuildHold.Tick += (timer, _) =>
+            {
+                timer.Stop();
+                try { if (!_closed) Rebuild(); }
+                catch (Exception ex) { App.Services.GetRequiredService<ILogger<TaskbarWindow>>().LogError(ex, "Deferred taskbar rebuild failed"); }
+            };
+        }
+        _rebuildHold.Interval = remaining + TimeSpan.FromMilliseconds(100);
+        _rebuildHold.Start();
+        return true;
+    }
+
     private void Rebuild()
     {
+        if (DeferRebuildWhileResetPlays()) return;
         var isLight = RootGrid.ActualTheme == ElementTheme.Light;
         var nowUtc = DateTime.UtcNow;
         var signature = ComputeSignature(_viewModel.Providers, isLight, nowUtc);
@@ -577,6 +608,7 @@ public sealed partial class TaskbarWindow : Window
     {
         _closed = true;
         _keepOnTopTimer.Stop();
+        _rebuildHold?.Stop();
         _sessionState.Locked -= OnSessionLocked;
         _sessionState.Unlocked -= OnSessionUnlocked;
         _sessionState.Resumed -= OnSessionUnlocked;

@@ -5,6 +5,7 @@ using CodexBarWin.Models;
 using CodexBarWin.Services;
 using CodexBarWin.ViewModels;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.UI.Composition.SystemBackdrops;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
@@ -28,6 +29,9 @@ public sealed class OverlayRow
     /// <summary>The selected windows, including their session-only ResetDetectedAtUtc signals.</summary>
     public UsageWindow? SessionWindow { get; set; }
     public UsageWindow? WeeklyWindow { get; set; }
+    /// <summary>Identifies each bar across rebuilds, so a reset the overlay already played is not played again.</summary>
+    public string SessionResetKey => Name + "|first";
+    public string WeeklyResetKey => Name + "|second";
     public double SessionTimePercent { get; set; } = -1;
     public string SessionText { get; set; } = string.Empty;
     public double WeeklyPercent { get; set; }
@@ -69,6 +73,7 @@ public sealed partial class OverlayWindow : Window
     private bool _hiddenForFullscreen;
     private bool _wasLocked;
     private bool _closed;
+    private Microsoft.UI.Dispatching.DispatcherQueueTimer? _rebuildHold;
     private WindowZOrder.ForegroundWatcher? _foregroundWatcher;
     private DesktopAcrylicController? _acrylicController;
     private SystemBackdropConfiguration? _backdropConfiguration;
@@ -374,8 +379,34 @@ public sealed partial class OverlayWindow : Window
         return sb.ToString();
     }
 
+    /// <summary>
+    /// A rebuild recreates every row, which would cut a running reset animation short: while one of this window's bars
+    /// plays, the rebuild waits until it is over (the bars it then creates do not replay it, see UsageMeter.ResetKey).
+    /// </summary>
+    private bool DeferRebuildWhileResetPlays()
+    {
+        var remaining = BarResetAnimation.RemainingBusy(RootGrid.XamlRoot);
+        if (_closed || remaining <= TimeSpan.Zero) return false;
+
+        if (_rebuildHold == null)
+        {
+            _rebuildHold = DispatcherQueue.CreateTimer();
+            _rebuildHold.IsRepeating = false;
+            _rebuildHold.Tick += (timer, _) =>
+            {
+                timer.Stop();
+                try { if (!_closed) Rebuild(); }
+                catch (Exception ex) { App.Services.GetRequiredService<ILogger<OverlayWindow>>().LogError(ex, "Deferred overlay rebuild failed"); }
+            };
+        }
+        _rebuildHold.Interval = remaining + TimeSpan.FromMilliseconds(100);
+        _rebuildHold.Start();
+        return true;
+    }
+
     private void Rebuild()
     {
+        if (DeferRebuildWhileResetPlays()) return;
         var nowUtc = DateTime.UtcNow;
         var signature = ComputeSignature(_viewModel.Providers, nowUtc);
         if (_lastSignature != null && _lastSignature == signature)
@@ -575,6 +606,7 @@ public sealed partial class OverlayWindow : Window
     {
         _closed = true;
         _topmostTimer.Stop();
+        _rebuildHold?.Stop();
         _sessionState.Locked -= OnSessionLocked;
         _sessionState.Unlocked -= OnSessionUnlocked;
         _sessionState.Resumed -= OnSessionUnlocked;

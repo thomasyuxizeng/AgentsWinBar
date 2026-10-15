@@ -119,6 +119,19 @@ public sealed partial class UsageMeter : UserControl
         set => SetValue(ResetFromPercentProperty, value);
     }
 
+    /// <summary>
+    /// Identifies this bar in a window that recreates its bars (the taskbar strip and the overlay): a reset the window has
+    /// already played for this key is not played again by the recreated bar. Null (the default) keeps the bar's own memory only.
+    /// </summary>
+    public static readonly DependencyProperty ResetKeyProperty =
+        DependencyProperty.Register(nameof(ResetKey), typeof(string), typeof(UsageMeter), new PropertyMetadata(null));
+
+    public string? ResetKey
+    {
+        get => (string?)GetValue(ResetKeyProperty);
+        set => SetValue(ResetKeyProperty, value);
+    }
+
     private BarResetAnimation? _resetAnimation;
     private double _fillWidth;
     private double _previousFillWidth;
@@ -166,6 +179,8 @@ public sealed partial class UsageMeter : UserControl
         var visibleSince = newValue is { } stamp ? ResetAnimationVisibility.Shared.VisibleSince(stamp) : null;
         if (!BarResetAnimationPolicy.ShouldPlay(newValue, oldValue, DateTime.UtcNow, BarResetAnimation.AnimationsEnabled, shown, BarResetAnimation.PlaybackEnabled, visibleSince)) return;
         _playedResetAt = newValue;
+        // A window that rebuilds its bars gives each a new instance: the window remembers what it already played
+        if (ResetKey is { } key && newValue is { } playedAt && BarResetAnimation.HostState(XamlRoot) is { } host && !host.TryMarkPlayed(key, playedAt)) return;
         PlayResetAnimation();
     }
 
