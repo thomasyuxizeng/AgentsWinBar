@@ -16,6 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The overlay is moved back on screen after a monitor change even when its usage data is unchanged.
 - The dashboard no longer redraws every 30 seconds while the PC is locked.
 - The API credits poll no longer runs while the PC is locked, even with the dashboard window left open. It resumes on unlock.
+- The floating overlay and the taskbar strip no longer change size when a number gains or loses a digit. They used to grow a few pixels when a bar reached 100% and shrink again afterwards, which made the panel move. Every percentage now has room for three digits, and the gap between a bar and its number is a little tighter (6 instead of 8) so the panel stays evenly padded.
+- Settings: the Reset animation box now shows the saved mode as soon as Settings opens (it stayed blank until you picked a value), and the App theme box is no longer cut off to "Use system setti". Both dropdowns sit under their labels, at the same width.
+- Dashboard: a NEEDS ATTENTION entry that lists many windows now ends in an ellipsis instead of being cut off mid-word; the full text is its tooltip.
 
 ## [1.5.1] - 2026-10-15
 
