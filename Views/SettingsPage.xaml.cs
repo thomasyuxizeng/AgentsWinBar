@@ -49,9 +49,19 @@ public sealed partial class SettingsPage : Page
         // Set theme
         ThemeComboBox.SelectedIndex = ViewModel.SelectedThemeIndex;
 
-        // Set reset animation
-        ResetAnimationComboBox.ItemsSource = ViewModel.ResetAnimationOptions;
-        ResetAnimationComboBox.SelectedValue = ViewModel.SelectedResetAnimationMode;
+        // Set reset animation. Plain ComboBoxItems (as for the theme and the refresh interval) rather than
+        // ItemsSource + DisplayMemberPath + SelectedValue: with those the closed box stayed blank until the user
+        // picked a value, although the dropdown already marked the saved one.
+        ResetAnimationComboBox.Items.Clear();
+        foreach (var option in ViewModel.ResetAnimationOptions)
+        {
+            var item = new ComboBoxItem { Content = option.DisplayName, Tag = option.Mode };
+            ResetAnimationComboBox.Items.Add(item);
+            if (option.Mode == ViewModel.SelectedResetAnimationMode)
+            {
+                ResetAnimationComboBox.SelectedItem = item;
+            }
+        }
         ResetAnimationDescriptionText.Text = ViewModel.ResetAnimationDescription;
 
         // Set refresh interval
@@ -102,7 +112,7 @@ public sealed partial class SettingsPage : Page
 
             // Update ViewModel from UI
             ViewModel.SelectedThemeIndex = ThemeComboBox.SelectedIndex;
-            if (ResetAnimationComboBox.SelectedValue is Models.ResetAnimationMode resetMode)
+            if (ResetAnimationComboBox.SelectedItem is ComboBoxItem { Tag: Models.ResetAnimationMode resetMode })
             {
                 ViewModel.SelectedResetAnimationMode = resetMode;
             }

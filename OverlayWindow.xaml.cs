@@ -29,6 +29,9 @@ public sealed class OverlayRow
     /// <summary>The selected windows, including their session-only ResetDetectedAtUtc signals.</summary>
     public UsageWindow? SessionWindow { get; set; }
     public UsageWindow? WeeklyWindow { get; set; }
+    /// <summary>The reset stamps the bars may show (null while a reset is held back until the overlay is on screen again).</summary>
+    public DateTime? SessionResetStamp { get; set; }
+    public DateTime? WeeklyResetStamp { get; set; }
     /// <summary>Identifies each bar across rebuilds, so a reset the overlay already played is not played again.</summary>
     public string SessionResetKey => Name + "|first";
     public string WeeklyResetKey => Name + "|second";
@@ -53,9 +56,11 @@ public sealed class OverlayRow
 public sealed partial class OverlayWindow : Window
 {
     internal const double RowHeightDip = 22;
-    // Spacing (DIP): 12 horizontal and 8 vertical padding + 1 border on every side, uniform 8 between
-    // columns. The width is worked out in Rebuild() from the actual number widths; ApplySize() also
-    // grows the window to the measured content if that is ever larger.
+    // Spacing (DIP): 12 horizontal and 8 vertical padding + 1 border on every side, 8 between an element and
+    // the bar that follows it, and NumberGapDip between a bar and its number. The width is worked out in
+    // Rebuild() from the width of "100%"; ApplySize() also grows the window to the measured content if that
+    // is ever larger.
+    internal const double NumberGapDip = 6;
     private double _contentWidthDip = 214;
     private const double VerticalPaddingDip = 8 * 2 + 2;
     private const double ScreenMarginDip = 16;
@@ -72,8 +77,12 @@ public sealed partial class OverlayWindow : Window
     private int _tickCount;
     private bool _hiddenForFullscreen;
     private bool _wasLocked;
+    private bool _shown;
     private bool _closed;
+    private readonly IDisplayStateSource _displayState;
+    private readonly ResetPlaybackGate _resetGate = new();
     private Microsoft.UI.Dispatching.DispatcherQueueTimer? _rebuildHold;
+    private Microsoft.UI.Dispatching.DispatcherQueueTimer? _releaseTimer;
     private WindowZOrder.ForegroundWatcher? _foregroundWatcher;
     private DesktopAcrylicController? _acrylicController;
     private SystemBackdropConfiguration? _backdropConfiguration;
@@ -102,6 +111,7 @@ public sealed partial class OverlayWindow : Window
         _viewModel = App.Services.GetRequiredService<MainViewModel>();
         _settingsService = App.Services.GetRequiredService<ISettingsService>();
         _sessionState = App.Services.GetRequiredService<ISessionStateSource>();
+        _displayState = App.Services.GetRequiredService<IDisplayStateSource>();
         _hwnd = WindowNative.GetWindowHandle(this);
 
         ConfigureWindow();
@@ -111,6 +121,7 @@ public sealed partial class OverlayWindow : Window
         _sessionState.Locked += OnSessionLocked;
         _sessionState.Unlocked += OnSessionUnlocked;
         _sessionState.Resumed += OnSessionUnlocked;
+        _displayState.Changed += OnDisplayStateChanged;
         Rebuild();
         PositionWindow();
 
@@ -128,6 +139,7 @@ public sealed partial class OverlayWindow : Window
             if (_sessionState.IsLocked)
             {
                 _wasLocked = true;
+                SyncResetGate();
                 SetTickInterval(LockedTick);
                 return;
             }
@@ -186,6 +198,8 @@ public sealed partial class OverlayWindow : Window
                 WindowZOrder.AssertTopmost(_hwnd);
             }
         });
+        _shown = true;
+        SyncResetGate();
         if (_sessionState.IsLocked)
         {
             _wasLocked = true;
@@ -195,6 +209,56 @@ public sealed partial class OverlayWindow : Window
         {
             SetTickInterval(ActiveTick);
         }
+    }
+
+    /// <summary>
+    /// Whether the user can see the overlay right now. Until it is first shown it counts as on screen, so that an overlay
+    /// switched on late does not hold back (and later replay) resets that were already on the bars.
+    /// </summary>
+    private bool IsOnScreen() =>
+        !_shown || (!_closed && AppWindow.IsVisible && !_hiddenForFullscreen && !_sessionState.IsLocked && _displayState.IsOn);
+
+    /// <summary>
+    /// Tells the reset gate whether the overlay is on screen. Coming back with resets held releases them after the gate's
+    /// delay, and the rebuild that follows hands them to the bars, which play the animation once.
+    /// </summary>
+    private void SyncResetGate()
+    {
+        if (_resetGate.SetOnScreen(IsOnScreen(), DateTime.UtcNow)) ScheduleReleaseRebuild();
+    }
+
+    /// <summary>Rebuilds the overlay once the gate lets a held reset through, one delay after the overlay came back.</summary>
+    private void ScheduleReleaseRebuild()
+    {
+        if (_closed) return;
+        if (_releaseTimer == null)
+        {
+            _releaseTimer = DispatcherQueue.CreateTimer();
+            _releaseTimer.IsRepeating = false;
+            _releaseTimer.Tick += (timer, _) =>
+            {
+                timer.Stop();
+                try { if (!_closed) Rebuild(); }
+                catch (Exception ex) { App.Services.GetRequiredService<ILogger<OverlayWindow>>().LogError(ex, "Overlay release rebuild failed"); }
+            };
+        }
+        _releaseTimer.Interval = _resetGate.ReleaseDelay + TimeSpan.FromMilliseconds(50);
+        _releaseTimer.Start();
+    }
+
+    private void OnDisplayStateChanged(object? sender, EventArgs e)
+    {
+        // Raised on a power-notification thread
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            try
+            {
+                if (_closed) return;
+                if (_displayState.IsOn) ResumeAfterLock();
+                else SyncResetGate();
+            }
+            catch (Exception ex) { App.Services.GetRequiredService<ILogger<OverlayWindow>>().LogError(ex, "Overlay display state change failed"); }
+        });
     }
 
     private void SetTickInterval(TimeSpan interval)
@@ -237,6 +301,7 @@ public sealed partial class OverlayWindow : Window
         {
             _hiddenForFullscreen = true;
             AppWindow.Hide();
+            SyncResetGate();
             // Keep a slow tick so the overlay comes back when the fullscreen app ends without a foreground change
             SetTickInterval(HiddenTick);
         }
@@ -342,8 +407,10 @@ public sealed partial class OverlayWindow : Window
         return (int)Math.Clamp(Math.Round(value, MidpointRounding.AwayFromZero), 0, 100);
     }
 
-    internal static string ComputeSignature(IEnumerable<UsageData> providers, DateTime nowUtc)
+    internal static string ComputeSignature(IEnumerable<UsageData> providers, DateTime nowUtc,
+        Func<string, DateTime?, DateTime?>? resetStamp = null)
     {
+        DateTime? Stamp(string bar, DateTime? detectedAtUtc) => resetStamp == null ? detectedAtUtc : resetStamp(bar, detectedAtUtc);
         var sb = new System.Text.StringBuilder();
         foreach (var data in providers)
         {
@@ -367,14 +434,14 @@ public sealed partial class OverlayWindow : Window
               .Append(';').Append(first?.TooltipText)
               .Append(';').Append(first?.Accent)
               .Append(';').Append(first?.Window.ResetFromUsedPercent)
-              .Append(';').Append(first?.Window.ResetDetectedAtUtc?.Ticks)
+              .Append(';').Append(Stamp(data.Provider + "|first", first?.Window.ResetDetectedAtUtc)?.Ticks)
               .Append(';').Append(secondCell.Percent)
               .Append(';').Append(secondCell.Text)
               .Append(';').Append(RoundTimePercent(second?.Window.ElapsedPercent))
               .Append(';').Append(second?.TooltipText)
               .Append(';').Append(second?.Accent)
               .Append(';').Append(second?.Window.ResetFromUsedPercent)
-              .Append(';').Append(second?.Window.ResetDetectedAtUtc?.Ticks);
+              .Append(';').Append(Stamp(data.Provider + "|second", second?.Window.ResetDetectedAtUtc)?.Ticks);
         }
         return sb.ToString();
     }
@@ -406,23 +473,29 @@ public sealed partial class OverlayWindow : Window
 
     private void Rebuild()
     {
+        SyncResetGate();
         if (DeferRebuildWhileResetPlays()) return;
         var nowUtc = DateTime.UtcNow;
-        var signature = ComputeSignature(_viewModel.Providers, nowUtc);
+        Func<string, DateTime?, DateTime?> resetStamp = (bar, stamp) => _resetGate.Resolve(bar, stamp, nowUtc);
+        var signature = ComputeSignature(_viewModel.Providers, nowUtc, resetStamp);
         if (_lastSignature != null && _lastSignature == signature)
         {
             return;
         }
         _lastSignature = signature;
 
-        var rows = _viewModel.Providers.Select(p => ToRow(p, nowUtc)).ToList();
+        var rows = _viewModel.Providers.Select(p => ToRow(p, nowUtc, resetStamp)).ToList();
 
-        // Number columns are sized from the actual text, with two digits ("88%") as the typical minimum,
-        // so 1-2 digit values sit snugly next to their bars and "%" signs line up; a rare "100%" just
-        // widens the columns (and the window) for as long as it is shown.
-        var typical = MeasureNumber("88%");
-        var sessionWidth = Math.Ceiling(Math.Max(typical, rows.Select(r => MeasureNumber(r.SessionText)).DefaultIfEmpty(0).Max())) + 1;
-        var weeklyWidth = Math.Ceiling(Math.Max(typical, rows.Select(r => MeasureNumber(r.WeeklyText)).DefaultIfEmpty(0).Max())) + 1;
+        // Number columns are always wide enough for "100%", so the window keeps its size whatever the digits
+        // are (a value reaching 100% or dropping back after a reset must not make the panel jump). Numbers are
+        // right-aligned, so the "%" signs line up and the gap to the bar is NumberGapDip next to a 3-digit
+        // value and one digit wider next to a 2-digit one. Only a text wider than "100%" (never produced by
+        // the percent formatting) could still widen a column.
+        var widest = MeasureNumber("100%");
+        var sessionText = rows.Select(r => MeasureNumber(r.SessionText)).DefaultIfEmpty(0).Max();
+        var weeklyText = rows.Select(r => MeasureNumber(r.WeeklyText)).DefaultIfEmpty(0).Max();
+        var sessionWidth = Math.Ceiling(Math.Max(widest, sessionText)) + 1 + NumberGapDip;
+        var weeklyWidth = Math.Ceiling(Math.Max(widest, weeklyText)) + 1 + NumberGapDip;
 
         Rows.Clear();
         foreach (var row in rows)
@@ -432,21 +505,22 @@ public sealed partial class OverlayWindow : Window
             Rows.Add(row);
         }
 
-        // 12 padding + 1 border per side, 4 gaps of 8; columns = icon + bar + number + bar + number
-        _contentWidthDip = 2 * (12 + 1) + (16 + 44 + sessionWidth + 44 + weeklyWidth) + 4 * 8;
+        // 12 padding + 1 border per side; columns = icon + (8 lead-in + 44 bar + number column) twice, where
+        // each number column already includes its NumberGapDip lead-in
+        _contentWidthDip = 2 * (12 + 1) + (16 + (8 + 44) + sessionWidth + (8 + 44) + weeklyWidth);
 
         ApplySize();
         ClampToScreen();
     }
 
-    private static double MeasureNumber(string text)
+    internal static double MeasureNumber(string text)
     {
         var block = new Microsoft.UI.Xaml.Controls.TextBlock { Text = text, FontSize = 11 };
         block.Measure(new Windows.Foundation.Size(double.PositiveInfinity, double.PositiveInfinity));
         return block.DesiredSize.Width;
     }
 
-    private static OverlayRow ToRow(UsageData data, DateTime nowUtc)
+    private static OverlayRow ToRow(UsageData data, DateTime nowUtc, Func<string, DateTime?, DateTime?> resetStamp)
     {
         // The two most relevant bars: normally session + weekly, but a more relevant window
         // (at/near its limit, ahead of schedule, or recently changed) can take a slot
@@ -469,6 +543,8 @@ public sealed partial class OverlayWindow : Window
             SessionPercent = firstCell.Percent,
             SessionWindow = first?.Window,
             WeeklyWindow = second?.Window,
+            SessionResetStamp = resetStamp(data.Provider + "|first", first?.Window.ResetDetectedAtUtc),
+            WeeklyResetStamp = resetStamp(data.Provider + "|second", second?.Window.ResetDetectedAtUtc),
             SessionTimePercent = first?.Window.ElapsedPercent ?? -1,
             SessionText = firstCell.Text,
             WeeklyPercent = secondCell.Percent,
@@ -607,9 +683,11 @@ public sealed partial class OverlayWindow : Window
         _closed = true;
         _topmostTimer.Stop();
         _rebuildHold?.Stop();
+        _releaseTimer?.Stop();
         _sessionState.Locked -= OnSessionLocked;
         _sessionState.Unlocked -= OnSessionUnlocked;
         _sessionState.Resumed -= OnSessionUnlocked;
+        _displayState.Changed -= OnDisplayStateChanged;
         _foregroundWatcher?.Dispose();
         _foregroundWatcher = null;
         _viewModel.Providers.CollectionChanged -= OnProvidersChanged;

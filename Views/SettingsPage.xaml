@@ -36,12 +36,14 @@
                     BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                     BorderThickness="1"
                     CornerRadius="8">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*"/>
-                        <ColumnDefinition Width="Auto"/>
-                    </Grid.ColumnDefinitions>
+                    <!-- The dropdown sits under its label instead of beside it: the window is only ~350 DIP wide on a 150% display, so a
+                         side-by-side layout either clipped "Use system setting" (fixed 150) or squeezed the label to nothing (wide). -->
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
 
-                    <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,16,0">
+                    <StackPanel Grid.Row="0" Margin="0,0,0,10">
                         <TextBlock Text="App theme" Style="{StaticResource BodyTextBlockStyle}"/>
                         <TextBlock
                             Text="Select which app theme to display"
@@ -50,10 +52,10 @@
                     </StackPanel>
 
                     <ComboBox
-                        Grid.Column="1"
+                        Grid.Row="1"
                         x:Name="ThemeComboBox" AutomationProperties.Name="App theme"
-                        Width="150"
-                        VerticalAlignment="Center">
+                        MinWidth="220"
+                        HorizontalAlignment="Left">
                         <ComboBoxItem Content="Use system setting" Tag="0"/>
                         <ComboBoxItem Content="Light" Tag="1"/>
                         <ComboBoxItem Content="Dark" Tag="2"/>
@@ -67,12 +69,12 @@
                     BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                     BorderThickness="1"
                     CornerRadius="8">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*"/>
-                        <ColumnDefinition Width="Auto"/>
-                    </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
 
-                    <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,16,0">
+                    <StackPanel Grid.Row="0" Margin="0,0,0,10">
                         <TextBlock Text="Reset animation" Style="{StaticResource BodyTextBlockStyle}"/>
                         <TextBlock
                             x:Name="ResetAnimationDescriptionText"
@@ -82,12 +84,10 @@
                     </StackPanel>
 
                     <ComboBox
-                        Grid.Column="1"
+                        Grid.Row="1"
                         x:Name="ResetAnimationComboBox" AutomationProperties.Name="Reset animation"
-                        Width="150"
-                        VerticalAlignment="Center"
-                        DisplayMemberPath="DisplayName"
-                        SelectedValuePath="Mode"/>
+                        MinWidth="220"
+                        HorizontalAlignment="Left"/>
                 </Grid>
 
                 <!-- Providers Section -->

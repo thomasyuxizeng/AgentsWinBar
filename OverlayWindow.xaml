@@ -36,12 +36,15 @@
         <ItemsControl x:Name="RowsControl" ItemsSource="{x:Bind Rows}" IsTabStop="False">
             <ItemsControl.ItemTemplate>
                 <DataTemplate x:DataType="local:OverlayRow">
-                    <Grid Height="{x:Bind RowHeight}" ColumnSpacing="8">
+                    <!-- No column spacing: each bar column carries its own 8 DIP lead-in (via the bar's margin) and each
+                         number column carries its own short lead-in (OverlayWindow.NumberGapDip), so the gap between a
+                         bar and its number can be tighter than the gap to the next element. -->
+                    <Grid Height="{x:Bind RowHeight}">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="16"/>
-                            <ColumnDefinition Width="44"/>
+                            <ColumnDefinition Width="52"/>
                             <ColumnDefinition Width="{x:Bind SessionNumberColumn}"/>
-                            <ColumnDefinition Width="44"/>
+                            <ColumnDefinition Width="52"/>
                             <ColumnDefinition Width="{x:Bind WeeklyNumberColumn}"/>
                         </Grid.ColumnDefinitions>
 
@@ -60,6 +63,7 @@
                         <controls:UsageMeter
                             Grid.Column="1"
                             Height="5"
+                            Margin="8,0,0,0"
                             VerticalAlignment="Center"
                             Percent="{x:Bind SessionPercent}"
                             TimePercent="{x:Bind SessionTimePercent}"
@@ -67,7 +71,7 @@
                             Accent="{x:Bind SessionAccent}"
                             ResetKey="{x:Bind SessionResetKey}"
                             ResetFromPercent="{x:Bind SessionWindow.ResetFromUsedPercent}"
-                            ResetDetectedAtUtc="{x:Bind SessionWindow.ResetDetectedAtUtc}"/>
+                            ResetDetectedAtUtc="{x:Bind SessionResetStamp}"/>
                         <TextBlock
                             Grid.Column="2"
                             Text="{x:Bind SessionText}"
@@ -79,6 +83,7 @@
                         <controls:UsageMeter
                             Grid.Column="3"
                             Height="5"
+                            Margin="8,0,0,0"
                             VerticalAlignment="Center"
                             Percent="{x:Bind WeeklyPercent}"
                             TimePercent="{x:Bind WeeklyTimePercent}"
@@ -86,7 +91,7 @@
                             Accent="{x:Bind WeeklyAccent}"
                             ResetKey="{x:Bind WeeklyResetKey}"
                             ResetFromPercent="{x:Bind WeeklyWindow.ResetFromUsedPercent}"
-                            ResetDetectedAtUtc="{x:Bind WeeklyWindow.ResetDetectedAtUtc}"/>
+                            ResetDetectedAtUtc="{x:Bind WeeklyResetStamp}"/>
                         <TextBlock
                             Grid.Column="4"
                             Text="{x:Bind WeeklyText}"

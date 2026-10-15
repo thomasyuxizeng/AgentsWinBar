@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- A reset that happens while the display is off, or while a fullscreen app hides the taskbar strip or the overlay, is no longer missed. The strip and the overlay hold the animation (as they already did for a locked PC) and play it once, one second after they are back on screen so the start is not cut off. A reset that happens while they are on screen still plays at once.
 - A reset animation on the taskbar strip and the overlay now plays once and to the end. Those displays recreate their bars whenever their content changes, which cut the animation short and made each new bar play the same reset again (2 to 4 times after an unlock). Each display now remembers what it played per bar and waits for a running animation to finish before it rebuilds.
 - Switching Windows battery saver on or off no longer restarts the wait for the pending refresh, so a laptop that is plugged in and out repeatedly can no longer keep pushing refreshes back. The refresh interval shown stays whole.
 - The taskbar strip and the overlay no longer stay frozen after the PC has been locked. Windows' unlock notification never reached them, so they stopped keeping themselves on top, checking for fullscreen apps and refreshing their time; they now check for the unlock every 30 seconds while locked.
@@ -26,6 +27,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A cost history file with missing or null entries is recovered from its backup instead of failing later.
 - Last-30-days cost totals now include days the CLI's logs no longer hold after fresh scans as well as stale ones, without counting a day twice.
 - `tools\cost-ledger-report.ps1` reads the installed app's cost ledger by default; `-Path` still selects another file.
+- The floating overlay and the taskbar strip no longer change size when a number gains or loses a digit. They used to grow a few pixels when a bar reached 100% and shrink again afterwards, which made the panel move. Every percentage now has room for three digits, and the gap between a bar and its number is a little tighter (6 instead of 8) so the panel stays evenly padded.
+- Settings: the Reset animation box now shows the saved mode as soon as Settings opens (it stayed blank until you picked a value), and the App theme box is no longer cut off to "Use system setti". Both dropdowns sit under their labels, at the same width.
+- Dashboard: a NEEDS ATTENTION entry that lists many windows now ends in an ellipsis instead of being cut off mid-word; the full text is its tooltip.
 
 ### Changed
 - A release tag now runs the unit tests and the license check before anything is built, and the license check fails on a missing report or an unapproved license. The installer passes its administrator step in one encoded command, copies the Windows App Runtime installer into a protected folder before running it, and can pin the release signing certificate once its thumbprint is set.

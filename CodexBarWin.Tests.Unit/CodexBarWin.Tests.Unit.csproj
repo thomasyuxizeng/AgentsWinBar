@@ -40,6 +40,7 @@
     <Compile Include="..\Helpers\BarResetAnimationPolicy.cs" Link="Linked\BarResetAnimationPolicy.cs" />
     <Compile Include="..\Helpers\ResetAnimationVisibility.cs" Link="Linked\ResetAnimationVisibility.cs" />
     <Compile Include="..\Helpers\ResetHostState.cs" Link="Linked\ResetHostState.cs" />
+    <Compile Include="..\Helpers\ResetPlaybackGate.cs" Link="Linked\ResetPlaybackGate.cs" />
     <Compile Include="..\Helpers\BarResetGhost.cs" Link="Linked\BarResetGhost.cs" />
     <Compile Include="..\Helpers\UsageFingerprint.cs" Link="Linked\UsageFingerprint.cs" />
     <Compile Include="..\Helpers\WorkingSetTrimmer.cs" Link="Linked\WorkingSetTrimmer.cs" />
@@ -102,6 +103,8 @@
     <Compile Include="..\Services\ISetupMemoService.cs" Link="Linked\ISetupMemoService.cs" />
     <Compile Include="..\Services\SetupMemoService.cs" Link="Linked\SetupMemoService.cs" />
     <Compile Include="..\Services\ISessionStateSource.cs" Link="Linked\ISessionStateSource.cs" />
+    <Compile Include="..\Services\IDisplayStateSource.cs" Link="Linked\IDisplayStateSource.cs" />
+    <Compile Include="..\Services\DisplayStateSource.cs" Link="Linked\DisplayStateSource.cs" />
     <Compile Include="..\Services\SessionStateSource.cs" Link="Linked\SessionStateSource.cs" />
     <Compile Include="..\Services\SessionStateNative.cs" Link="Linked\SessionStateNative.cs" />
     <Compile Include="..\Services\ISampleDataLoader.cs" Link="Linked\ISampleDataLoader.cs" />
