@@ -101,18 +101,25 @@
                                                          Click="OnAttentionClicked" Tag="{x:Bind ProviderId}"
                                                          AutomationProperties.Name="{x:Bind views:DashboardFormat.AttentionText(Label, Detail)}"
                                                          ToolTipService.ToolTip="{x:Bind views:DashboardFormat.AttentionText(Label, Detail)}">
-                                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                            <!-- A Grid, not a horizontal StackPanel: the StackPanel measures its text with unlimited
+                                                 width, so a long list was clipped by the button without ever reaching the ellipsis.
+                                                 The full text is the button's tooltip. -->
+                                            <Grid ColumnSpacing="8">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                    <ColumnDefinition Width="*"/>
+                                                </Grid.ColumnDefinitions>
                                                 <Grid Width="8" Height="8" VerticalAlignment="Center">
                                                     <Ellipse Fill="{ThemeResource SystemFillColorCriticalBrush}"
                                                              Visibility="{x:Bind views:DashboardFormat.VisCritical(Severity)}"/>
                                                     <Ellipse Fill="{ThemeResource SystemFillColorCautionBrush}"
                                                              Visibility="{x:Bind views:DashboardFormat.VisCaution(Severity)}"/>
                                                 </Grid>
-                                                <TextBlock FontSize="13" TextTrimming="CharacterEllipsis"
+                                                <TextBlock Grid.Column="1" FontSize="13" TextTrimming="CharacterEllipsis"
                                                            Foreground="{ThemeResource TextFillColorPrimaryBrush}">
                                                     <Run Text="{x:Bind Label}" FontWeight="SemiBold"/><Run Text=": "/><Run Text="{x:Bind Detail}"/>
                                                 </TextBlock>
-                                            </StackPanel>
+                                            </Grid>
                                         </HyperlinkButton>
                                     </DataTemplate>
                                 </ItemsRepeater.ItemTemplate>
