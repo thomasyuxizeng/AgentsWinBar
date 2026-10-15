@@ -86,6 +86,7 @@ public sealed partial class TaskbarWindow : Window
     private readonly IDisplayStateSource _displayState;
     private readonly ResetPlaybackGate _resetGate = new();
     private Microsoft.UI.Dispatching.DispatcherQueueTimer? _rebuildHold;
+    private Microsoft.UI.Dispatching.DispatcherQueueTimer? _releaseTimer;
     private WindowZOrder.ForegroundWatcher? _foregroundWatcher;
     private DesktopAcrylicController? _acrylicController;
     private SystemBackdropConfiguration? _backdropConfiguration;
@@ -224,12 +225,31 @@ public sealed partial class TaskbarWindow : Window
         !_shown || (!_closed && AppWindow.IsVisible && !_hiddenForFullscreen && !_sessionState.IsLocked && _displayState.IsOn);
 
     /// <summary>
-    /// Tells the reset gate whether the strip is on screen. Coming back with resets held releases them, and the next
-    /// rebuild hands them to the bars, which play the animation once.
+    /// Tells the reset gate whether the strip is on screen. Coming back with resets held releases them after the gate's
+    /// delay, and the rebuild that follows hands them to the bars, which play the animation once.
     /// </summary>
     private void SyncResetGate()
     {
-        if (_resetGate.SetOnScreen(IsOnScreen(), DateTime.UtcNow)) _lastSignature = null;
+        if (_resetGate.SetOnScreen(IsOnScreen(), DateTime.UtcNow)) ScheduleReleaseRebuild();
+    }
+
+    /// <summary>Rebuilds the strip once the gate lets a held reset through, one delay after the strip came back.</summary>
+    private void ScheduleReleaseRebuild()
+    {
+        if (_closed) return;
+        if (_releaseTimer == null)
+        {
+            _releaseTimer = DispatcherQueue.CreateTimer();
+            _releaseTimer.IsRepeating = false;
+            _releaseTimer.Tick += (timer, _) =>
+            {
+                timer.Stop();
+                try { if (!_closed) Rebuild(); }
+                catch (Exception ex) { App.Services.GetRequiredService<ILogger<TaskbarWindow>>().LogError(ex, "Taskbar release rebuild failed"); }
+            };
+        }
+        _releaseTimer.Interval = _resetGate.ReleaseDelay + TimeSpan.FromMilliseconds(50);
+        _releaseTimer.Start();
     }
 
     private void OnDisplayStateChanged(object? sender, EventArgs e)
@@ -471,7 +491,7 @@ public sealed partial class TaskbarWindow : Window
         if (DeferRebuildWhileResetPlays()) return;
         var isLight = RootGrid.ActualTheme == ElementTheme.Light;
         var nowUtc = DateTime.UtcNow;
-        var signature = ComputeSignature(_viewModel.Providers, isLight, nowUtc, _resetGate.Resolve);
+        var signature = ComputeSignature(_viewModel.Providers, isLight, nowUtc, (bar, stamp) => _resetGate.Resolve(bar, stamp, nowUtc));
         if (_lastSignature != null && _lastSignature == signature)
         {
             return;
@@ -504,8 +524,8 @@ public sealed partial class TaskbarWindow : Window
                 WeeklyPercent = second?.Window.Percent ?? 0,
                 SessionWindow = first?.Window,
                 WeeklyWindow = second?.Window,
-                SessionResetStamp = _resetGate.Resolve(data.Provider + "|first", first?.Window.ResetDetectedAtUtc),
-                WeeklyResetStamp = _resetGate.Resolve(data.Provider + "|second", second?.Window.ResetDetectedAtUtc),
+                SessionResetStamp = _resetGate.Resolve(data.Provider + "|first", first?.Window.ResetDetectedAtUtc, nowUtc),
+                WeeklyResetStamp = _resetGate.Resolve(data.Provider + "|second", second?.Window.ResetDetectedAtUtc, nowUtc),
                 SessionTimePercent = first?.Window.ElapsedPercent ?? -1,
                 WeeklyTimePercent = second?.Window.ElapsedPercent ?? -1,
                 SessionPace = first?.TooltipText ?? string.Empty,
@@ -657,6 +677,7 @@ public sealed partial class TaskbarWindow : Window
         _closed = true;
         _keepOnTopTimer.Stop();
         _rebuildHold?.Stop();
+        _releaseTimer?.Stop();
         _sessionState.Locked -= OnSessionLocked;
         _sessionState.Unlocked -= OnSessionUnlocked;
         _sessionState.Resumed -= OnSessionUnlocked;

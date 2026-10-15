@@ -80,6 +80,7 @@ public sealed partial class OverlayWindow : Window
     private readonly IDisplayStateSource _displayState;
     private readonly ResetPlaybackGate _resetGate = new();
     private Microsoft.UI.Dispatching.DispatcherQueueTimer? _rebuildHold;
+    private Microsoft.UI.Dispatching.DispatcherQueueTimer? _releaseTimer;
     private WindowZOrder.ForegroundWatcher? _foregroundWatcher;
     private DesktopAcrylicController? _acrylicController;
     private SystemBackdropConfiguration? _backdropConfiguration;
@@ -216,12 +217,31 @@ public sealed partial class OverlayWindow : Window
         !_shown || (!_closed && AppWindow.IsVisible && !_hiddenForFullscreen && !_sessionState.IsLocked && _displayState.IsOn);
 
     /// <summary>
-    /// Tells the reset gate whether the overlay is on screen. Coming back with resets held releases them, and the next
-    /// rebuild hands them to the bars, which play the animation once.
+    /// Tells the reset gate whether the overlay is on screen. Coming back with resets held releases them after the gate's
+    /// delay, and the rebuild that follows hands them to the bars, which play the animation once.
     /// </summary>
     private void SyncResetGate()
     {
-        if (_resetGate.SetOnScreen(IsOnScreen(), DateTime.UtcNow)) _lastSignature = null;
+        if (_resetGate.SetOnScreen(IsOnScreen(), DateTime.UtcNow)) ScheduleReleaseRebuild();
+    }
+
+    /// <summary>Rebuilds the overlay once the gate lets a held reset through, one delay after the overlay came back.</summary>
+    private void ScheduleReleaseRebuild()
+    {
+        if (_closed) return;
+        if (_releaseTimer == null)
+        {
+            _releaseTimer = DispatcherQueue.CreateTimer();
+            _releaseTimer.IsRepeating = false;
+            _releaseTimer.Tick += (timer, _) =>
+            {
+                timer.Stop();
+                try { if (!_closed) Rebuild(); }
+                catch (Exception ex) { App.Services.GetRequiredService<ILogger<OverlayWindow>>().LogError(ex, "Overlay release rebuild failed"); }
+            };
+        }
+        _releaseTimer.Interval = _resetGate.ReleaseDelay + TimeSpan.FromMilliseconds(50);
+        _releaseTimer.Start();
     }
 
     private void OnDisplayStateChanged(object? sender, EventArgs e)
@@ -454,14 +474,15 @@ public sealed partial class OverlayWindow : Window
         SyncResetGate();
         if (DeferRebuildWhileResetPlays()) return;
         var nowUtc = DateTime.UtcNow;
-        var signature = ComputeSignature(_viewModel.Providers, nowUtc, _resetGate.Resolve);
+        Func<string, DateTime?, DateTime?> resetStamp = (bar, stamp) => _resetGate.Resolve(bar, stamp, nowUtc);
+        var signature = ComputeSignature(_viewModel.Providers, nowUtc, resetStamp);
         if (_lastSignature != null && _lastSignature == signature)
         {
             return;
         }
         _lastSignature = signature;
 
-        var rows = _viewModel.Providers.Select(p => ToRow(p, nowUtc, _resetGate.Resolve)).ToList();
+        var rows = _viewModel.Providers.Select(p => ToRow(p, nowUtc, resetStamp)).ToList();
 
         // Number columns are sized from the actual text, with two digits ("88%") as the typical minimum,
         // so 1-2 digit values sit snugly next to their bars and "%" signs line up; a rare "100%" just
@@ -655,6 +676,7 @@ public sealed partial class OverlayWindow : Window
         _closed = true;
         _topmostTimer.Stop();
         _rebuildHold?.Stop();
+        _releaseTimer?.Stop();
         _sessionState.Locked -= OnSessionLocked;
         _sessionState.Unlocked -= OnSessionUnlocked;
         _sessionState.Resumed -= OnSessionUnlocked;
