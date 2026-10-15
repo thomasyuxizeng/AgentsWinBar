@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- The taskbar strip and the overlay no longer stay frozen after the PC has been locked. Windows' unlock notification never reached them, so they stopped keeping themselves on top, checking for fullscreen apps and refreshing their time; they now check for the unlock every 30 seconds while locked.
+- The strip and the overlay come back when a fullscreen app ends without another window taking focus (they stayed hidden).
+- The overlay is moved back on screen after a monitor change even when its usage data is unchanged.
+- The dashboard no longer redraws every 30 seconds while the PC is locked.
 - The API credits poll no longer runs while the PC is locked, even with the dashboard window left open. It resumes on unlock.
 
 ## [1.5.1] - 2026-10-15

@@ -137,7 +137,8 @@ public sealed partial class DashboardAppWindow : Window
 
     private void Redraw()
     {
-        if (_closed || _redrawing || _hidden) return;
+        // Nobody sees a locked screen; the 30-second clock redraws once it is unlocked (a cheap query, not a snapshot)
+        if (_closed || _redrawing || _hidden || SessionStateNative.IsCurrentSessionLocked()) return;
         _redrawing = true;
         try
         {

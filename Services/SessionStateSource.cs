@@ -28,6 +28,8 @@ public sealed class SessionStateSource : ISessionStateSource, IDisposable
         try
         {
             if (_disposed) return;
+            // Rare, and the only trace of whether SystemEvents reaches the app at all (it has not in testing)
+            _logger.LogInformation("Session switch event: {Reason}", e.Reason);
             switch (e.Reason)
             {
                 case SessionSwitchReason.SessionLock:

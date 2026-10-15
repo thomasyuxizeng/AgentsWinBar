@@ -62,6 +62,9 @@ public sealed partial class TaskbarWindow : Window
     private const double OverhangDip = 12;   // how far the left end is pushed off-screen to hide its rounded corners
     private const double FallbackHeightDip = 48;
     private const double TopLineDip = 1;   // the thin line along the taskbar's top edge
+    private static readonly TimeSpan ActiveTick = TimeSpan.FromSeconds(2);
+    private static readonly TimeSpan HiddenTick = TimeSpan.FromSeconds(5);   // hidden for a fullscreen app
+    private static readonly TimeSpan LockedTick = TimeSpan.FromSeconds(30);   // locked screen: only watch for the unlock
 
     private readonly MainViewModel _viewModel;
     private readonly ISessionStateSource _sessionState;
@@ -70,6 +73,7 @@ public sealed partial class TaskbarWindow : Window
     private int _tickCount;
     private bool _roundedRightEnd;
     private bool _hiddenForFullscreen;
+    private bool _wasLocked;
     private bool _closed;
     private WindowZOrder.ForegroundWatcher? _foregroundWatcher;
     private DesktopAcrylicController? _acrylicController;
@@ -116,9 +120,23 @@ public sealed partial class TaskbarWindow : Window
         _keepOnTopTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
         _keepOnTopTimer.Tick += (_, _) =>
         {
-            if (_closed || !AppWindow.IsVisible || _sessionState.IsLocked)
+            if (_closed || (!AppWindow.IsVisible && !_hiddenForFullscreen))
             {
                 _keepOnTopTimer.Stop();
+                return;
+            }
+
+            // Unlock events don't reliably reach the app, so a locked screen slows the timer down instead of stopping it
+            if (_sessionState.IsLocked)
+            {
+                _wasLocked = true;
+                SetTickInterval(LockedTick);
+                return;
+            }
+
+            if (_wasLocked)
+            {
+                ResumeAfterLock();
                 return;
             }
 
@@ -157,6 +175,13 @@ public sealed partial class TaskbarWindow : Window
 
         _foregroundWatcher ??= new WindowZOrder.ForegroundWatcher(() =>
         {
+            // Unlocking moves the foreground, which is the quickest way to notice it
+            if (_wasLocked && !_sessionState.IsLocked)
+            {
+                ResumeAfterLock();
+                return;
+            }
+
             UpdateFullscreenVisibility();
             if (!_hiddenForFullscreen && !_sessionState.IsLocked && AppWindow.IsVisible)
             {
@@ -164,10 +189,45 @@ public sealed partial class TaskbarWindow : Window
                 WindowZOrder.AssertTopmost(_hwnd);
             }
         });
-        if (!_sessionState.IsLocked)
+        if (_sessionState.IsLocked)
         {
-            _keepOnTopTimer.Start();
+            _wasLocked = true;
+            SetTickInterval(LockedTick);
         }
+        else
+        {
+            SetTickInterval(ActiveTick);
+        }
+    }
+
+    private void SetTickInterval(TimeSpan interval)
+    {
+        if (_closed) return;
+        if (_keepOnTopTimer.Interval != interval) _keepOnTopTimer.Interval = interval;
+        if (!_keepOnTopTimer.IsEnabled) _keepOnTopTimer.Start();
+    }
+
+    /// <summary>
+    /// Picks the strip's upkeep back up once the session is unlocked (or has resumed).
+    /// </summary>
+    private void ResumeAfterLock()
+    {
+        if (_closed || _sessionState.IsLocked) return;
+        if (!_hiddenForFullscreen && !AppWindow.IsVisible) return;   // hidden on purpose; ShowStrip restarts the timer
+
+        _wasLocked = false;
+        UpdateFullscreenVisibility();
+        if (_hiddenForFullscreen)
+        {
+            SetTickInterval(HiddenTick);
+            return;
+        }
+
+        _tickCount = 0;
+        Rebuild();
+        Reposition();
+        WindowZOrder.AssertTopmost(_hwnd);
+        SetTickInterval(ActiveTick);
     }
 
     /// <summary>
@@ -180,7 +240,8 @@ public sealed partial class TaskbarWindow : Window
         {
             _hiddenForFullscreen = true;
             AppWindow.Hide();
-            _keepOnTopTimer.Stop();
+            // Keep a slow tick so the strip comes back when the fullscreen app ends without a foreground change
+            SetTickInterval(HiddenTick);
         }
         else if (!fullscreen && _hiddenForFullscreen)
         {
@@ -192,7 +253,7 @@ public sealed partial class TaskbarWindow : Window
                 Rebuild();
                 Reposition();
                 WindowZOrder.AssertTopmost(_hwnd);
-                _keepOnTopTimer.Start();
+                SetTickInterval(ActiveTick);
             }
         }
     }
@@ -203,7 +264,9 @@ public sealed partial class TaskbarWindow : Window
         {
             try
             {
-                _keepOnTopTimer.Stop();
+                if (_closed || !_keepOnTopTimer.IsEnabled) return;
+                _wasLocked = true;
+                SetTickInterval(LockedTick);
             }
             catch { }
         });
@@ -215,17 +278,7 @@ public sealed partial class TaskbarWindow : Window
         {
             try
             {
-                if (_closed || !AppWindow.IsVisible || _sessionState.IsLocked) return;
-
-                UpdateFullscreenVisibility();
-                if (_hiddenForFullscreen) return;
-
-                _tickCount = 0;
-                Rebuild();
-                Reposition();
-                WindowZOrder.AssertTopmost(_hwnd);
-
-                _keepOnTopTimer.Start();
+                ResumeAfterLock();
             }
             catch { }
         });

@@ -56,6 +56,9 @@ public sealed partial class OverlayWindow : Window
     private const double VerticalPaddingDip = 8 * 2 + 2;
     private const double ScreenMarginDip = 16;
     private const double ClipSlackDip = 2;
+    private static readonly TimeSpan ActiveTick = TimeSpan.FromSeconds(2);
+    private static readonly TimeSpan HiddenTick = TimeSpan.FromSeconds(5);   // hidden for a fullscreen app
+    private static readonly TimeSpan LockedTick = TimeSpan.FromSeconds(30);   // locked screen: only watch for the unlock
 
     private readonly MainViewModel _viewModel;
     private readonly ISettingsService _settingsService;
@@ -64,6 +67,7 @@ public sealed partial class OverlayWindow : Window
     private readonly DispatcherTimer _topmostTimer;
     private int _tickCount;
     private bool _hiddenForFullscreen;
+    private bool _wasLocked;
     private bool _closed;
     private WindowZOrder.ForegroundWatcher? _foregroundWatcher;
     private DesktopAcrylicController? _acrylicController;
@@ -109,9 +113,23 @@ public sealed partial class OverlayWindow : Window
         _topmostTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
         _topmostTimer.Tick += (_, _) =>
         {
-            if (_closed || !AppWindow.IsVisible || _sessionState.IsLocked)
+            if (_closed || (!AppWindow.IsVisible && !_hiddenForFullscreen))
             {
                 _topmostTimer.Stop();
+                return;
+            }
+
+            // Unlock events don't reliably reach the app, so a locked screen slows the timer down instead of stopping it
+            if (_sessionState.IsLocked)
+            {
+                _wasLocked = true;
+                SetTickInterval(LockedTick);
+                return;
+            }
+
+            if (_wasLocked)
+            {
+                ResumeAfterLock();
                 return;
             }
 
@@ -122,6 +140,7 @@ public sealed partial class OverlayWindow : Window
             if (++_tickCount % 15 == 0)
             {
                 Rebuild();
+                ClampToScreen();   // a monitor change can strand the overlay off-screen, and Rebuild skips it for an unchanged signature
             }
 
             ApplySize();   // follows display scale changes (e.g. remote desktop)
@@ -149,16 +168,58 @@ public sealed partial class OverlayWindow : Window
 
         _foregroundWatcher ??= new WindowZOrder.ForegroundWatcher(() =>
         {
+            // Unlocking moves the foreground, which is the quickest way to notice it
+            if (_wasLocked && !_sessionState.IsLocked)
+            {
+                ResumeAfterLock();
+                return;
+            }
+
             UpdateFullscreenVisibility();
             if (!_hiddenForFullscreen && !_sessionState.IsLocked && AppWindow.IsVisible)
             {
                 WindowZOrder.AssertTopmost(_hwnd);
             }
         });
-        if (!_sessionState.IsLocked)
+        if (_sessionState.IsLocked)
         {
-            _topmostTimer.Start();
+            _wasLocked = true;
+            SetTickInterval(LockedTick);
         }
+        else
+        {
+            SetTickInterval(ActiveTick);
+        }
+    }
+
+    private void SetTickInterval(TimeSpan interval)
+    {
+        if (_closed) return;
+        if (_topmostTimer.Interval != interval) _topmostTimer.Interval = interval;
+        if (!_topmostTimer.IsEnabled) _topmostTimer.Start();
+    }
+
+    /// <summary>
+    /// Picks the overlay's upkeep back up once the session is unlocked (or has resumed).
+    /// </summary>
+    private void ResumeAfterLock()
+    {
+        if (_closed || _sessionState.IsLocked) return;
+        if (!_hiddenForFullscreen && !AppWindow.IsVisible) return;   // hidden on purpose; ShowOverlay restarts the timer
+
+        _wasLocked = false;
+        UpdateFullscreenVisibility();
+        if (_hiddenForFullscreen)
+        {
+            SetTickInterval(HiddenTick);
+            return;
+        }
+
+        _tickCount = 0;
+        Rebuild();
+        ApplySize();
+        WindowZOrder.AssertTopmost(_hwnd);
+        SetTickInterval(ActiveTick);
     }
 
     /// <summary>
@@ -171,7 +232,8 @@ public sealed partial class OverlayWindow : Window
         {
             _hiddenForFullscreen = true;
             AppWindow.Hide();
-            _topmostTimer.Stop();
+            // Keep a slow tick so the overlay comes back when the fullscreen app ends without a foreground change
+            SetTickInterval(HiddenTick);
         }
         else if (!fullscreen && _hiddenForFullscreen)
         {
@@ -183,7 +245,7 @@ public sealed partial class OverlayWindow : Window
                 Rebuild();
                 ApplySize();
                 WindowZOrder.AssertTopmost(_hwnd);
-                _topmostTimer.Start();
+                SetTickInterval(ActiveTick);
             }
         }
     }
@@ -194,7 +256,9 @@ public sealed partial class OverlayWindow : Window
         {
             try
             {
-                _topmostTimer.Stop();
+                if (_closed || !_topmostTimer.IsEnabled) return;
+                _wasLocked = true;
+                SetTickInterval(LockedTick);
             }
             catch { }
         });
@@ -206,17 +270,7 @@ public sealed partial class OverlayWindow : Window
         {
             try
             {
-                if (_closed || !AppWindow.IsVisible || _sessionState.IsLocked) return;
-
-                UpdateFullscreenVisibility();
-                if (_hiddenForFullscreen) return;
-
-                _tickCount = 0;
-                Rebuild();
-                ApplySize();
-                WindowZOrder.AssertTopmost(_hwnd);
-
-                _topmostTimer.Start();
+                ResumeAfterLock();
             }
             catch { }
         });
