@@ -86,7 +86,7 @@
                                 Accent="{x:Bind SessionAccent}"
                                 ResetKey="{x:Bind SessionResetKey}"
                                 ResetFromPercent="{x:Bind SessionWindow.ResetFromUsedPercent}"
-                                ResetDetectedAtUtc="{x:Bind SessionWindow.ResetDetectedAtUtc}"/>
+                                ResetDetectedAtUtc="{x:Bind SessionResetStamp}"/>
                             <TextBlock
                                 Grid.Row="0"
                                 Grid.Column="1"
@@ -107,7 +107,7 @@
                                 Accent="{x:Bind WeeklyAccent}"
                                 ResetKey="{x:Bind WeeklyResetKey}"
                                 ResetFromPercent="{x:Bind WeeklyWindow.ResetFromUsedPercent}"
-                                ResetDetectedAtUtc="{x:Bind WeeklyWindow.ResetDetectedAtUtc}"/>
+                                ResetDetectedAtUtc="{x:Bind WeeklyResetStamp}"/>
                             <TextBlock
                                 Grid.Row="1"
                                 Grid.Column="1"

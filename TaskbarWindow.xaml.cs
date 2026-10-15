@@ -32,6 +32,9 @@ public sealed class TaskbarItem
     /// <summary>The selected windows, including their session-only ResetDetectedAtUtc signals.</summary>
     public UsageWindow? SessionWindow { get; set; }
     public UsageWindow? WeeklyWindow { get; set; }
+    /// <summary>The reset stamps the bars may show (null while a reset is held back until the strip is on screen again).</summary>
+    public DateTime? SessionResetStamp { get; set; }
+    public DateTime? WeeklyResetStamp { get; set; }
     /// <summary>Identifies each bar across rebuilds, so a reset the strip already played is not played again.</summary>
     public string SessionResetKey => Name + "|first";
     public string WeeklyResetKey => Name + "|second";
@@ -78,7 +81,10 @@ public sealed partial class TaskbarWindow : Window
     private bool _roundedRightEnd;
     private bool _hiddenForFullscreen;
     private bool _wasLocked;
+    private bool _shown;
     private bool _closed;
+    private readonly IDisplayStateSource _displayState;
+    private readonly ResetPlaybackGate _resetGate = new();
     private Microsoft.UI.Dispatching.DispatcherQueueTimer? _rebuildHold;
     private WindowZOrder.ForegroundWatcher? _foregroundWatcher;
     private DesktopAcrylicController? _acrylicController;
@@ -109,6 +115,7 @@ public sealed partial class TaskbarWindow : Window
 
         _viewModel = App.Services.GetRequiredService<MainViewModel>();
         _sessionState = App.Services.GetRequiredService<ISessionStateSource>();
+        _displayState = App.Services.GetRequiredService<IDisplayStateSource>();
         _hwnd = WindowNative.GetWindowHandle(this);
 
         ConfigureWindow();
@@ -119,6 +126,7 @@ public sealed partial class TaskbarWindow : Window
         _sessionState.Locked += OnSessionLocked;
         _sessionState.Unlocked += OnSessionUnlocked;
         _sessionState.Resumed += OnSessionUnlocked;
+        _displayState.Changed += OnDisplayStateChanged;
         Rebuild();
 
         // The taskbar re-raises itself when clicked, so keep reasserting our position and z-order.
@@ -135,6 +143,7 @@ public sealed partial class TaskbarWindow : Window
             if (_sessionState.IsLocked)
             {
                 _wasLocked = true;
+                SyncResetGate();
                 SetTickInterval(LockedTick);
                 return;
             }
@@ -194,6 +203,8 @@ public sealed partial class TaskbarWindow : Window
                 WindowZOrder.AssertTopmost(_hwnd);
             }
         });
+        _shown = true;
+        SyncResetGate();
         if (_sessionState.IsLocked)
         {
             _wasLocked = true;
@@ -203,6 +214,37 @@ public sealed partial class TaskbarWindow : Window
         {
             SetTickInterval(ActiveTick);
         }
+    }
+
+    /// <summary>
+    /// Whether the user can see the strip right now. Until it is first shown it counts as on screen, so that a strip
+    /// switched on late does not hold back (and later replay) resets that were already on the bars.
+    /// </summary>
+    private bool IsOnScreen() =>
+        !_shown || (!_closed && AppWindow.IsVisible && !_hiddenForFullscreen && !_sessionState.IsLocked && _displayState.IsOn);
+
+    /// <summary>
+    /// Tells the reset gate whether the strip is on screen. Coming back with resets held releases them, and the next
+    /// rebuild hands them to the bars, which play the animation once.
+    /// </summary>
+    private void SyncResetGate()
+    {
+        if (_resetGate.SetOnScreen(IsOnScreen(), DateTime.UtcNow)) _lastSignature = null;
+    }
+
+    private void OnDisplayStateChanged(object? sender, EventArgs e)
+    {
+        // Raised on a power-notification thread
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            try
+            {
+                if (_closed) return;
+                if (_displayState.IsOn) ResumeAfterLock();
+                else SyncResetGate();
+            }
+            catch (Exception ex) { App.Services.GetRequiredService<ILogger<TaskbarWindow>>().LogError(ex, "Taskbar display state change failed"); }
+        });
     }
 
     private void SetTickInterval(TimeSpan interval)
@@ -245,6 +287,7 @@ public sealed partial class TaskbarWindow : Window
         {
             _hiddenForFullscreen = true;
             AppWindow.Hide();
+            SyncResetGate();
             // Keep a slow tick so the strip comes back when the fullscreen app ends without a foreground change
             SetTickInterval(HiddenTick);
         }
@@ -357,8 +400,10 @@ public sealed partial class TaskbarWindow : Window
         _ => 0
     };
 
-    internal static string ComputeSignature(IEnumerable<UsageData> providers, bool isLight, DateTime nowUtc)
+    internal static string ComputeSignature(IEnumerable<UsageData> providers, bool isLight, DateTime nowUtc,
+        Func<string, DateTime?, DateTime?>? resetStamp = null)
     {
+        DateTime? Stamp(string bar, DateTime? detectedAtUtc) => resetStamp == null ? detectedAtUtc : resetStamp(bar, detectedAtUtc);
         var sb = new System.Text.StringBuilder();
         sb.Append(isLight ? 'L' : 'D');
         foreach (var data in providers)
@@ -379,7 +424,7 @@ public sealed partial class TaskbarWindow : Window
               .Append(';').Append(first?.TooltipText)
               .Append(';').Append(first?.Accent)
               .Append(';').Append(first?.Window.ResetFromUsedPercent)
-              .Append(';').Append(first?.Window.ResetDetectedAtUtc?.Ticks)
+              .Append(';').Append(Stamp(data.Provider + "|first", first?.Window.ResetDetectedAtUtc)?.Ticks)
               .Append(';').Append(BarLabel(data, first))
               .Append(';').Append(WarningBrushKind(first?.Window))
               .Append(';').Append(second?.Window.Percent ?? 0)
@@ -388,7 +433,7 @@ public sealed partial class TaskbarWindow : Window
               .Append(';').Append(second?.TooltipText)
               .Append(';').Append(second?.Accent)
               .Append(';').Append(second?.Window.ResetFromUsedPercent)
-              .Append(';').Append(second?.Window.ResetDetectedAtUtc?.Ticks)
+              .Append(';').Append(Stamp(data.Provider + "|second", second?.Window.ResetDetectedAtUtc)?.Ticks)
               .Append(';').Append(BarLabel(data, second))
               .Append(';').Append(WarningBrushKind(second?.Window));
         }
@@ -422,10 +467,11 @@ public sealed partial class TaskbarWindow : Window
 
     private void Rebuild()
     {
+        SyncResetGate();
         if (DeferRebuildWhileResetPlays()) return;
         var isLight = RootGrid.ActualTheme == ElementTheme.Light;
         var nowUtc = DateTime.UtcNow;
-        var signature = ComputeSignature(_viewModel.Providers, isLight, nowUtc);
+        var signature = ComputeSignature(_viewModel.Providers, isLight, nowUtc, _resetGate.Resolve);
         if (_lastSignature != null && _lastSignature == signature)
         {
             return;
@@ -458,6 +504,8 @@ public sealed partial class TaskbarWindow : Window
                 WeeklyPercent = second?.Window.Percent ?? 0,
                 SessionWindow = first?.Window,
                 WeeklyWindow = second?.Window,
+                SessionResetStamp = _resetGate.Resolve(data.Provider + "|first", first?.Window.ResetDetectedAtUtc),
+                WeeklyResetStamp = _resetGate.Resolve(data.Provider + "|second", second?.Window.ResetDetectedAtUtc),
                 SessionTimePercent = first?.Window.ElapsedPercent ?? -1,
                 WeeklyTimePercent = second?.Window.ElapsedPercent ?? -1,
                 SessionPace = first?.TooltipText ?? string.Empty,
@@ -612,6 +660,7 @@ public sealed partial class TaskbarWindow : Window
         _sessionState.Locked -= OnSessionLocked;
         _sessionState.Unlocked -= OnSessionUnlocked;
         _sessionState.Resumed -= OnSessionUnlocked;
+        _displayState.Changed -= OnDisplayStateChanged;
         _foregroundWatcher?.Dispose();
         _foregroundWatcher = null;
         _viewModel.Providers.CollectionChanged -= OnProvidersChanged;
