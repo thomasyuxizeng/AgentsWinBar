@@ -35,6 +35,8 @@ public sealed class TaskbarItem
     /// <summary>The reset stamps the bars may show (null while a reset is held back until the strip is on screen again).</summary>
     public DateTime? SessionResetStamp { get; set; }
     public DateTime? WeeklyResetStamp { get; set; }
+    /// <summary>The strip's memory of the resets it played, shared by every bar it creates (see UsageMeter.ResetHost).</summary>
+    public ResetHostState? ResetHost { get; set; }
     /// <summary>Identifies each bar across rebuilds, so a reset the strip already played is not played again.</summary>
     public string SessionResetKey => Name + "|first";
     public string WeeklyResetKey => Name + "|second";
@@ -87,6 +89,8 @@ public sealed partial class TaskbarWindow : Window
     private bool _closed;
     private readonly IDisplayStateSource _displayState;
     private readonly ResetPlaybackGate _resetGate = new();
+    // Owned here and handed to every bar a rebuild creates: which resets already played and whether one is playing now
+    private readonly ResetHostState _resetHost = new();
     private Microsoft.UI.Dispatching.DispatcherQueueTimer? _rebuildHold;
     private Microsoft.UI.Dispatching.DispatcherQueueTimer? _releaseTimer;
     private WindowZOrder.ForegroundWatcher? _foregroundWatcher;
@@ -468,7 +472,7 @@ public sealed partial class TaskbarWindow : Window
     /// </summary>
     private bool DeferRebuildWhileResetPlays()
     {
-        var remaining = BarResetAnimation.RemainingBusy(RootGrid.XamlRoot);
+        var remaining = _resetHost.RemainingBusy(Environment.TickCount64);
         if (_closed || remaining <= TimeSpan.Zero) return false;
 
         if (_rebuildHold == null)
@@ -530,6 +534,7 @@ public sealed partial class TaskbarWindow : Window
                 WeeklyPercent = second?.Window.Percent ?? 0,
                 SessionWindow = first?.Window,
                 WeeklyWindow = second?.Window,
+                ResetHost = _resetHost,
                 SessionResetStamp = _resetGate.Resolve(data.Provider + "|first", first?.Window.ResetDetectedAtUtc, nowUtc),
                 WeeklyResetStamp = _resetGate.Resolve(data.Provider + "|second", second?.Window.ResetDetectedAtUtc, nowUtc),
                 SessionTimePercent = first?.Window.ElapsedPercent ?? -1,

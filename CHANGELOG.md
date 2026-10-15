@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- A reset animation on the taskbar strip or the overlay no longer plays a second time when another provider's numbers arrive a few seconds later. The strip and the overlay kept their memory of what they had already played in a lookup keyed by the window's XamlRoot, a Windows object that is recreated after a garbage collection, so the memory was lost and the next rebuild replayed the reset. Each display now owns that memory and hands it to its bars directly, which also keeps the wait for a running animation intact.
+
 ## [1.5.2] - 2026-10-16
 
 ### Fixed

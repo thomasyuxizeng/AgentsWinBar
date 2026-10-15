@@ -91,16 +91,11 @@ internal sealed class BarResetAnimation : IDisposable
         }
     }
 
-    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<XamlRoot, ResetHostState> s_hosts = new();
-
-    /// <summary>The per-window reset memory (one per window's XamlRoot), or null for a bar that is not in a window yet.</summary>
-    internal static ResetHostState? HostState(XamlRoot? root) => root == null ? null : s_hosts.GetValue(root, _ => new ResetHostState());
-
-    /// <summary>How long a bar in this window still plays its reset animation (zero if none does).</summary>
-    internal static TimeSpan RemainingBusy(XamlRoot? root) =>
-        root != null && s_hosts.TryGetValue(root, out var host) ? host.RemainingBusy(Environment.TickCount64) : TimeSpan.Zero;
-
-    public void Play(Brush? ghostBrush, double ghostWidth)
+    /// <summary>
+    /// Plays the effect. <paramref name="host"/> is the memory of the window that owns the bar (null for a window that does
+    /// not recreate its bars); it learns that an animation is running so the window can hold its rebuild back.
+    /// </summary>
+    public void Play(Brush? ghostBrush, double ghostWidth, ResetHostState? host)
     {
         if (_disposed) return;
         var width = _clipHost.ActualWidth;
@@ -108,7 +103,7 @@ internal sealed class BarResetAnimation : IDisposable
         if (width <= 0 || height <= 0) return;
 
         // A window that rebuilds its bars waits for the animation to finish (see the strip and the overlay)
-        HostState(_ringHost.XamlRoot)?.MarkBusy(Environment.TickCount64, BarResetTimeline.TotalMs + 150);
+        host?.MarkBusy(Environment.TickCount64, BarResetTimeline.TotalMs + 150);
         Stop();
         var generation = _generation;
 

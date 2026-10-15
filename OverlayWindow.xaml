@@ -69,6 +69,7 @@
                             TimePercent="{x:Bind SessionTimePercent}"
                             PaceText="{x:Bind SessionPace}"
                             Accent="{x:Bind SessionAccent}"
+                            ResetHost="{x:Bind ResetHost}"
                             ResetKey="{x:Bind SessionResetKey}"
                             ResetFromPercent="{x:Bind SessionWindow.ResetFromUsedPercent}"
                             ResetDetectedAtUtc="{x:Bind SessionResetStamp}"/>
@@ -89,6 +90,7 @@
                             TimePercent="{x:Bind WeeklyTimePercent}"
                             PaceText="{x:Bind WeeklyPace}"
                             Accent="{x:Bind WeeklyAccent}"
+                            ResetHost="{x:Bind ResetHost}"
                             ResetKey="{x:Bind WeeklyResetKey}"
                             ResetFromPercent="{x:Bind WeeklyWindow.ResetFromUsedPercent}"
                             ResetDetectedAtUtc="{x:Bind WeeklyResetStamp}"/>

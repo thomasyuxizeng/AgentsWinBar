@@ -132,6 +132,21 @@ public sealed partial class UsageMeter : UserControl
         set => SetValue(ResetKeyProperty, value);
     }
 
+    /// <summary>
+    /// What the window that recreates its bars remembers about reset animations (see <see cref="ResetKey"/>). The window owns
+    /// it and hands it to every bar it creates; a lookup through <c>XamlRoot</c> would not do, because that projected object
+    /// is recreated after a garbage collection and the memory would be lost with it. Set it BEFORE the timestamp; null
+    /// (the default) keeps the bar's own memory only.
+    /// </summary>
+    public static readonly DependencyProperty ResetHostProperty =
+        DependencyProperty.Register(nameof(ResetHost), typeof(ResetHostState), typeof(UsageMeter), new PropertyMetadata(null));
+
+    public ResetHostState? ResetHost
+    {
+        get => (ResetHostState?)GetValue(ResetHostProperty);
+        set => SetValue(ResetHostProperty, value);
+    }
+
     private BarResetAnimation? _resetAnimation;
     private double _fillWidth;
     private double _previousFillWidth;
@@ -180,7 +195,7 @@ public sealed partial class UsageMeter : UserControl
         if (!BarResetAnimationPolicy.ShouldPlay(newValue, oldValue, DateTime.UtcNow, BarResetAnimation.AnimationsEnabled, shown, BarResetAnimation.PlaybackEnabled, visibleSince)) return;
         _playedResetAt = newValue;
         // A window that rebuilds its bars gives each a new instance: the window remembers what it already played
-        if (ResetKey is { } key && newValue is { } playedAt && BarResetAnimation.HostState(XamlRoot) is { } host && !host.TryMarkPlayed(key, playedAt)) return;
+        if (ResetKey is { } key && newValue is { } playedAt && ResetHost is { } host && !host.TryMarkPlayed(key, playedAt)) return;
         PlayResetAnimation();
     }
 
@@ -192,12 +207,12 @@ public sealed partial class UsageMeter : UserControl
             // The usage may already have dropped to empty before this timestamp arrived, so fall back to the previous fill
             if (BarResetGhost.ColourPercent(ResetFromPercent) is { } fromPercent && BarResetGhost.Width(ActualWidth, ResetFromPercent) is { } fromWidth)
             {
-                _resetAnimation.Play(BarBrushFor(fromPercent), fromWidth);
+                _resetAnimation.Play(BarBrushFor(fromPercent), fromWidth, ResetHost);
                 return;
             }
 
             var useCurrent = _fillWidth >= 1;
-            _resetAnimation.Play(useCurrent ? UsageBar.Fill : _previousFillBrush, useCurrent ? _fillWidth : _previousFillWidth);
+            _resetAnimation.Play(useCurrent ? UsageBar.Fill : _previousFillBrush, useCurrent ? _fillWidth : _previousFillWidth, ResetHost);
         }
         catch (Exception ex)
         {
