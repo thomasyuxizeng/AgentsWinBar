@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-10-15
+
+### Added
+- An API credits tracker on the dashboard shows organization API spend against a monthly budget: spent, remaining, percent used, days left, pace per day, and who contributed when a breakdown is available. Spend is read with an Anthropic Admin key from the `ANTHROPIC_ADMIN_KEY` environment variable and is never saved to disk. It refreshes only while the dashboard is open. Settings has a Monthly API budget (USD, default 200) and a Credit renewal day (UTC).
+- A NEEDS ATTENTION list at the top of the dashboard names windows that are at their limit, will run out before they reset, or are near their limit, and says "All clear" when nothing is wrong. Providers showing old or last-known data are marked stale, and windows that reset together are grouped.
+- A GRAPHS section below the provider panels shows each provider's burndown charts and daily cost chart. Settings has a Show graphs option for each provider.
+
+### Changed
+- The dashboard is rebuilt around one panel per provider; the old usage overview, mini bars and usage cards are gone. The diagnostics now sit in a collapsible section, and the even-use guide line on burndown charts is fainter so the usage line reads first.
+- Usage refreshes back off properly when nothing is changing. Idle rolling windows (for example Gemini 5 hours, Codex session) report a reset time that drifts on every refresh, which used to count as a change and kept the adaptive refresh from ever slowing down; a reset time must now move by more than an hour to count.
+- Battery saver doubles the refresh delay, up to 30 minutes, and applies the change to the pending refresh straight away.
+- Less background work while the PC is locked or the window is hidden: no cost scans or billing polls while locked, the dashboard clock stops when it is minimized, and the taskbar strip and overlay stop their keep-on-top timers on lock and skip redraws when nothing visible changed.
+- Cost scans for several providers now write the cost ledger once instead of once per provider, and the usage cache is no longer saved twice after a refresh.
+
+### Fixed
+- Usage alerts ignore stale readings and windows that are already past their reset time.
+- A damaged usage history file is skipped instead of failing the load, and history is never saved before it has finished loading.
+- The WSL shim no longer replays a cached reading that contains a reset time already in the past.
+
+### Known limitations
+A refresh that rebuilds the bars within 15 seconds of a detected reset can replay the reset animation once.
+
 ## [1.4.0] - 2026-10-14
 
 ### Added
