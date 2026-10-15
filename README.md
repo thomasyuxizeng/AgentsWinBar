@@ -21,7 +21,7 @@ Tell your AI coding agent: `Install CodexBarWin from https://github.com/Wave-OCE
 
 ![The dashboard](docs/images/dashboard.png)
 
-*The dashboard: headline tiles, every usage bar on one screen, then a detailed panel per provider.*
+*The dashboard in its earlier layout, with headline tiles and a usage overview. The current layout (a needs-attention summary, one panel per provider and a graphs section) is described under [The dashboard](#the-dashboard).*
 
 ## Contents
 
@@ -47,7 +47,8 @@ Tell your AI coding agent: `Install CodexBarWin from https://github.com/Wave-OCE
 | **Pace awareness** | Every bar also shows how much of the window's time has passed, so you can tell "50% used" at the start of a window from "50% used" near the end. |
 | **Provider status** | Service health on each card, incident details with a status-page link, and a small incident dot on compact displays. Grey means no status is available (including Gemini through Antigravity). |
 | **Cost and tokens** | Today's and last-30-days totals from local logs, each on its own wrapping card line. Detail pages show daily costs and top models. Amounts are list-price estimates, not bills. |
-| **Usage history** | Detail pages plot each limit window's usage against an even-use guide readable in light and dark themes, with a projection from the observed rate and local capture times. History builds as the app runs and is kept for 14 days. |
+| **Usage history** | Detail pages plot each limit window's usage against an even-use guide readable in light and dark themes, with a projection from the observed rate and local capture times. History builds as the app runs and is kept for 14 days. The dashboard's [GRAPHS](#the-dashboard) section shows compact versions of these charts. |
+| **API credits** | The dashboard's Claude panel can show your Anthropic organization's API spend against a monthly budget. Needs an Anthropic Admin key. See [API credits](#api-credits). |
 
 Supported providers: **Claude**, **Codex** (OpenAI) and **Gemini** (read through Google's Antigravity).
 
@@ -148,12 +149,15 @@ The packaged app keeps its settings across updates.
 
 | Setting | What it does |
 |---------|--------------|
-| Providers | Choose which providers show, and their order. Changes apply immediately. |
-| Refresh interval | How often usage is fetched (1, 2, 5 or 10 minutes). While your usage isn't changing the app waits longer (up to 3x, capped at 15 minutes) and returns to this interval as soon as something moves, or when you open the flyout or dashboard and the data is older than the refresh interval. Turn this off with `adaptiveRefreshEnabled` ([Configuration](#configuration)). |
+| Providers | Choose which providers show, and their order. Each provider also has a **Show graphs** checkbox (on by default) for the dashboard's GRAPHS section. Changes apply immediately. |
+| Reset animation | Whether a bar plays its [reset animation](#reset-animation): **Always on**, **Always off** or **Off in battery saver** (the default). |
+| Refresh interval | How often usage is fetched (1, 2, 5 or 10 minutes). While your usage isn't changing the app waits longer (up to 3x, capped at 15 minutes) and returns to this interval as soon as something moves, or when you open the flyout or dashboard and the data is older than the refresh interval. Turn this off with `adaptiveRefreshEnabled` ([Configuration](#configuration)). While Windows battery saver is on, the delay is doubled, up to 30 minutes; see [Battery use](#battery-use). |
 | Always-on overlay | The floating readout. Drag to move, right-click for options. |
 | Taskbar display | The strip on the taskbar, bottom-left corner. |
 | Usage alerts | Windows notifications. "Send test notification" checks they reach you. |
 | Show cost and token totals | Local log estimates on cards and detail pages. Scans run while the flyout or dashboard is open (at most every 30 minutes) and when you click Refresh. |
+| Monthly API budget (USD) | The budget the [API credits](#api-credits) tracker measures spend against. Default 200. |
+| Credit renewal day | The day of the month (1 to 28, UTC) your API credits renew; it sets where the tracker's billing cycle starts. Default 1. |
 | Run at startup | Start with Windows. |
 
 Both compact displays hide themselves while a fullscreen game, video or presentation is running.
@@ -187,6 +191,14 @@ On the floating overlay and the taskbar strip, each provider shows its two most 
 
 One notification per usage window (re-armed when the window resets), at three levels: **far ahead of pace** (25+ points ahead and the limit would be hit well before the reset), **nearly out** (90%+), and **at the limit**. They cover the extra windows too.
 
+### Reset animation
+
+When a usage window resets, its bar plays a short green animation: a ring draws around the bar, the previous fill turns green and collapses to the left, and a glow sweeps across. A session reset animates only the session bar and a weekly reset only the weekly bar. It plays wherever the bar is drawn (flyout, detail page, dashboard, overlay and taskbar strip). The app also refreshes about two seconds after each known reset time so the cleared limit appears sooner.
+
+- The **Reset animation** setting is **Always on**, **Always off** or **Off in battery saver** (the default).
+- It is skipped when Windows animations are turned off.
+- A reset detected while the PC is locked plays once, on each bar, after you unlock (or resume from sleep to the desktop), because it would be missed on the lock screen.
+
 ## The dashboard
 
 The flyout is for a quick look; the dashboard is for when you want the whole picture. Click the dashboard button in the flyout footer (or reopen it the same way; a minimized dashboard is restored). It is a normal window: resize it, maximize it, press **F11** for full screen (Esc leaves it), or pin it on top with the pin button. Refresh runs a fetch right away, and the window follows the app's refresh interval otherwise.
@@ -195,18 +207,41 @@ From top to bottom:
 
 | Section | What it shows |
 |---------|---------------|
-| **Headline tiles** | Provider health, service incidents, how many limits are at or near their cap and how many are ahead of pace, the most-used window, the next reset, and cost today and over 30 days. |
-| **Usage overview** | One card per provider with a one-line bar for every window (name, bar with its pace layer, percent used, time to reset). Every limit is visible on load without scrolling. Hover a row for the exact numbers. |
-| **Provider panels** | A detailed panel per provider: every usage window with reset time, pace projection and a usage history chart; service status; cost and token totals with daily cost bars; top models. Gemini gets a full-width panel with its own models and the External (Claude and GPT) pool side by side. |
-| **Diagnostics** | Always at the bottom, also in full screen: CLI and app versions, the effective settings, the history store, cost scans, and this session's refresh log and alerts. |
+| **Summary** | Only what the provider panels don't already say. **NEEDS ATTENTION** lists failed fetches, service incidents, windows at their limit, windows that will run out before they reset, windows near a limit, API credits that are running low or over budget, and providers showing old or last-known data (marked stale). Providers with the same kind of problem share one entry, and clicking an entry jumps to that provider. When nothing is wrong the toolbar says **All clear**. When two or more providers report cost, the summary also shows the estimated spend for all providers. |
+| **Provider panels** | One panel per provider, side by side as far as the window is wide: plan, freshness, service status with incident details, every usage window with its reset time (windows that reset together share one reset line), pace warnings, and cost and tokens for today and the last 30 days. Claude's panel also holds the [API credits](#api-credits) tracker. **Show details** adds pace and window facts, the 30-day token mix, top models and how many history samples exist. Gemini's External (Claude and GPT) windows sit beside its own models in a wide panel and stack under them in a narrow one. |
+| **GRAPHS** | Below the panels: one card per provider with a compact burndown chart for each usage window (usage against an even-use guide, with a projection) and a 30-day daily cost chart. The toggle buttons in the section header hide or show a provider's charts; the choice is the same **Show graphs** option as in Settings. |
+| **Diagnostics** | A collapsible section at the bottom (collapsed by default, with a one-line summary in its header), also in full screen: CLI and app versions, the effective settings, the history store, cost scans, and this session's refresh log and alerts. |
 
 Refreshes only redraw what changed, so scrolling stays smooth while data loads.
+
+### API credits
+
+The Claude panel can show your Anthropic organization's API spend for the current billing cycle against a monthly budget. This is separate from the usage limits, which come from the CLI.
+
+Setup:
+
+1. Create an Anthropic Admin key at <https://platform.claude.com/settings/admin-keys>. The panel also has a **Create an Admin key** link.
+2. Save it as the user environment variable `ANTHROPIC_ADMIN_KEY`. A new key is picked up on the next refresh; restart the app after replacing an existing key.
+3. In **Settings**, set **Monthly API budget (USD)** and **Credit renewal day** (UTC).
+
+What it shows: the amount spent so far this cycle and the budget, what is left (or how far over budget you are), a bar with a tick for how far through the cycle you are, the renewal date and days left, and the daily spend that would use up the rest of the budget by then (shown as "to use it all"). When a breakdown is available, a **Used by** list splits the spend by member, you first, with an "Other / not attributable" line for charges that cannot be assigned. The **Billing** link opens the Claude Platform billing page. The tracker also adds an "API credits" entry to NEEDS ATTENTION when usage is at 75% or more of the budget (running low), at 90% or more (nearly used up), or over budget.
+
+How it behaves:
+
+- The key is read from the environment each time it is used, and neither it nor the spend is written to disk. The spend is held in memory only.
+- It refreshes only while a dashboard window is visible (not minimized), at most every five minutes, or when you click Refresh.
+- No key: nothing shows until you open **Show details** on the Claude panel, which then explains how to add one.
+- Key rejected: "Admin key rejected (HTTP 401)" or "(HTTP 403)", with the link to create a key.
+- Anthropic unreachable: "Anthropic API spend is unavailable right now". If an earlier reading exists it stays on screen, marked stale. Any reading older than 15 minutes is marked stale.
 
 ## What this fork adds
 
 Compared with upstream, this fork adds:
 
-- **A dashboard window** with headline tiles, a usage overview with every bar at once, a detailed panel per provider and a diagnostics section. See [The dashboard](#the-dashboard).
+- **A dashboard window** with a needs-attention summary, a detailed panel per provider, a graphs section and collapsible diagnostics. See [The dashboard](#the-dashboard).
+- **An API credits tracker** on the dashboard: Anthropic organization API spend against a monthly budget, read with an Admin key and never saved to disk. See [API credits](#api-credits).
+- **A reset animation** that plays a short green effect on a bar when its usage window resets. See [Reset animation](#reset-animation).
+- **Lower battery use**: refreshes back off when usage is unchanged, double under Windows battery saver, and refreshes, cost scans and the compact displays' timers slow down or stop while the PC is locked. See [Battery use](#battery-use).
 - **Always-on overlay and taskbar strip.** Borderless, rounded where it should be, flush with the taskbar, never steals focus, and hides during fullscreen apps.
 - **A flyout that reliably appears over other programs**, instead of sometimes opening behind them.
 - **Pace layer, marker and run-out projections** on every bar.
@@ -223,7 +258,7 @@ Compared with upstream, this fork adds:
 - **Providers apply immediately** when enabled, disabled or reordered in Settings.
 - **Safer settings and refreshes.** Settings saves replace a complete file atomically, failed saves show a visible error and restore uncommitted values, and malformed values recover to defaults. Canceled refreshes cannot put old results back on screen. Quit flushes history before exiting.
 - **`tools/wsl`**: one-step setup for the CLI and shim.
-- Close to 500 unit tests, including settings persistence, refresh cancellation races and cost-cache recovery after cancellation.
+- More than 1,000 unit tests, including settings persistence, refresh cancellation races and cost-cache recovery after cancellation.
 
 The full list is in the [changelog](CHANGELOG.md).
 
@@ -306,6 +341,13 @@ A scan that fails or times out keeps showing last-known totals, and only a newer
 Usage snapshots live in `usage-history.json` beside `settings.json`. The app records a sample when usage
 changes by at least half a percentage point, ten minutes pass, or a limit window resets. Each chart shows
 only the current window; old-window samples remain on disk until the 14-day retention period expires.
+
+### Battery use
+
+- **Adaptive refresh.** While usage isn't changing, the delay between refreshes grows (see the Refresh interval setting). A window's reset time has to move by more than an hour to count as a change, so idle rolling windows whose reset time drifts don't keep the app refreshing at full speed.
+- **Battery saver.** While Windows battery saver is on, the refresh delay is doubled, up to 30 minutes, and the change applies to the pending refresh straight away. Under the default **Reset animation** setting the animation is off too.
+- **Locked PC.** Refreshes wait at least `lockedRefreshIntervalMinutes` (default 30). No background cost scans or API credits polls run, and the overlay and taskbar strip stop their keep-on-top timers until you unlock.
+- **Minimized dashboard.** Its clock stops and it stops asking for cost scans.
 
 ### Keeping WSL light
 
