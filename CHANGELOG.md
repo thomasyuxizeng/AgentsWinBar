@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- A reset animation on the taskbar strip and the overlay now plays once and to the end. Those displays recreate their bars whenever their content changes, which cut the animation short and made each new bar play the same reset again (2 to 4 times after an unlock). Each display now remembers what it played per bar and waits for a running animation to finish before it rebuilds.
+- Switching Windows battery saver on or off no longer restarts the wait for the pending refresh, so a laptop that is plugged in and out repeatedly can no longer keep pushing refreshes back. The refresh interval shown stays whole.
 - The taskbar strip and the overlay no longer stay frozen after the PC has been locked. Windows' unlock notification never reached them, so they stopped keeping themselves on top, checking for fullscreen apps and refreshing their time; they now check for the unlock every 30 seconds while locked.
 - The strip and the overlay come back when a fullscreen app ends without another window taking focus (they stayed hidden).
 - The overlay is moved back on screen after a monitor change even when its usage data is unchanged.
