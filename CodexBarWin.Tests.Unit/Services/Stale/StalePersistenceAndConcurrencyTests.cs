@@ -331,8 +331,12 @@ public class StalePersistenceAndConcurrencyTests
     public async Task Persistence_CostStoreUnspecifiedDateTimeKind_ShouldLoadWithoutBeingDroppedAsFuture()
     {
         var costPath = Path.Combine(_directory, "unspecified-kind-cost.json");
-        // Local timestamp written without timezone offset, e.g. from local log or serialization
-        var localTimeStr = "2026-10-10T20:00:00";
+        // Local timestamp written without timezone offset, e.g. from local log or serialization. It is built from the clock,
+        // five minutes before it, so the test holds in every time zone (a fixed "20:00:00" was only in the past on a UTC+9
+        // machine and was dropped as a future time on a UTC build server).
+        var testClock = new TestClock { CurrentTime = DateTimeOffset.Parse("2026-10-10T12:05:00Z") };
+        var localTimeStr = testClock.CurrentTime.ToLocalTime().AddMinutes(-5)
+            .ToString("yyyy-MM-dd'T'HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture);
         var json = $$"""
         {
           "items": {
@@ -347,8 +351,6 @@ public class StalePersistenceAndConcurrencyTests
         """;
         await File.WriteAllTextAsync(costPath, json);
 
-        // Clock set to UTC corresponding to a time slightly after the local timestamp
-        var testClock = new TestClock { CurrentTime = DateTimeOffset.Parse("2026-10-10T12:05:00Z") }; // UTC+9 local was 21:05
         var store = new CostCacheStore(_settings, NullLogger<CostCacheStore>.Instance, testClock, costPath);
         var loaded = await store.LoadAsync();
         loaded.ContainsKey("claude").Should().BeTrue();
