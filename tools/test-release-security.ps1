@@ -142,43 +142,38 @@ if ($Group -eq 'Licenses') {
     $fixture = Join-Path $PSScriptRoot ('security-test-' + [Guid]::NewGuid().ToString('N'))
     [void][IO.Directory]::CreateDirectory($fixture)
     $report = Join-Path $fixture 'licenses.json'
-    $allowlist = Join-Path $fixture 'allowlist.json'
     try {
-        [IO.File]::WriteAllText($allowlist, '[]')
-        Assert-Throws { & $checker -ReportPath $report -AllowlistPath $allowlist } 'absent license report fails'
+        Assert-Throws { & $checker -ReportPath $report } 'absent license report fails'
         foreach ($invalid in @('', '[]', '[ ]', 'null', '{}', '[null]', '[{}]', '[', '[{"PackageName":"test","License":""}]', '[{"PackageName":"test","License":["MIT"]}]')) {
             [IO.File]::WriteAllText($report, $invalid)
-            Assert-Throws { & $checker -ReportPath $report -AllowlistPath $allowlist } "invalid or empty license report fails: $invalid"
+            Assert-Throws { & $checker -ReportPath $report } "invalid or empty license report fails: $invalid"
         }
-        foreach ($license in @('GPL-2.0', 'GPL-3.0-only', 'GPL-2.0+', 'AGPL-3.0-or-later', 'LGPL-2.1-only', 'MIT OR GPL-3.0-only', 'MIT AND (Apache-2.0 OR AGPL-3.0-or-later)', 'Unknown', 'https://example.invalid/license', 'MIT OR', '(MIT', 'MIT Apache-2.0')) {
+        # The policy fails on GPL-family licenses (anywhere in an expression, or by name) and on missing license information
+        foreach ($license in @('GPL-2.0', 'GPL-3.0-only', 'GPL-2.0+', 'AGPL-3.0-or-later', 'LGPL-2.1-only', 'MIT OR GPL-3.0-only', 'MIT AND (Apache-2.0 OR AGPL-3.0-or-later)', 'GNU General Public License v3.0', 'https://www.gnu.org/licenses/gpl-3.0.html', 'Unknown')) {
             # Keep the report an array in both Windows PowerShell and PowerShell 7.
             [IO.File]::WriteAllText($report, ('[' + (@{ PackageName = 'test'; PackageVersion = '1.0'; License = $license } | ConvertTo-Json -Compress) + ']'))
-            Assert-Throws { & $checker -ReportPath $report -AllowlistPath $allowlist } "forbidden, unknown, or malformed expression fails: $license"
+            Assert-Throws { & $checker -ReportPath $report } "GPL-family or missing license fails: $license"
         }
+        # Plain permissive SPDX expressions pass without a warning
         foreach ($license in @('MIT', 'Apache-2.0', '(MIT OR Apache-2.0) AND BSD-3-Clause', 'BSD-2-Clause', 'ISC')) {
             [IO.File]::WriteAllText($report, ('[' + (@{ PackageName = 'test'; License = $license } | ConvertTo-Json -Compress) + ']'))
-            $null = & $checker -ReportPath $report -AllowlistPath $allowlist 6>$null
+            $output = (& $checker -ReportPath $report 6>&1) | Out-String
+            Assert-True ($output -notmatch '::warning::') "permissive license passes quietly: $license"
+        }
+        # Anything else that is not GPL-family (Microsoft's license files and URLs, unusual identifiers) passes with a warning
+        foreach ($license in @('license.txt', 'sdk_license.txt', 'https://aka.ms/WinSDKLicenseURL', 'Owner-reviewed SDK license', 'MIT OR', '(MIT', 'MIT Apache-2.0')) {
+            [IO.File]::WriteAllText($report, ('[' + (@{ PackageName = 'test'; PackageVersion = '1.0'; License = $license } | ConvertTo-Json -Compress) + ']'))
+            $output = (& $checker -ReportPath $report 6>&1) | Out-String
+            Assert-True ($output -match '::warning::') "non-SPDX license warns instead of failing: $license"
         }
         [IO.File]::WriteAllText($report, '[{"PackageId":"first","Version":"1.0","License":"MIT"},{"PackageName":"second","PackageVersion":"1.0","License":"Apache-2.0"}]')
-        $null = & $checker -ReportPath $report -AllowlistPath $allowlist 6>$null
+        $null = & $checker -ReportPath $report 6>$null
         [IO.File]::WriteAllText($report, '[{"PackageName":"first","License":"MIT"},{"PackageName":"second","License":"AGPL-3.0-only"}]')
-        Assert-Throws { & $checker -ReportPath $report -AllowlistPath $allowlist } 'one permitted row cannot hide a later forbidden row'
-        $exception = @{ PackageName = 'test'; PackageVersion = '1.0'; License = 'Owner-reviewed SDK license' }
-        [IO.File]::WriteAllText($allowlist, ('[' + ($exception | ConvertTo-Json -Compress) + ']'))
-        [IO.File]::WriteAllText($report, ('[' + ($exception | ConvertTo-Json -Compress) + ']'))
-        $null = & $checker -ReportPath $report -AllowlistPath $allowlist 6>$null
-        $exception.PackageVersion = '2.0'
-        [IO.File]::WriteAllText($report, ('[' + ($exception | ConvertTo-Json -Compress) + ']'))
-        Assert-Throws { & $checker -ReportPath $report -AllowlistPath $allowlist } 'exception does not allow another package version'
-        $exception.License = 'GPL-3.0-only'
-        [IO.File]::WriteAllText($allowlist, ('[' + ($exception | ConvertTo-Json -Compress) + ']'))
-        [IO.File]::WriteAllText($report, ('[' + ($exception | ConvertTo-Json -Compress) + ']'))
-        Assert-Throws { & $checker -ReportPath $report -AllowlistPath $allowlist } 'allowlist cannot bypass GPL ban'
-        [IO.File]::WriteAllText($allowlist, '[{}]')
-        Assert-Throws { & $checker -ReportPath $report -AllowlistPath $allowlist } 'malformed allowlist fails'
+        Assert-Throws { & $checker -ReportPath $report } 'one permitted row cannot hide a later forbidden row'
+        [IO.File]::WriteAllText($report, '[{"PackageName":"first","License":"license.txt"},{"PackageName":"second","License":"GPL-3.0-only"}]')
+        Assert-Throws { & $checker -ReportPath $report } 'a warning row cannot hide a later forbidden row'
     } finally {
         [IO.File]::Delete($report)
-        [IO.File]::Delete($allowlist)
         [IO.Directory]::Delete($fixture)
     }
     $licenseWorkflow = [IO.File]::ReadAllText((Join-Path $root '.github/workflows/licenses.yml'))

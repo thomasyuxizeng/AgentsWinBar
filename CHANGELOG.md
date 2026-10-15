@@ -32,7 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Dashboard: a NEEDS ATTENTION entry that lists many windows now ends in an ellipsis instead of being cut off mid-word; the full text is its tooltip.
 
 ### Changed
-- A release tag now runs the unit tests and the license check before anything is built, and the license check fails on a missing report or an unapproved license. The installer passes its administrator step in one encoded command, copies the Windows App Runtime installer into a protected folder before running it, and can pin the release signing certificate once its thumbprint is set.
+- A release tag now runs the unit tests and the license check before anything is built, and the license check fails on a GPL-family license, a package without license information or a missing report. Licenses that are a file or a URL instead of an SPDX identifier (Microsoft's Windows App SDK and WebView2 packages) are listed as warnings, so there is no approval list to maintain. The installer passes its administrator step in one encoded command, copies the Windows App Runtime installer into a protected folder before running it, and can pin the release signing certificate once its thumbprint is set.
 
 ## [1.5.1] - 2026-10-15
 
