@@ -34,6 +34,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private bool _sessionLocked;
     private CancellationTokenSource? _refreshCts;
     private CancellationTokenSource? _timerCts;
+    private DateTime _timerStartedUtc;
+    // Set just before a RecreateTimer call that continues the wait of the pending refresh instead of restarting it
+    private DateTime? _carryOverSinceUtc;
     private CancellationTokenSource? _costRefreshCts;
     private CancellationTokenSource? _backgroundCostRefreshCts;
     private bool _backgroundCostRefreshForced;
@@ -866,7 +869,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 OnPropertyChanged(nameof(ShouldPlayResetAnimation));
                 // Battery saver stretches the refresh interval: apply it (or lift it) to the pending refresh too.
                 EffectiveRefreshInterval = GetScheduledDelay();
-                if (!_stopped && !_exiting && !IsLoading) RecreateTimer();
+                // Plugging in or out must not push the pending refresh back by the time it has already waited
+                if (_stopped || _exiting || IsLoading) return;
+                _carryOverSinceUtc = _timerCts != null ? _timerStartedUtc : null;
+                RecreateTimer();
             });
         }
         catch (Exception ex) { _logger.LogError(ex, "Failed to dispatch battery saver change"); }
@@ -900,6 +906,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         if (_disposed || _stopped || _exiting || IsLoading) return;
         var now = DateTime.UtcNow;
+        var pendingSinceUtc = _carryOverSinceUtc;
+        _carryOverSinceUtc = null;
         var normalDelay = firstDelay ?? GetScheduledDelay();
         if (normalDelay < ResetRefreshScheduler.MinimumDelay) normalDelay = ResetRefreshScheduler.MinimumDelay;
         var locked = _sessionLocked || QuerySessionLocked();
@@ -916,10 +924,14 @@ public partial class MainViewModel : ObservableObject, IDisposable
         var schedule = locked ? new ResetRefreshSchedule(normalDelay)
             : ResetRefreshScheduler.GetSchedule(resetTimes, now, normalDelay, _resetRefreshAttempts);
         EffectiveRefreshInterval = schedule.Delay;
+        // A new interval for the refresh already pending (battery saver) keeps the time already waited; the interval shown stays whole
+        if (pendingSinceUtc is { } since && schedule.TargetResetAtUtc == null)
+            schedule = schedule with { Delay = TimeSpan.FromTicks(Math.Max(ResetRefreshScheduler.MinimumDelay.Ticks, (schedule.Delay - (now - since)).Ticks)) };
         _timerCts?.Cancel();
         _timerCts?.Dispose();
         _timerCts = new CancellationTokenSource();
-        NextRefreshUtc = now + EffectiveRefreshInterval;
+        _timerStartedUtc = now;
+        NextRefreshUtc = now + schedule.Delay;
         RunPeriodicRefreshAsync(schedule, _timerCts.Token).SafeFireAndForget(
             onError: ex => _logger.LogError(ex, "Periodic refresh task failed"));
         // Unlock events are not reliable (they never reached the app in testing), and a locked session sleeps for up

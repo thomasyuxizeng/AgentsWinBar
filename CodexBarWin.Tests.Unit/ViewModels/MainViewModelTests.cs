@@ -1019,6 +1019,40 @@ public class MainViewModelTests
     }
 
     [TestMethod]
+    public async Task BatterySaverChanged_RefreshAlreadyPending_KeepsTheTimeAlreadyWaited()
+    {
+        _values.RefreshIntervalSeconds = 300;
+        SetupImmediateUsage();
+        await _viewModel.StartAsync();
+        var scheduled = _viewModel.NextRefreshUtc!.Value;
+        await Task.Delay(30);
+
+        _batterySaver.SetupGet(m => m.BatterySaverActive).Returns(true);
+        _batterySaver.Raise(m => m.BatterySaverChanged += null, EventArgs.Empty);
+
+        // The interval doubles, but the pending refresh counts from when it was scheduled, not from the toggle
+        _viewModel.EffectiveRefreshInterval.Should().Be(TimeSpan.FromSeconds(600));
+        _viewModel.NextRefreshUtc.Should().Be(scheduled + TimeSpan.FromSeconds(300));
+    }
+
+    [TestMethod]
+    public async Task BatterySaverChanged_LiftedWhileRefreshPending_PullsTheRefreshBackWithoutRestartingTheWait()
+    {
+        _values.RefreshIntervalSeconds = 300;
+        _batterySaver.SetupGet(m => m.BatterySaverActive).Returns(true);
+        SetupImmediateUsage();
+        await _viewModel.StartAsync();
+        var scheduled = _viewModel.NextRefreshUtc!.Value;
+        await Task.Delay(30);
+
+        _batterySaver.SetupGet(m => m.BatterySaverActive).Returns(false);
+        _batterySaver.Raise(m => m.BatterySaverChanged += null, EventArgs.Empty);
+
+        _viewModel.EffectiveRefreshInterval.Should().Be(TimeSpan.FromSeconds(300));
+        _viewModel.NextRefreshUtc.Should().Be(scheduled - TimeSpan.FromSeconds(300));
+    }
+
+    [TestMethod]
     public async Task AcquireCostDemand_RetainedCostPresent_DoesNotRequestScanOnReopen()
     {
         SetupImmediateUsage();
