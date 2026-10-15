@@ -17,16 +17,11 @@ Tell your AI coding agent: `Install CodexBarWin from https://github.com/Wave-OCE
 
 ![Flyout, detail page and taskbar strip](docs/images/overview.png)
 
-*Left: the tray flyout. Right: a provider's detail page (Gemini, showing Antigravity's separate Claude and GPT quota). Bottom: the taskbar strip.*
+*Left: the tray flyout. Right: a provider's detail page (Gemini, with a usage history chart for each window). Bottom: the taskbar strip.*
 
-![The dashboard with a few things that need attention](docs/images/dashboard.png)
+![The dashboard with a limit reached, an outage, a service incident and API credits running low](docs/images/dashboard.png)
 
-*The dashboard, described under [The dashboard](#the-dashboard): a needs-attention summary, one panel per provider and a graphs section. Here Claude's session is running ahead of pace, Codex has a service incident and the API credits are running low. Every screenshot and animation in this README uses the app's developer-mode sample data, not real usage.*
-
-| All clear | Limits reached |
-|:---:|:---:|
-| ![The dashboard when everything is fine](docs/images/dashboard-all-clear.png) | ![The dashboard with limits reached, an outage and API credits over budget](docs/images/dashboard-limits.png) |
-| Everything is comfortably low, so the toolbar says **All clear**. | Limits reached, a service outage and API credits over budget. |
+*The dashboard, described under [The dashboard](#the-dashboard): a needs-attention summary, one panel per provider and a graphs section. This one sample shows most of what the app can say at once: Claude's session is at its limit during a major outage, Codex's session is at 93% and running ahead of pace during a minor incident, Gemini's external 7-day window is near its limit, the other bars are comfortably behind pace, and the API credits are running low. Every screenshot and animation in this README uses the app's developer-mode sample data, not real usage.*
 
 When a limit resets, its bar plays a short animation (see [Reset animation](#reset-animation)). Here it is on the floating overlay:
 
@@ -194,7 +189,9 @@ Extra windows have their own colours so they stand apart from the main session a
 | OpenAI green | OpenAI windows. |
 | Orange to green gradient | Antigravity's shared **External** quota (5h and 7d: Claude and GPT models), shown on Gemini's card. |
 
-![Flyout](docs/images/flyout.png)
+![The flyout: Claude at its limit with a red outage dot, Codex with an amber incident dot](docs/images/flyout.png)
+
+*The flyout cards. A red bar is at or near its limit (here Claude's session, 100%), the white marker shows it is ahead of schedule, and the dot at the top right is the provider's service status.*
 
 On the floating overlay and the taskbar strip, each provider shows its two most **relevant** bars rather than always session and weekly. In order: the bar that moved most recently (last 30 minutes), then a window running ahead of schedule, then one near its limit (90%+), then one at its limit. Windows at or near a limit rank last on purpose: if you can't use more of it anyway, you'd rather see what you still have.
 
@@ -230,7 +227,7 @@ From top to bottom:
 
 ![The GRAPHS section and the collapsed Diagnostics section](docs/images/dashboard-graphs.png)
 
-*The GRAPHS section: usage against an even-use guide, with a dashed projection from the observed rate. Claude's session, at 83% and running ahead of the guide, is drawn in amber.*
+*The GRAPHS section: usage against an even-use guide, with a dashed projection from the observed rate. The Claude and Codex sessions, climbing above the guide to 100% and 93%, are drawn in red; Gemini's External 7d, at 84% and also ahead of the guide, in amber.*
 
 Refreshes only redraw what changed, so scrolling stays smooth while data loads.
 
@@ -246,9 +243,7 @@ Setup:
 
 What it shows: the amount spent so far this cycle and the budget, what is left (or how far over budget you are), a bar with a tick for how far through the cycle you are, the renewal date and days left, and the daily spend that would use up the rest of the budget by then (shown as "to use it all"). When a breakdown is available, a **Used by** list splits the spend by member, you first, with an "Other / not attributable" line for charges that cannot be assigned. The **Billing** link opens the Claude Platform billing page. The tracker also adds an "API credits" entry to NEEDS ATTENTION when usage is at 75% or more of the budget (running low), at 90% or more (nearly used up), or over budget.
 
-![The API credits panel on track, running low and over budget](docs/images/api-credits.png)
-
-*The panel with plenty of budget left (top), running low at 75% or more (middle) and over budget (bottom).*
+In the dashboard screenshot at the top of this page the panel sits at the bottom of Claude's card, in amber because the budget is running low.
 
 How it behaves:
 
