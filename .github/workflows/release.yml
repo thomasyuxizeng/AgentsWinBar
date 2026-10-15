@@ -25,7 +25,7 @@ env:
   NUGET_PACKAGES: ${{ github.workspace }}/.nuget/packages
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   validate:
@@ -47,8 +47,16 @@ jobs:
             fi
           done
 
-  cert:
+  tests:
     needs: validate
+    uses: ./.github/workflows/test.yml
+
+  licenses:
+    needs: validate
+    uses: ./.github/workflows/licenses.yml
+
+  cert:
+    needs: [validate, tests, licenses]
     runs-on: windows-latest
 
     steps:
@@ -91,7 +99,7 @@ jobs:
           if-no-files-found: error
 
   build:
-    needs: [validate, cert]
+    needs: [validate, cert, tests, licenses]
     runs-on: windows-latest
 
     strategy:
@@ -223,8 +231,10 @@ jobs:
           retention-days: 1
 
   release:
-    needs: [validate, cert, build]
+    needs: [validate, cert, build, tests, licenses]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout repository

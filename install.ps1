@@ -16,6 +16,7 @@ param(
     [string[]] $Providers,
     [string] $Distro,
     [string] $MsixPath,
+    [switch] $AllowDeveloperPackage,
     [switch] $NoSignIn,
     [switch] $NoWindowsSignIns,
     [switch] $SkipApp,
@@ -42,6 +43,89 @@ $script:ghRelease = $false
 $runtimeName = 'Microsoft.WindowsAppRuntime.1.8'
 $runtimeMinimum = [version]'8000.731.1532.0'
 $script:rememberedState = $null
+# Set from the independently verified stable release certificate before publishing this installer.
+$ExpectedReleaseCertificateThumbprint = ''
+
+function Assert-ReleaseSigner([string] $Thumbprint, [string] $ExpectedThumbprint, [switch] $AllowDeveloperPackage) {
+    $expected = $ExpectedThumbprint -replace '\s', ''
+    if ($expected -and $expected -notmatch '^[a-fA-F0-9]{40}$') { throw 'Expected release certificate thumbprint must contain 40 hexadecimal characters.' }
+    if ($AllowDeveloperPackage) {
+        Write-Warning 'LOCAL DEVELOPER PACKAGE: release certificate pinning is explicitly bypassed.'
+    } elseif (-not $expected) {
+        Write-Warning 'SECURITY WARNING: ExpectedReleaseCertificateThumbprint is unset. Release signer continuity is NOT enforced; legacy certificate trust behavior remains enabled.'
+    } elseif ($Thumbprint -ine $expected) {
+        throw 'MSIX signer does not match ExpectedReleaseCertificateThumbprint. Nothing has been trusted.'
+    }
+}
+
+function New-AdminCommand($Plan) {
+    # Both code and inputs cross UAC in the command line, never through a mutable script or plan file.
+    $planBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(($Plan | ConvertTo-Json -Compress)))
+    $adminScript = @'
+$ErrorActionPreference = 'Stop'
+$env:WSL_UTF8 = '1'
+$env:PSModulePath = Join-Path $PSHOME 'Modules'
+$reboot = $false
+$protectedStage = $null
+$runtimeCopy = $null
+try {
+    foreach ($name in @('Trust', 'EnableWsl', 'UpdateWsl', 'InstallRuntime', 'AllowDeveloperPackage')) {
+        if ($plan.$name -isnot [bool]) { throw 'Invalid administrator plan.' }
+    }
+    if ($plan.Trust) {
+        $cert = [Security.Cryptography.X509Certificates.X509Certificate2]::new([Convert]::FromBase64String($plan.CertificateBase64))
+        try {
+            if ($plan.Thumbprint -notmatch '^[a-fA-F0-9]{40}$' -or $cert.Subject -cne 'CN=CodexBarWin OSS' -or $cert.Thumbprint -ine $plan.Thumbprint) { throw 'Certificate mismatch.' }
+            if ($plan.ExpectedThumbprint -and -not $plan.AllowDeveloperPackage -and $cert.Thumbprint -ine ($plan.ExpectedThumbprint -replace '\s', '')) { throw 'Release certificate pin mismatch.' }
+            $store = New-Object Security.Cryptography.X509Certificates.X509Store('TrustedPeople', 'LocalMachine')
+            try { $store.Open('ReadWrite'); $store.Add($cert) } finally { $store.Dispose() }
+        } finally { $cert.Dispose() }
+    }
+    $wsl = Join-Path ([Environment]::GetFolderPath('System')) 'wsl.exe'
+    if ($plan.EnableWsl) {
+        & $wsl --install --no-distribution
+        if ($LASTEXITCODE -notin @(0, 3010)) { throw 'WSL enable failed.' }
+        if ($LASTEXITCODE -eq 3010) { $reboot = $true }
+    }
+    if ($plan.UpdateWsl) {
+        & $wsl --update
+        if ($LASTEXITCODE -notin @(0, 3010)) { throw 'WSL update failed.' }
+        if ($LASTEXITCODE -eq 3010) { $reboot = $true }
+    }
+    if ($plan.InstallRuntime) {
+        if (-not [IO.Path]::IsPathRooted($plan.Runtime) -or [IO.Path]::GetExtension($plan.Runtime) -ine '.exe' -or $plan.RuntimeSha256 -notmatch '^[a-fA-F0-9]{64}$') { throw 'Invalid runtime plan.' }
+        # Create with an explicit ACL under Program Files before copying any user-writable input.
+        $protectedRoot = [IO.Path]::GetFullPath([Environment]::GetFolderPath('ProgramFiles')).TrimEnd('\') + '\'
+        $candidate = [IO.Path]::GetFullPath((Join-Path $protectedRoot ('CodexBarWin-Setup-' + [Guid]::NewGuid().ToString('N'))))
+        if (-not $candidate.StartsWith($protectedRoot, [StringComparison]::OrdinalIgnoreCase) -or [IO.Directory]::Exists($candidate)) { throw 'Invalid protected staging path.' }
+        $acl = New-Object Security.AccessControl.DirectorySecurity
+        $acl.SetAccessRuleProtection($true, $false)
+        foreach ($sid in @('S-1-5-18', 'S-1-5-32-544')) {
+            $identity = New-Object Security.Principal.SecurityIdentifier($sid)
+            $rule = New-Object Security.AccessControl.FileSystemAccessRule($identity, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow')
+            $acl.AddAccessRule($rule)
+        }
+        [void][IO.Directory]::CreateDirectory($candidate, $acl)
+        $protectedStage = $candidate
+        $runtimeCopy = Join-Path $protectedStage 'runtime.exe'
+        Copy-Item -LiteralPath $plan.Runtime -Destination $runtimeCopy
+        if ((Get-FileHash -LiteralPath $runtimeCopy -Algorithm SHA256).Hash -ine $plan.RuntimeSha256) { throw 'Runtime SHA256 mismatch.' }
+        $signature = Get-AuthenticodeSignature -LiteralPath $runtimeCopy
+        if ($signature.Status -ne 'Valid' -or -not $signature.SignerCertificate -or $signature.SignerCertificate.Subject -notmatch '(?:^|,\s*)O=Microsoft Corporation(?:,|$)') { throw 'Runtime signature mismatch.' }
+        $process = Start-Process -FilePath $runtimeCopy -ArgumentList '--quiet' -WorkingDirectory $protectedStage -WindowStyle Hidden -PassThru -Wait
+        if ($process.ExitCode -notin @(0, 3010)) { throw 'Runtime install failed.' }
+        if ($process.ExitCode -eq 3010) { $reboot = $true }
+    }
+} catch { exit 30 } finally {
+    # Delete only the known file and empty directory, never recurse through an installer-created tree.
+    if ($runtimeCopy) { try { [IO.File]::Delete($runtimeCopy) } catch { } }
+    if ($protectedStage) { try { [IO.Directory]::Delete($protectedStage) } catch { } }
+}
+if ($reboot) { exit 3010 } else { exit 0 }
+'@
+    $command = '$plan = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String(''' + $planBase64 + ''')) | ConvertFrom-Json' + "`n" + $adminScript
+    [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
+}
 
 function Quote-Native([string] $Value) {
     # CommandLineToArgvW escaping, including trailing backslashes before the closing quote.
@@ -312,6 +396,7 @@ try {
     foreach ($provider in $Providers) { if (@('claude', 'codex', 'gemini') -notcontains $provider) { throw "Invalid provider: $provider. Allowed: claude, codex, gemini." } }
     if ($Distro -and ($Distro -match '[\x00-\x1f]' -or $Distro.StartsWith('-'))) { throw 'Invalid distro name.' }
     if ($MsixPath) { $MsixPath = (Resolve-Path -LiteralPath $MsixPath).Path }
+    if ($AllowDeveloperPackage -and -not $MsixPath) { throw 'AllowDeveloperPackage requires an explicit local MsixPath.' }
     $nativeArch = ''
     try { $nativeArch = [string][Runtime.InteropServices.RuntimeInformation]::OSArchitecture } catch { }
     if (-not $nativeArch) { $nativeArch = $env:PROCESSOR_ARCHITEW6432 }
@@ -460,7 +545,7 @@ try {
         New-Item -ItemType Directory -Path $downloads -Force | Out-Null
         $trustNeeded = $false
         $signerThumbprint = ''
-        $certificatePath = ''
+        $certificateBase64 = ''
         $package = $null
         if (-not $SkipApp) {
             $checksums = Download-Asset $checksumName $downloads
@@ -505,15 +590,18 @@ try {
             }
             if (-not $signer -or $signer.Subject -cne 'CN=CodexBarWin OSS' -or -not ($signature.Status -in @('Valid', 'NotTrusted') -or $untrustedRootOnly)) { throw "MSIX signature is absent, damaged, or unverified (status $($signature.Status)), or has an unexpected subject." }
             $signerThumbprint = $signer.Thumbprint
-            $certificatePath = Join-Path $downloads 'msix-signer.cer'
-            [IO.File]::WriteAllBytes($certificatePath, $signer.Export([Security.Cryptography.X509Certificates.X509ContentType]::Cert))
+            Assert-ReleaseSigner $signerThumbprint $ExpectedReleaseCertificateThumbprint -AllowDeveloperPackage:$AllowDeveloperPackage
+            $certificateBase64 = [Convert]::ToBase64String($signer.Export([Security.Cryptography.X509Certificates.X509ContentType]::Cert))
             $trustNeeded = -not (Test-Path ('Cert:\LocalMachine\TrustedPeople\' + $signerThumbprint))
             $cerName = "CodexBarWin-$($release.tagName)-Certificate.cer"
             if (-not @($release.assets | Where-Object { $_.name -ceq $cerName }).Count) { $cerName = 'CodexBarWin-Certificate.cer' }
             if (@($release.assets | Where-Object { $_.name -ceq $cerName }).Count) {
                 $cer = Download-Asset $cerName $downloads
                 $published = New-Object Security.Cryptography.X509Certificates.X509Certificate2($cer)
-                if ($published.Thumbprint -ne $signerThumbprint) { Write-Warning 'Published certificate differs from the MSIX signer (known v0.9.9 ARM64 issue); using the MSIX signer.' }
+                if ($published.Thumbprint -ne $signerThumbprint) {
+                    if ($ExpectedReleaseCertificateThumbprint -and -not $AllowDeveloperPackage) { throw 'Published certificate differs from the pinned MSIX signer.' }
+                    Write-Warning 'Published certificate differs from the MSIX signer (known v0.9.9 ARM64 issue); using the MSIX signer.'
+                }
             }
             Phase 'Download / signer' "Package verified; actual signer $signerThumbprint; machine trust needed=$trustNeeded."
         } else { Phase 'Download / signer' 'App skipped; release access verified, no MSIX or trust change.' }
@@ -524,6 +612,7 @@ try {
         $runtimeAdmin = $false
         $runtimeReboot = $false
         $runtimeInstaller = ''
+        $runtimeSha256 = ''
         if (-not $SkipApp -and -not $runtimePresent) {
             if (Get-Command winget -ErrorAction SilentlyContinue) {
                 $wingetDirectory = Join-Path $downloads 'runtime-winget'
@@ -542,6 +631,7 @@ try {
                 }
                 $runtimeSignature = Get-AuthenticodeSignature -LiteralPath $runtimeInstaller
                 if ($runtimeSignature.Status -ne 'Valid' -or -not $runtimeSignature.SignerCertificate -or $runtimeSignature.SignerCertificate.Subject -notmatch '(?:^|,\s*)O=Microsoft Corporation(?:,|$)') { throw 'Windows App Runtime download is not validly Microsoft-signed.' }
+                $runtimeSha256 = (Get-FileHash -LiteralPath $runtimeInstaller -Algorithm SHA256).Hash
                 $attempt = Invoke-Native $runtimeInstaller @('--quiet') 900 -NoElevation
                 if ($attempt.Code -eq 3010) { $runtimeReboot = $true }
                 $runtimePresent = Runtime-Installed
@@ -552,58 +642,16 @@ try {
         # until the reboot and would turn a reboot into an admin failure.
         $updateWsl = -not $SkipWsl -and -not $wslModern -and -not $enableWsl
         if ($trustNeeded -or $enableWsl -or $updateWsl -or $runtimeAdmin) {
-            $adminPlan = [ordered]@{ Certificate = $certificatePath; Thumbprint = $signerThumbprint; Trust = $trustNeeded; EnableWsl = $enableWsl; UpdateWsl = $updateWsl; Runtime = $runtimeInstaller; InstallRuntime = $runtimeAdmin }
-            $adminPlan | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $stage 'admin-plan.json') -Encoding UTF8
-            $adminScript = @'
-param([string]$Stage)
-$ErrorActionPreference = 'Stop'
-$env:WSL_UTF8 = '1'
-$plan = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $Stage 'admin-plan.json') | ConvertFrom-Json
-$result = [ordered]@{ Success = $false; Reboot = $false; Phase = ''; Code = 0; Message = '' }
-try {
-    if ($plan.Trust) {
-        $result.Phase = 'certificate'
-        $cert = New-Object Security.Cryptography.X509Certificates.X509Certificate2($plan.Certificate)
-        if ($cert.Subject -cne 'CN=CodexBarWin OSS' -or $cert.Thumbprint -ne $plan.Thumbprint) { throw 'Certificate mismatch.' }
-        Import-Certificate -FilePath $plan.Certificate -CertStoreLocation Cert:\LocalMachine\TrustedPeople | Out-Null
-    }
-    if ($plan.EnableWsl) {
-        $result.Phase = 'WSL enable'
-        & wsl.exe --install --no-distribution
-        if ($LASTEXITCODE -notin @(0, 3010)) { $result.Code = $LASTEXITCODE; throw 'WSL enable failed.' }
-        if ($LASTEXITCODE -eq 3010) { $result.Reboot = $true }
-    }
-    if ($plan.UpdateWsl) {
-        $result.Phase = 'WSL update'
-        & wsl.exe --update
-        if ($LASTEXITCODE -notin @(0, 3010)) { $result.Code = $LASTEXITCODE; throw 'WSL update failed.' }
-        if ($LASTEXITCODE -eq 3010) { $result.Reboot = $true }
-    }
-    if ($plan.InstallRuntime) {
-        $result.Phase = 'Windows App Runtime'
-        $signature = Get-AuthenticodeSignature -LiteralPath $plan.Runtime
-        if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch '(?:^|,\s*)O=Microsoft Corporation(?:,|$)') { throw 'Runtime signature mismatch.' }
-        $process = Start-Process -FilePath $plan.Runtime -ArgumentList '--quiet' -PassThru -Wait
-        if ($process.ExitCode -notin @(0, 3010)) { $result.Code = $process.ExitCode; throw 'Runtime install failed.' }
-        if ($process.ExitCode -eq 3010) { $result.Reboot = $true }
-    }
-    $result.Success = $true
-} catch { $result.Message = $_.Exception.Message }
-$result | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $Stage 'admin-result.json') -Encoding UTF8
-if ($result.Success) { exit 0 } else { exit 30 }
-'@
-            $adminPath = Join-Path $stage 'admin.ps1'
-            Write-Utf8 $adminPath $adminScript
-            $resultPath = Join-Path $stage 'admin-result.json'
-            if (Test-Path -LiteralPath $resultPath) { Remove-Item -LiteralPath $resultPath -Force }
+            $adminPlan = [ordered]@{ CertificateBase64 = $certificateBase64; Thumbprint = $signerThumbprint; ExpectedThumbprint = $ExpectedReleaseCertificateThumbprint; AllowDeveloperPackage = [bool]$AllowDeveloperPackage; Trust = [bool]$trustNeeded; EnableWsl = [bool]$enableWsl; UpdateWsl = [bool]$updateWsl; Runtime = $runtimeInstaller; RuntimeSha256 = $runtimeSha256; InstallRuntime = [bool]$runtimeAdmin }
+            $arguments = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand ' + (New-AdminCommand $adminPlan)
+            if ($arguments.Length -gt 30000) { throw 'Administrator command exceeds the safe Windows command-line length.' }
             Write-Host 'Approve one UAC prompt for the batched certificate, WSL, and runtime actions. Keep this command running; this can take several minutes.'
             try {
-                $arguments = '-NoProfile -ExecutionPolicy Bypass -File ' + (Quote-Native $adminPath) + ' -Stage ' + (Quote-Native $stage)
-                $adminProcess = Start-Process -FilePath 'powershell.exe' -Verb RunAs -ArgumentList $arguments -PassThru -Wait
+                $powershell = Join-Path ([Environment]::GetFolderPath('System')) 'WindowsPowerShell\v1.0\powershell.exe'
+                $adminProcess = Start-Process -FilePath $powershell -Verb RunAs -ArgumentList $arguments -WorkingDirectory ([Environment]::GetFolderPath('System')) -WindowStyle Hidden -PassThru -Wait
             } catch { Fail 30 'UAC was declined or the administrator process could not start. Rerun and approve its single UAC prompt.' }
-            if (-not (Test-Path -LiteralPath $resultPath)) { Fail 30 'Administrator step returned no result. Rerun setup.' }
-            $adminResult = Get-Content -Raw -Encoding UTF8 -LiteralPath $resultPath | ConvertFrom-Json
-            if (-not $adminResult.Success -or $adminProcess.ExitCode -ne 0) { Fail 30 "Administrator step failed at '$($adminResult.Phase)' (exit $($adminResult.Code)): $($adminResult.Message) Rerun setup after correcting this Windows issue." }
+            $adminResult = [pscustomobject]@{ Reboot = ($adminProcess.ExitCode -eq 3010) }
+            if ($adminProcess.ExitCode -notin @(0, 3010)) { Fail 30 "Administrator step failed (exit $($adminProcess.ExitCode)). Rerun setup after correcting this Windows issue." }
             Phase 'Elevation' 'Single batched elevation completed; subsequent operations remain in the original user account.'
         } else { $adminResult = [pscustomobject]@{ Reboot = $false }; Phase 'Elevation' 'No administrator actions needed; no UAC prompt.' }
         $enabledNeedsReboot = $false

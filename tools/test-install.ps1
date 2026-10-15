@@ -209,45 +209,24 @@ $adminAssignment = $ast.Find({
 $adminText = $adminAssignment.Right.Expression.Value
 $adminAst = [System.Management.Automation.Language.Parser]::ParseInput($adminText, [ref]$tokens, [ref]$parseErrors)
 if ($parseErrors.Count) { throw 'Embedded administrator helper has PowerShell syntax errors.' }
-# The final exit belongs to the real helper process; leave it out of these in-process mocks.
-$adminBody = $adminText.Substring(0, $adminAst.EndBlock.Statements[-1].Extent.StartOffset)
+# The administrator helper is inspected only; it is never executed by these tests.
 $testStage = Join-Path ([IO.Path]::GetTempPath()) ('cbw-json-' + [Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $testStage | Out-Null
 try {
     # BOM-less UTF-8 reproduces files written by PowerShell 7 and read by Windows PowerShell 5.1.
     $unicodePath = 'C:\Users\' + [char]0xD55C + [char]0xAE00 + '\runtime.exe'
     $statePath = Join-Path $testStage 'state.json'
-    $resultPath = Join-Path $testStage 'admin-result.json'
     $json = @{ parameters = @{ MsixPath = $unicodePath } } | ConvertTo-Json -Depth 4
     [IO.File]::WriteAllText($statePath, $json, (New-Object Text.UTF8Encoding($false)))
-    [IO.File]::WriteAllText($resultPath, $json, (New-Object Text.UTF8Encoding($false)))
     $jsonReads = @($ast.FindAll({
         param($node)
         $node -is [System.Management.Automation.Language.CommandAst] -and $node.GetCommandName() -eq 'Get-Content' -and
-        $node.Extent.Text -match '\$(statePath|resultPath)\b'
+        $node.Extent.Text -match '\$statePath\b'
     }, $true))
-    Assert-Equal $jsonReads.Count 3 'state and administrator result readers covered'
+    Assert-Equal $jsonReads.Count 2 'both state readers covered'
     foreach ($reader in $jsonReads) {
         $read = & ([scriptblock]::Create($reader.Extent.Text)) | ConvertFrom-Json
-        Assert-Equal $read.parameters.MsixPath $unicodePath 'BOM-less UTF-8 state/result path'
-    }
-    function Get-AuthenticodeSignature([string] $LiteralPath) {
-        Assert-Equal $LiteralPath $unicodePath 'administrator receives Unicode runtime path'
-        [pscustomobject]@{ Status = 'Valid'; SignerCertificate = [pscustomobject]@{ Subject = 'O=Microsoft Corporation' } }
-    }
-    function Start-Process([string] $FilePath, [string] $ArgumentList, [switch] $PassThru, [switch] $Wait) {
-        Assert-Equal $FilePath $unicodePath 'administrator starts Unicode runtime path'
-        [pscustomobject]@{ ExitCode = $script:mockRuntimeCode }
-    }
-    $Stage = $testStage
-    $planJson = @{ InstallRuntime = $true; Runtime = $unicodePath } | ConvertTo-Json
-    [IO.File]::WriteAllText((Join-Path $Stage 'admin-plan.json'), $planJson, (New-Object Text.UTF8Encoding($false)))
-    foreach ($code in @(0, 3010, 5)) {
-        $script:mockRuntimeCode = $code
-        . ([scriptblock]::Create($adminBody)) -Stage $testStage
-        $adminResult = Get-Content -Raw -Encoding UTF8 -LiteralPath $resultPath | ConvertFrom-Json
-        Assert-Equal $adminResult.Success ($code -in @(0, 3010)) "administrator runtime success $code"
-        Assert-Equal $adminResult.Reboot ($code -eq 3010) "administrator runtime reboot $code"
+        Assert-Equal $read.parameters.MsixPath $unicodePath 'BOM-less UTF-8 state path'
     }
 } finally { Remove-Item -LiteralPath $testStage -Recurse -Force }
 

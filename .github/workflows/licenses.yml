@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
 
 env:
   DOTNET_VERSION: '10.0.x'
@@ -33,13 +37,18 @@ jobs:
 
       - name: Generate license report (JSON)
         run: |
-          nuget-license --input CodexBarWin.sln --output-type json --output licenses.json
-        continue-on-error: true
+          # nuget-license 4.x: --output is the format and --file-output the target. It exits with the number of
+          # packages it could not validate (for example one without any license information; the report is still
+          # written) and with -1 when it cannot run. Either way the job fails, so nothing is skipped silently.
+          nuget-license --input CodexBarWin.sln --output JsonPretty --file-output licenses.json
+          if ($LASTEXITCODE -ne 0) { throw "License JSON report generation failed (exit $LASTEXITCODE)." }
+        shell: pwsh
 
       - name: Generate license report (Table)
         run: |
-          nuget-license --input CodexBarWin.sln --output-type table > licenses.txt
-        continue-on-error: true
+          nuget-license --input CodexBarWin.sln --output Table --file-output licenses.txt
+          if ($LASTEXITCODE -ne 0) { throw "License table report generation failed (exit $LASTEXITCODE)." }
+        shell: pwsh
 
       - name: Display licenses
         run: |
@@ -52,21 +61,7 @@ jobs:
 
       - name: Check for forbidden licenses
         run: |
-          # Define forbidden licenses (GPL variants that are incompatible with MIT)
-          $forbidden = @('GPL-2.0', 'GPL-3.0', 'AGPL-3.0', 'LGPL-2.0', 'LGPL-2.1', 'LGPL-3.0')
-
-          if (Test-Path licenses.json) {
-            $licenses = Get-Content licenses.json | ConvertFrom-Json
-            $violations = $licenses | Where-Object { $forbidden -contains $_.License }
-
-            if ($violations) {
-              Write-Host "::error::Found packages with forbidden licenses:"
-              $violations | ForEach-Object { Write-Host "  - $($_.PackageName): $($_.License)" }
-              exit 1
-            } else {
-              Write-Host "All package licenses are compatible with MIT"
-            }
-          }
+          ./tools/check-licenses.ps1 -ReportPath licenses.json
         shell: pwsh
 
       - name: Upload license report
@@ -78,3 +73,4 @@ jobs:
             licenses.json
             licenses.txt
           retention-days: 30
+          if-no-files-found: error
