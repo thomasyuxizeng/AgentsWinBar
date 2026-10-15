@@ -65,14 +65,17 @@
                                      ToolTipService.ToolTip="{x:Bind StatusDescription}"/>
                         </Grid>
 
-                        <Grid Grid.Column="1" RowSpacing="0" ColumnSpacing="8">
+                        <!-- The number column has a fixed width (sized for "100%" in TaskbarWindow.Rebuild), so the strip
+                             keeps its width whatever the digits are. 6 DIP between a bar and its number (the same as
+                             OverlayWindow.NumberGapDip). -->
+                        <Grid Grid.Column="1" RowSpacing="0" ColumnSpacing="6">
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="13"/>
                                 <RowDefinition Height="13"/>
                             </Grid.RowDefinitions>
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="56"/>
-                                <ColumnDefinition Width="Auto" MinWidth="22"/>
+                                <ColumnDefinition Width="{x:Bind NumberColumn}"/>
                             </Grid.ColumnDefinitions>
 
                             <controls:UsageMeter

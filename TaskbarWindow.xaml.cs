@@ -49,6 +49,8 @@ public sealed class TaskbarItem
     public Brush SessionBrush { get; set; } = null!;
     public Brush WeeklyBrush { get; set; } = null!;
     public string ToolTip { get; set; } = string.Empty;
+    /// <summary>Width of the number column: always enough for "100%", so the strip never resizes with the digits.</summary>
+    public GridLength NumberColumn { get; set; }
 }
 
 /// <summary>
@@ -57,12 +59,12 @@ public sealed class TaskbarItem
 /// </summary>
 public sealed partial class TaskbarWindow : Window
 {
-    // Item = 16 icon + 10 gap + 56 bar + 8 gap + 22 number (a typical 1-2 digit value; the number column
-    // sizes itself to its text, so a rare "100%" just widens it); strip = 18 padding per side, no border.
+    // Item = 16 icon + 10 gap + 56 bar + 6 gap + about 28 number (the number column is always as wide as
+    // "100%", so the strip never changes width with the digits); strip = 18 padding per side, no border.
     // These give a lower bound only: Reposition() grows the strip to the measured content if needed.
     // The strip sits flush: full taskbar height, starting at the taskbar's left edge.
     private const double ClipSlackDip = 2;
-    private const double ItemWidthDip = 112;
+    private const double ItemWidthDip = 116;
     private const double ItemSpacingDip = 24;
     private const double SidePaddingDip = 18;
     private const double HorizontalPaddingDip = 2 * SidePaddingDip;
@@ -500,6 +502,10 @@ public sealed partial class TaskbarWindow : Window
 
         var primary = new SolidColorBrush(isLight ? ColorHelper.FromArgb(255, 32, 32, 32) : ColorHelper.FromArgb(255, 240, 240, 240));
 
+        // Always wide enough for "100%" (numbers are right-aligned), so a value reaching 100% or dropping back
+        // after a reset does not change the strip's width
+        var numberColumn = new GridLength(Math.Ceiling(OverlayWindow.MeasureNumber("100%")) + 1);
+
         Items.Clear();
         foreach (var data in _viewModel.Providers)
         {
@@ -536,7 +542,8 @@ public sealed partial class TaskbarWindow : Window
                 WeeklyText = secondText,
                 SessionBrush = WarningBrush(first?.Window) ?? primary,
                 WeeklyBrush = WarningBrush(second?.Window) ?? primary,
-                ToolTip = $"{name}: {BarLabel(data, first)} {firstText}, {BarLabel(data, second)} {secondText}"
+                ToolTip = $"{name}: {BarLabel(data, first)} {firstText}, {BarLabel(data, second)} {secondText}",
+                NumberColumn = numberColumn
             });
         }
 

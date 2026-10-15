@@ -56,9 +56,11 @@ public sealed class OverlayRow
 public sealed partial class OverlayWindow : Window
 {
     internal const double RowHeightDip = 22;
-    // Spacing (DIP): 12 horizontal and 8 vertical padding + 1 border on every side, uniform 8 between
-    // columns. The width is worked out in Rebuild() from the actual number widths; ApplySize() also
-    // grows the window to the measured content if that is ever larger.
+    // Spacing (DIP): 12 horizontal and 8 vertical padding + 1 border on every side, 8 between an element and
+    // the bar that follows it, and NumberGapDip between a bar and its number. The width is worked out in
+    // Rebuild() from the width of "100%"; ApplySize() also grows the window to the measured content if that
+    // is ever larger.
+    internal const double NumberGapDip = 6;
     private double _contentWidthDip = 214;
     private const double VerticalPaddingDip = 8 * 2 + 2;
     private const double ScreenMarginDip = 16;
@@ -484,12 +486,16 @@ public sealed partial class OverlayWindow : Window
 
         var rows = _viewModel.Providers.Select(p => ToRow(p, nowUtc, resetStamp)).ToList();
 
-        // Number columns are sized from the actual text, with two digits ("88%") as the typical minimum,
-        // so 1-2 digit values sit snugly next to their bars and "%" signs line up; a rare "100%" just
-        // widens the columns (and the window) for as long as it is shown.
-        var typical = MeasureNumber("88%");
-        var sessionWidth = Math.Ceiling(Math.Max(typical, rows.Select(r => MeasureNumber(r.SessionText)).DefaultIfEmpty(0).Max())) + 1;
-        var weeklyWidth = Math.Ceiling(Math.Max(typical, rows.Select(r => MeasureNumber(r.WeeklyText)).DefaultIfEmpty(0).Max())) + 1;
+        // Number columns are always wide enough for "100%", so the window keeps its size whatever the digits
+        // are (a value reaching 100% or dropping back after a reset must not make the panel jump). Numbers are
+        // right-aligned, so the "%" signs line up and the gap to the bar is NumberGapDip next to a 3-digit
+        // value and one digit wider next to a 2-digit one. Only a text wider than "100%" (never produced by
+        // the percent formatting) could still widen a column.
+        var widest = MeasureNumber("100%");
+        var sessionText = rows.Select(r => MeasureNumber(r.SessionText)).DefaultIfEmpty(0).Max();
+        var weeklyText = rows.Select(r => MeasureNumber(r.WeeklyText)).DefaultIfEmpty(0).Max();
+        var sessionWidth = Math.Ceiling(Math.Max(widest, sessionText)) + 1 + NumberGapDip;
+        var weeklyWidth = Math.Ceiling(Math.Max(widest, weeklyText)) + 1 + NumberGapDip;
 
         Rows.Clear();
         foreach (var row in rows)
@@ -499,14 +505,15 @@ public sealed partial class OverlayWindow : Window
             Rows.Add(row);
         }
 
-        // 12 padding + 1 border per side, 4 gaps of 8; columns = icon + bar + number + bar + number
-        _contentWidthDip = 2 * (12 + 1) + (16 + 44 + sessionWidth + 44 + weeklyWidth) + 4 * 8;
+        // 12 padding + 1 border per side; columns = icon + (8 lead-in + 44 bar + number column) twice, where
+        // each number column already includes its NumberGapDip lead-in
+        _contentWidthDip = 2 * (12 + 1) + (16 + (8 + 44) + sessionWidth + (8 + 44) + weeklyWidth);
 
         ApplySize();
         ClampToScreen();
     }
 
-    private static double MeasureNumber(string text)
+    internal static double MeasureNumber(string text)
     {
         var block = new Microsoft.UI.Xaml.Controls.TextBlock { Text = text, FontSize = 11 };
         block.Measure(new Windows.Foundation.Size(double.PositiveInfinity, double.PositiveInfinity));
