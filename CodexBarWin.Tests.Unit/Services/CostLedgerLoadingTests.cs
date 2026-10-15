@@ -184,11 +184,11 @@ public class CostLedgerLoadingTests
         ledger.GetRange("claude", originalDay, originalDay).TotalCostUSD.Should().Be(12m);
         ledger.GetRange("claude", new(2026, 10, 11), new(2026, 10, 11)).Days.Single().HasLedgerRecord.Should().BeFalse();
 
-        // A later authoritative scan can correct the past day downward.
+        // A later scan with identical token coverage can reprice the past day downward.
         await ledger.RecordScanAsync(new CostData
         {
             Provider = "claude", FetchOutcome = FetchOutcome.Success,
-            Daily = [new() { Date = originalDay, TotalCost = 5m, TotalTokens = 50 }]
+            Daily = [new() { Date = originalDay, TotalCost = 5m, TotalTokens = 120 }]
         });
         ledger.GetRange("claude", originalDay, originalDay).TotalCostUSD.Should().Be(5m);
         var reloaded = Ledger();

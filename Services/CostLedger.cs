@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using CodexBarWin.Helpers;
 using CodexBarWin.Models;
@@ -111,6 +112,7 @@ public sealed class CostLedger : ICostLedger
         {
             rawJson = await File.ReadAllTextAsync(FilePath, ct).ConfigureAwait(false);
         }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Could not read cost ledger file at {Path}", FilePath);
@@ -139,7 +141,7 @@ public sealed class CostLedger : ICostLedger
             _logger.LogWarning(ex, "Failed to parse cost ledger JSON at {Path}; renaming to corrupt", FilePath);
         }
 
-        if (deserialized == null || deserialized.SchemaVersion != 1)
+        if (!TryNormalizeFile(deserialized, out var normalized))
         {
             _logger.LogWarning("Cost ledger at {Path} has invalid or unsupported schema version {Version}; renaming to corrupt",
                 FilePath, deserialized?.SchemaVersion);
@@ -151,7 +153,7 @@ public sealed class CostLedger : ICostLedger
 
         lock (_stateLock)
         {
-            _file = deserialized;
+            _file = normalized;
         }
         _isLoaded = true;
     }
@@ -166,15 +168,16 @@ public sealed class CostLedger : ICostLedger
                 if (!string.IsNullOrWhiteSpace(bakJson))
                 {
                     var recovered = JsonSerializer.Deserialize(bakJson, AppJsonSerializerContext.Default.CostLedgerFile);
-                    if (recovered != null && recovered.SchemaVersion == 1)
+                    if (TryNormalizeFile(recovered, out var normalized))
                     {
-                        lock (_stateLock) { _file = recovered; }
+                        lock (_stateLock) { _file = normalized; }
                         await SaveCoreAsync(nowUtc, ct).ConfigureAwait(false);
                         _logger.LogInformation("Successfully recovered cost ledger from backup {BakPath}", _bakPath);
                         return true;
                     }
                 }
             }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "Failed to recover from cost ledger backup {BakPath}", _bakPath);
@@ -203,18 +206,76 @@ public sealed class CostLedger : ICostLedger
             var changed = false;
             foreach (var (key, costData) in cacheFile.Items)
             {
-                if (costData == null || !costData.HasData || !ProviderConstants.IsValidProvider(key)) continue;
-                MergeScanUnlocked(costData, DashboardValues.Utc(costData.LastSuccessfulFetch ?? costData.FetchedAt));
+                if (costData == null || !costData.HasData || !ProviderConstants.IsValidProvider(key) ||
+                    !ProviderConstants.IsValidProvider(costData.Provider) ||
+                    ProviderConstants.ValidateAndNormalize(key) != ProviderConstants.ValidateAndNormalize(costData.Provider)) continue;
+                var scan = NormalizeScan(costData);
+                MergeScanUnlocked(scan, DashboardValues.Utc(scan.LastSuccessfulFetch ?? scan.FetchedAt));
                 changed = true;
             }
             return changed;
         }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (Exception ex)
         {
             _logger.LogDebug(ex, "Backfill from cost-cache.json skipped due to read error");
             return false;
         }
     }
+
+    private static bool TryNormalizeFile(CostLedgerFile? file, out CostLedgerFile normalized)
+    {
+        normalized = new();
+        if (file?.SchemaVersion != 1 || file.Providers == null) return false;
+        foreach (var (provider, days) in file.Providers)
+        {
+            if (days == null) return false;
+            if (!ProviderConstants.IsValidProvider(provider)) continue;
+            var name = ProviderConstants.ValidateAndNormalize(provider);
+            if (!normalized.Providers.TryGetValue(name, out var target))
+                normalized.Providers[name] = target = new(StringComparer.OrdinalIgnoreCase);
+            foreach (var (key, entry) in days)
+            {
+                if (entry == null || entry.Date == default) return false;
+                var dateKey = entry.Date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+                // Calendar aliases describe the same day. Keep the latest observation, not their sum.
+                if (target.TryGetValue(dateKey, out var prior) &&
+                    (prior.LastUpdatedUtc > entry.LastUpdatedUtc ||
+                     (prior.LastUpdatedUtc == entry.LastUpdatedUtc && key != dateKey))) continue;
+                target[dateKey] = entry with
+                {
+                    CostUSD = Math.Max(0, entry.CostUSD), TotalTokens = Math.Max(0, entry.TotalTokens),
+                    InputTokens = Math.Max(0, entry.InputTokens), OutputTokens = Math.Max(0, entry.OutputTokens),
+                    CacheReadTokens = Math.Max(0, entry.CacheReadTokens), CacheWriteTokens = Math.Max(0, entry.CacheWriteTokens),
+                    ReasoningTokens = Math.Max(0, entry.ReasoningTokens), Models = NormalizeModels(entry.Models)
+                };
+            }
+        }
+        return true;
+    }
+
+    private static IReadOnlyList<CostLedgerModelEntry> NormalizeModels(IReadOnlyList<CostLedgerModelEntry>? models) =>
+        (models ?? []).OfType<CostLedgerModelEntry>().Where(m => !string.IsNullOrWhiteSpace(m.ModelName))
+            .GroupBy(m => m.ModelName, StringComparer.OrdinalIgnoreCase)
+            .Select(g => new CostLedgerModelEntry
+            {
+                ModelName = g.Key, TotalTokens = g.Max(m => Math.Max(0, m.TotalTokens)),
+                CostUSD = g.Any(m => m.CostUSD.HasValue) ? g.Max(m => Math.Max(0, m.CostUSD ?? 0)) : null
+            }).ToArray();
+
+    private static CostData NormalizeScan(CostData scan) => scan with
+    {
+        Daily = (scan.Daily ?? []).OfType<DailyCost>().Where(d => d.Date != default).Select(d => d with
+        {
+            ModelBreakdowns = (d.ModelBreakdowns ?? []).OfType<ModelCost>()
+                .Where(m => !string.IsNullOrWhiteSpace(m.ModelName)).GroupBy(m => m.ModelName, StringComparer.OrdinalIgnoreCase)
+                .Select(g => new ModelCost
+                {
+                    ModelName = g.Key, TotalTokens = g.Max(m => Math.Max(0, m.TotalTokens)),
+                    Cost = g.Any(m => m.Cost.HasValue) ? g.Max(m => Math.Max(0, m.Cost ?? 0)) : null
+                }).ToArray()
+        }).ToArray()
+    };
 
     private void RenameToCorrupt(string path, DateTime nowUtc)
     {
@@ -274,17 +335,16 @@ public sealed class CostLedger : ICostLedger
                 backup = CloneFile(_file);
             }
 
-            foreach (var scan in validScans)
-            {
-                MergeScanUnlocked(scan, now);
-            }
-
             bool saved;
             try
             {
+                foreach (var scan in validScans)
+                {
+                    MergeScanUnlocked(NormalizeScan(scan), now);
+                }
                 saved = await SaveCoreAsync(now, ct).ConfigureAwait(false);
             }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            catch
             {
                 lock (_stateLock)
                 {
@@ -364,14 +424,14 @@ public sealed class CostLedger : ICostLedger
                 scanDays[today] = new DailyCost
                 {
                     Date = today,
-                    TotalCost = scan.TodayCostUSD,
-                    TotalTokens = scan.TodayTokens
+                    TotalCost = Math.Max(0, scan.TodayCostUSD),
+                    TotalTokens = Math.Max(0, scan.TodayTokens)
                 };
             }
 
             foreach (var (date, scanDay) in scanDays)
             {
-                var dateKey = date.ToString("yyyy-MM-dd");
+                var dateKey = date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
                 providerDays.TryGetValue(dateKey, out var existing);
 
                 var existingHasData = existing != null && existing.HasData;
@@ -387,9 +447,9 @@ public sealed class CostLedger : ICostLedger
                     continue;
                 }
 
-                if (date == today)
+                if (date == today || (existing != null && !existing.HasSameTokenCoverage(scanDay)))
                 {
-                    // Today's partial day just updates upward over the day
+                    // Without unchanged token coverage a lower total may reflect rotated logs, not repricing.
                     if (existing == null)
                     {
                         providerDays[dateKey] = new CostLedgerDayEntry
@@ -430,7 +490,7 @@ public sealed class CostLedger : ICostLedger
                 }
                 else
                 {
-                    // Past day: scan is authoritative for days it covers
+                    // A past day's unchanged token coverage permits a price correction in either direction.
                     providerDays[dateKey] = new CostLedgerDayEntry
                     {
                         Date = date,
@@ -634,9 +694,10 @@ public sealed class CostLedger : ICostLedger
             long reasoning = 0;
             var daysWithDataCount = 0;
 
-            for (var d = fromDay; d <= toDay; d = d.AddDays(1))
+            for (var dayNumber = fromDay.DayNumber; dayNumber <= toDay.DayNumber; dayNumber++)
             {
-                var dateKey = d.ToString("yyyy-MM-dd");
+                var d = DateOnly.FromDayNumber(dayNumber);
+                var dateKey = d.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
 
                 if (normalizedProvider != null)
                 {
@@ -777,7 +838,7 @@ public sealed class CostLedger : ICostLedger
     public CostLedgerLast30DaysResult GetLast30Days(string? provider = null, DateOnly? asOfDay = null)
     {
         var end = asOfDay ?? DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(_clock.GetUtcNow().UtcDateTime, _clock.LocalTimeZone));
-        var start = end.AddDays(-29);
+        var start = DateOnly.FromDayNumber(Math.Max(0, end.DayNumber - 29));
 
         var range = GetRange(provider, start, end);
 

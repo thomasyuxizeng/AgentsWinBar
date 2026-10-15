@@ -887,6 +887,71 @@ public class CodexBarServiceTests
             clock ?? new CostClock(), () => "C:\\Users\\Test", _ => true, costLedger: ledger);
 
     [TestMethod]
+    public async Task GetCostAsync_RotatedHistory_FreshCachedAndFailedScansKeepDateWiseLedgerUnion()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "cbw-cost-union-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var clock = new CostClock { Zone = TimeZoneInfo.Utc };
+            var ledger = new CostLedger(_mockSettingsService, Microsoft.Extensions.Logging.Abstractions.NullLogger<CostLedger>.Instance,
+                clock, Path.Combine(directory, "cost-ledger.json"), Path.Combine(directory, "cost-cache.json"));
+            await ledger.RecordScanAsync(new CostData
+            {
+                Provider = "claude", FetchOutcome = FetchOutcome.Success,
+                Daily = [new() { Date = new(2026, 10, 1), TotalCost = 20m, TotalTokens = 2000 },
+                    new() { Date = new(2026, 10, 3), TotalCost = 2m, TotalTokens = 200 }]
+            });
+            var service = LedgerCostService(ledger, clock);
+            SetCostResponse(json: """
+                {"provider":"claude","sessionCostUSD":5,"sessionTokens":500,"last30DaysCostUSD":8,"last30DaysTokens":800,
+                 "provenance":"live logs","daily":[{"date":"2026-10-03","totalCost":3,"totalTokens":300},
+                   {"date":"2026-10-04","totalCost":5,"totalTokens":500}]}
+                """);
+            var fresh = (await service.GetCostAsync("claude"))!;
+            fresh.Last30DaysCostUSD.Should().Be(28m);
+            fresh.Last30DaysTokens.Should().Be(2800);
+            fresh.TodayCostUSD.Should().Be(5m);
+            fresh.Provenance.Should().Be("live logs");
+            fresh.IsStale.Should().BeFalse();
+            (await service.GetCostAsync("claude"))!.Last30DaysCostUSD.Should().Be(28m);
+            SetCostResponse(success: false);
+            var stale = (await service.GetCostAsync("claude", forceRefresh: true))!;
+            stale.Last30DaysCostUSD.Should().Be(28m);
+            stale.IsStale.Should().BeTrue();
+        }
+        finally { Directory.Delete(directory, recursive: true); }
+    }
+
+    [TestMethod]
+    public async Task GetCostsAsync_LedgerNotYetMerged_PublishesPureDateWiseUnionAndRecordsOnlyRawScan()
+    {
+        var ledger = new Mock<ICostLedger>();
+        ledger.Setup(l => l.GetLast30Days("claude", It.IsAny<DateOnly?>())).Returns(new CostLedgerLast30DaysResult
+        {
+            DaysWithDataCount = 2, TotalCostUSD = 22m, TotalTokens = 2200,
+            Days = [new() { Date = new(2026, 10, 1), HasLedgerRecord = true, CostUSD = 20m, TotalTokens = 2000 },
+                new() { Date = new(2026, 10, 3), HasLedgerRecord = true, CostUSD = 2m, TotalTokens = 200 }]
+        });
+        ledger.Setup(l => l.RecordScansAsync(It.IsAny<IReadOnlyList<CostData>>(), It.IsAny<DateTime?>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+        _mockWslService.BatchHandler = (_, completed, _) =>
+        {
+            var result = new WslResult { Success = true, Output = """
+                {"provider":"claude","sessionCostUSD":5,"sessionTokens":500,"last30DaysCostUSD":8,"last30DaysTokens":800,
+                 "daily":[{"date":"2026-10-03","totalCost":3,"totalTokens":300},
+                   {"date":"2026-10-04","totalCost":5,"totalTokens":500}]}
+                """ };
+            completed!(0, result);
+            return Task.FromResult<IReadOnlyList<WslResult>>([result]);
+        };
+        var costs = await CollectCostsAsync(LedgerCostService(ledger.Object, new CostClock { Zone = TimeZoneInfo.Utc }), ["claude"]);
+        costs.Single().Cost!.Last30DaysCostUSD.Should().Be(28m);
+        ledger.Verify(l => l.RecordScansAsync(It.Is<IReadOnlyList<CostData>>(s => s.Count == 1 && s[0].Last30DaysCostUSD == 8m),
+            It.IsAny<DateTime?>(), It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [TestMethod]
     public async Task GetCostsAsync_BatchScan_CallsRecordScansAsyncOnceWithAllSuccessfulProviders()
     {
         var ledger = new Mock<ICostLedger>();

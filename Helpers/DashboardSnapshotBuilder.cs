@@ -103,10 +103,12 @@ public static class DashboardSnapshotBuilder
                 Add(UsageHistoryStore.ExtraWindowKey(extra), DashboardWindowKind.Extra, extra.Title, extra.Window);
             var cost = CacheRetention.RetainedCost(data.Cost, now) is { } raw
                 ? raw with { Daily = (raw.Daily ?? []).OfType<DailyCost>().ToArray() } : null;
-            if (cost != null && cost.IsStale && inputs.CostLedger != null)
+            if (cost != null && inputs.CostLedger != null)
             {
                 var ledger30 = inputs.CostLedger.GetLast30Days(id, today);
-                cost = cost.WithLedgerLast30Days(ledger30);
+                var readingDay = DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(
+                    Utc(cost.LastSuccessfulFetch ?? cost.FetchedAt), TimeZoneInfo.Local));
+                cost = cost.WithLedgerLast30Days(ledger30, today, readingDay);
             }
             var oldReading = DataAge.OldReadingUtc(Utc(data.FetchedAt), data.DataUpdatedAt);
             var usageAt = Utc(data.LastSuccessfulFetch) ?? (data.HasUsage ? Utc(data.FetchedAt) : (DateTime?)null);

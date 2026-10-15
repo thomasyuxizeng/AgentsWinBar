@@ -11,6 +11,201 @@ namespace CodexBarWin.Tests.Unit.Services;
 [TestClass]
 public class CostLedgerTests
 {
+    [TestMethod]
+    public async Task RecordScanAsync_AggregateWithNegativeCost_ClampsSyntheticDayToZero()
+    {
+        var ledger = CreateLedger();
+        await ledger.RecordScanAsync(new CostData
+        { Provider = "claude", FetchOutcome = FetchOutcome.Success, TodayCostUSD = -1m, TodayTokens = 100 });
+        var day = DateOnly.FromDateTime(_clock.UtcNow.UtcDateTime);
+        var result = ledger.GetRange("claude", day, day).Days.Single();
+        result.CostUSD.Should().Be(0m);
+        result.TotalTokens.Should().Be(100);
+    }
+
+    [TestMethod]
+    public async Task RecordScansAsync_MergeOverflows_RollsBackEntireBatch()
+    {
+        var ledger = CreateLedger();
+        await ledger.RecordScanAsync(SampleScan("claude", new(2026, 10, 1), 10m, 1000));
+        await ledger.RecordScansAsync([
+            SampleScan("claude", new(2026, 10, 2), 2m, 200),
+            new CostData
+            {
+                Provider = "codex", FetchOutcome = FetchOutcome.Success,
+                Daily = [new() { Date = new(2026, 10, 1), TotalTokens = long.MaxValue },
+                    new() { Date = new(2026, 10, 1), TotalTokens = 1 }]
+            }]);
+        ledger.GetLifetime().TotalCostUSD.Should().Be(10m);
+        var reloaded = CreateLedger();
+        await reloaded.LoadAsync();
+        reloaded.GetLifetime().Should().BeEquivalentTo(ledger.GetLifetime());
+    }
+
+    [TestMethod]
+    public async Task LoadCoreAsync_CancelledRead_LeavesFileIntactAndAllowsRetry()
+    {
+        await CreateLedger().RecordScanAsync(SampleScan("claude", new(2026, 10, 1), 10m, 1000));
+        var ledger = CreateLedger();
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+        var load = (Task)typeof(CostLedger).GetMethod("LoadCoreAsync", System.Reflection.BindingFlags.Instance |
+            System.Reflection.BindingFlags.NonPublic)!.Invoke(ledger, [cancellation.Token])!;
+        Func<Task> act = () => load;
+        await act.Should().ThrowAsync<OperationCanceledException>();
+        File.Exists(_ledgerPath).Should().BeTrue();
+        Directory.GetFiles(_directory, "cost-ledger.corrupt-*").Should().BeEmpty();
+        await ledger.LoadAsync();
+        ledger.GetLifetime().TotalCostUSD.Should().Be(10m);
+    }
+
+    [TestMethod]
+    public async Task GetRange_MaximumDate_ReturnsFinalDayWithoutOverflow()
+    {
+        var ledger = CreateLedger();
+        await ledger.RecordScanAsync(SampleScan("claude", DateOnly.MaxValue, 1m, 100));
+        ledger.GetRange("claude", DateOnly.MaxValue, DateOnly.MaxValue).TotalCostUSD.Should().Be(1m);
+    }
+
+    [TestMethod]
+    public async Task GetLast30Days_MinimumDate_ClampsStartToSupportedCalendar()
+    {
+        var ledger = CreateLedger();
+        await ledger.LoadAsync();
+        ledger.GetLast30Days("claude", DateOnly.MinValue).Days.Should().ContainSingle()
+            .Which.Date.Should().Be(DateOnly.MinValue);
+    }
+
+    [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task LoadAsync_NullAndDuplicateModels_NormalizesPrimaryAndBackup(bool backup)
+    {
+        var path = backup ? Path.Combine(_directory, "cost-ledger.bak") : _ledgerPath;
+        if (backup) await File.WriteAllTextAsync(_ledgerPath, "{broken");
+        await File.WriteAllTextAsync(path, """
+            {"schemaVersion":1,"providers":{"CLAUDE":{
+              "2569-10-01":{"date":"2026-10-01","costUSD":10,"totalTokens":1000,"models":null},
+              "2569-10-02":{"date":"2026-10-02","costUSD":2,"totalTokens":200,"models":[
+                null,{"modelName":null},{"modelName":"sonnet","costUSD":2,"totalTokens":200},
+                {"modelName":"SONNET","costUSD":1,"totalTokens":100}]}
+            }}}
+            """);
+        var ledger = CreateLedger();
+        await ledger.LoadAsync();
+        ledger.GetLifetime().TotalCostUSD.Should().Be(12m);
+        var days = ledger.GetRange("claude", new(2026, 10, 1), new(2026, 10, 2)).Days;
+        days[0].Models.Should().BeEmpty();
+        days[1].Models.Should().ContainSingle().Which.TotalTokens.Should().Be(200);
+        await ledger.RecordScanAsync(SampleScan("claude", new(2026, 10, 2), 3m, 300,
+            models: [("sonnet", 3m, 300)]));
+        ledger.GetLifetime().TotalCostUSD.Should().Be(13m);
+    }
+
+    [TestMethod]
+    public async Task LoadAsync_InvalidBackupGraph_FallsBackToNormalizedCache()
+    {
+        await File.WriteAllTextAsync(_ledgerPath, "{broken");
+        await File.WriteAllTextAsync(Path.Combine(_directory, "cost-ledger.bak"), """{"providers":null}""");
+        await File.WriteAllTextAsync(_costCachePath, """
+            {"items":{
+              "claude":{"provider":"invalid","daily":[{"date":"2026-10-01","totalCost":999}]},
+              "codex":{"provider":"codex","daily":[null,{"date":"2026-10-01","totalCost":2,"totalTokens":200,
+                "modelBreakdowns":[null,{"modelName":null},{"modelName":"gpt","cost":2,"totalTokens":200}]}]},
+              "gemini":null
+            }}
+            """);
+        var ledger = CreateLedger();
+        await ledger.LoadAsync();
+        ledger.GetLifetime().TotalCostUSD.Should().Be(2m);
+        ledger.GetRange("codex", new(2026, 10, 1), new(2026, 10, 1)).Days.Single()
+            .Models.Should().ContainSingle().Which.ModelName.Should().Be("gpt");
+        await ledger.RecordScanAsync(SampleScan("claude", new(2026, 10, 2), 1m, 100));
+        ledger.GetLifetime().TotalCostUSD.Should().Be(3m);
+    }
+
+    [TestMethod]
+    public async Task RecordScanAsync_PartialRotation_PreservesAccumulatedPastDay()
+    {
+        var ledger = CreateLedger();
+        var day = new DateOnly(2026, 10, 1);
+        await ledger.RecordScanAsync(SampleScan("claude", day, 10m, 1000, models: [("sonnet", 10m, 1000)]));
+        await ledger.RecordScanAsync(SampleScan("claude", day, 2m, 200, models: [("sonnet", 2m, 200)]));
+
+        var reloaded = CreateLedger();
+        await reloaded.LoadAsync();
+        var result = reloaded.GetRange("claude", day, day).Days.Single();
+        result.CostUSD.Should().Be(10m);
+        result.TotalTokens.Should().Be(1000);
+        result.Models.Single().CostUSD.Should().Be(10m);
+    }
+
+    [TestMethod]
+    public async Task RecordScanAsync_UnchangedTokenCoverage_AllowsPastDayRepricing()
+    {
+        var ledger = CreateLedger();
+        var day = new DateOnly(2026, 10, 1);
+        await ledger.RecordScanAsync(SampleScan("claude", day, 10m, 1000, input: 800, output: 200,
+            models: [("sonnet", 10m, 1000)]));
+        await ledger.RecordScanAsync(SampleScan("claude", day, 8m, 1000, input: 800, output: 200,
+            models: [("sonnet", 8m, 1000)]));
+
+        ledger.GetLifetime("claude").TotalCostUSD.Should().Be(8m);
+        ledger.GetRange("claude", day, day).Days.Single().Models.Single().CostUSD.Should().Be(8m);
+    }
+
+    [TestMethod]
+    public async Task RecordScanAsync_ThaiCulture_UsesGregorianKeysAcrossRestart()
+    {
+        var previousCulture = System.Globalization.CultureInfo.CurrentCulture;
+        try
+        {
+            System.Globalization.CultureInfo.CurrentCulture = new("th-TH");
+            var day = new DateOnly(2026, 10, 1);
+            await CreateLedger().RecordScanAsync(SampleScan("claude", day, 10m, 1000));
+            (await File.ReadAllTextAsync(_ledgerPath)).Should().Contain("2026-10-01").And.NotContain("2569-10-01");
+            System.Globalization.CultureInfo.CurrentCulture = new("en-US");
+            var ledger = CreateLedger();
+            await ledger.RecordScanAsync(SampleScan("claude", day, 10m, 1000));
+            ledger.GetLifetime().TotalCostUSD.Should().Be(10m);
+            System.Globalization.CultureInfo.CurrentCulture = new("th-TH");
+            ledger.GetRange("claude", day, day).TotalCostUSD.Should().Be(10m);
+        }
+        finally { System.Globalization.CultureInfo.CurrentCulture = previousCulture; }
+    }
+
+    [TestMethod]
+    public async Task LoadAsync_CalendarAliases_DeduplicatesByEntryDateUsingLatestUpdate()
+    {
+        await File.WriteAllTextAsync(_ledgerPath, """
+            {"schemaVersion":1,"providers":{"claude":{
+              "2569-10-01":{"date":"2026-10-01","costUSD":10,"lastUpdatedUtc":"2026-10-02T00:00:00Z"},
+              "2026-10-01":{"date":"2026-10-01","costUSD":8,"lastUpdatedUtc":"2026-10-03T00:00:00Z"}
+            }}}
+            """);
+        var ledger = CreateLedger();
+        await ledger.LoadAsync();
+        ledger.GetLifetime().TotalCostUSD.Should().Be(8m);
+        ledger.GetRange("claude", new(2026, 10, 1), new(2026, 10, 1)).TotalCostUSD.Should().Be(8m);
+    }
+
+    [TestMethod]
+    [DataRow("{\"schemaVersion\":1,\"providers\":null}")]
+    [DataRow("{\"schemaVersion\":1,\"providers\":{\"claude\":null}}")]
+    [DataRow("{\"schemaVersion\":1,\"providers\":{\"claude\":{\"2026-10-01\":null}}}")]
+    public async Task LoadAsync_NullRequiredMembers_RecoversValidatedBackup(string json)
+    {
+        await CreateLedger().RecordScanAsync(SampleScan("claude", new(2026, 10, 1), 10m, 1000));
+        File.Copy(_ledgerPath, Path.Combine(_directory, "cost-ledger.bak"));
+        await File.WriteAllTextAsync(_ledgerPath, json);
+        var ledger = CreateLedger();
+        await ledger.LoadAsync();
+        ledger.GetLifetime().TotalCostUSD.Should().Be(10m);
+        ledger.GetLast30Days("claude").TotalCostUSD.Should().Be(10m);
+        await ledger.RecordScanAsync(SampleScan("claude", new(2026, 10, 2), 2m, 200));
+        ledger.GetLifetime().TotalCostUSD.Should().Be(12m);
+    }
+
     private sealed class TestClock : TimeProvider
     {
         public DateTimeOffset UtcNow { get; set; } = new(2026, 10, 11, 12, 0, 0, TimeSpan.Zero);

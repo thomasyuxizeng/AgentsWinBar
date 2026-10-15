@@ -110,7 +110,7 @@ public class CodexBarService : ICodexBarService
         {
             _logger.LogDebug(ex, "Cost scan unavailable for {Provider}", provider);
         }
-        return data;
+        return WithLedgerCosts(data, _timeProvider.GetUtcNow());
     }
 
     public async IAsyncEnumerable<(string Provider, CostData? Cost)> GetCostsAsync(IReadOnlyList<string> providers,
@@ -128,7 +128,7 @@ public class CodexBarService : ICodexBarService
             await foreach (var result in channel.Reader.ReadAllAsync(ct))
             {
                 ct.ThrowIfCancellationRequested();
-                yield return result;
+                yield return (result.Provider, WithLedgerCosts(result.Cost, _timeProvider.GetUtcNow()));
             }
             await producer;
         }
@@ -165,6 +165,7 @@ public class CodexBarService : ICodexBarService
         try
         {
             if (!CostsEnabled) return;
+            if (_costLedger != null) await _costLedger.LoadAsync(ct);
             if (_costStore != null && !_costStoreLoaded)
             {
                 var restored = await _costStore.LoadAsync(ct);
@@ -314,9 +315,19 @@ public class CodexBarService : ICodexBarService
         {
             var today = DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(now.UtcDateTime, _timeProvider.LocalTimeZone));
             var ledger30 = _costLedger.GetLast30Days(provider, today);
-            staleCost = staleCost.WithLedgerLast30Days(ledger30);
+            if (ledger30 != null) staleCost = staleCost.WithLedgerLast30Days(ledger30, today);
         }
         return staleCost;
+    }
+
+    private CostData? WithLedgerCosts(CostData? cost, DateTimeOffset now)
+    {
+        if (cost == null || _costLedger == null) return cost;
+        var today = DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(now.UtcDateTime, _timeProvider.LocalTimeZone));
+        var ledger30 = _costLedger.GetLast30Days(cost.Provider, today);
+        var readingDay = DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(
+            DashboardValues.Utc(cost.LastSuccessfulFetch ?? cost.FetchedAt), _timeProvider.LocalTimeZone));
+        return ledger30 == null ? cost : cost.WithLedgerLast30Days(ledger30, today, readingDay);
     }
 
     private async Task SaveCostStoreAsync()

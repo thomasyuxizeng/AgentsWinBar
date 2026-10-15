@@ -7,7 +7,8 @@
     by CodexBarWin. Survives local CLI log rotations.
 
 .PARAMETER Path
-    Path to cost-ledger.json. Defaults to %LOCALAPPDATA%\CodexBarWin\cost-ledger.json.
+    Path to cost-ledger.json. Defaults to the installed package's LocalCache ledger,
+    falling back to %LOCALAPPDATA%\CodexBarWin\cost-ledger.json.
 
 .PARAMETER Provider
     Optional provider filter (e.g. 'claude', 'codex', 'gemini').
@@ -27,7 +28,7 @@
 [CmdletBinding(PositionalBinding = $false)]
 param(
     [Parameter()]
-    [string]$Path = (Join-Path $env:LOCALAPPDATA 'CodexBarWin\cost-ledger.json'),
+    [string]$Path = '',
 
     [Parameter(Position = 0)]
     [string]$Provider = '',
@@ -41,14 +42,31 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-if (-not (Test-Path -Path $Path -PathType Leaf)) {
+function Resolve-CostLedgerPath([string]$OverridePath, [string]$LocalAppData = $env:LOCALAPPDATA) {
+    if (-not [string]::IsNullOrWhiteSpace($OverridePath)) { return $OverridePath }
+    if (Get-Command Get-AppxPackage -ErrorAction SilentlyContinue) {
+        try {
+            $packages = @(Get-AppxPackage -Name CodexBarWin -ErrorAction Stop | Sort-Object { [version]$_.Version } -Descending)
+            foreach ($package in $packages) {
+                $packagedPath = Join-Path $LocalAppData "Packages\$($package.PackageFamilyName)\LocalCache\Local\CodexBarWin\cost-ledger.json"
+                if (Test-Path -LiteralPath $packagedPath -PathType Leaf) { return $packagedPath }
+            }
+        } catch {
+            Write-Verbose "Package lookup unavailable; using the unpackaged ledger path."
+        }
+    }
+    return (Join-Path $LocalAppData 'CodexBarWin\cost-ledger.json')
+}
+
+$Path = Resolve-CostLedgerPath -OverridePath $Path
+if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
     Write-Host "Cost ledger file not found at: $Path" -ForegroundColor Yellow
     Write-Host "CodexBarWin creates cost-ledger.json once a cost scan completes."
     exit 0
 }
 
 try {
-    $raw = Get-Content -Path $Path -Raw -Encoding UTF8
+    $raw = Get-Content -LiteralPath $Path -Raw -Encoding UTF8
     $ledger = $raw | ConvertFrom-Json
 }
 catch {

@@ -334,7 +334,7 @@ The last complete totals per provider are kept in `cost-cache.json` beside `sett
 away at startup. Unlike usage limits which expire after 7 days, cost data is retained indefinitely. A permanent
 cost ledger is kept in `cost-ledger.json` beside `settings.json`, recording daily cost and token series across
 local log rotations. You can query lifetime or 30-day costs anytime with the read-only PowerShell report script:
-`powershell -ExecutionPolicy Bypass -File tools\cost-ledger-report.ps1` (supports optional `-Provider`, `-From`, and `-To`).
+`powershell -ExecutionPolicy Bypass -File tools\cost-ledger-report.ps1` (uses the packaged LocalCache ledger first, then the unpackaged path; supports `-Path`, `-Provider`, `-From`, and `-To`).
 A scan that fails or times out keeps showing last-known totals, and only a newer complete scan replaces them
 ("today" resets once that day has passed). Scans can take a while when logs are large, so each one gets up to 5 minutes.
 

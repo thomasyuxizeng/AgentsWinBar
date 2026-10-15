@@ -1,12 +1,58 @@
 using AwesomeAssertions;
 using CodexBarWin.Helpers;
 using CodexBarWin.Models;
+using CodexBarWin.Services;
+using Moq;
 
 namespace CodexBarWin.Tests.Unit.Helpers;
 
 [TestClass]
 public class DashboardSnapshotBuilderTests
 {
+    [TestMethod]
+    public void Build_OlderAggregateReading_DoesNotCountItAgainAsToday()
+    {
+        var ledger = new Mock<ICostLedger>();
+        ledger.Setup(l => l.GetLast30Days("claude", Today)).Returns(new CostLedgerLast30DaysResult
+        {
+            Days = [new() { Date = Today.AddDays(-1), HasLedgerRecord = true, CostUSD = 10m, TotalTokens = 1000 }]
+        });
+        var snapshot = DashboardSnapshotBuilder.Build(Inputs(Provider() with
+        {
+            Cost = new CostData { Provider = "claude", FetchOutcome = FetchOutcome.Success, FetchedAt = Now.AddDays(-1),
+                TodayCostUSD = 10m, TodayTokens = 1000, Last30DaysCostUSD = 10m, Last30DaysTokens = 1000 }
+        }) with { Settings = new() { ShowCostTotals = true }, CostLedger = ledger.Object });
+        snapshot.Providers.Single().Cost!.Last30DaysCost.Should().Be(10m);
+        snapshot.Providers.Single().Cost!.Daily.Single(d => d.Date == Today).TotalCost.Should().Be(0m);
+    }
+
+    [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public void Build_FreshOrStaleCost_IncludesRetainedDaysWithoutDoubleCounting(bool stale)
+    {
+        var ledger = new Mock<ICostLedger>();
+        ledger.Setup(l => l.GetLast30Days("claude", Today)).Returns(new CostLedgerLast30DaysResult
+        {
+            Days = [new() { Date = Today.AddDays(-10), HasLedgerRecord = true, CostUSD = 20m, TotalTokens = 2000 },
+                new() { Date = Today, HasLedgerRecord = true, CostUSD = 5m, TotalTokens = 500 }]
+        });
+        var cost = new CostData
+        {
+            Provider = "claude", FetchOutcome = FetchOutcome.Success, IsStale = stale, FetchedAt = Now,
+            TodayCostUSD = 5m, TodayTokens = 500, Last30DaysCostUSD = 5m, Last30DaysTokens = 500,
+            Provenance = "live logs", Daily = [new() { Date = Today, TotalCost = 5m, TotalTokens = 500 }]
+        };
+        var snapshot = DashboardSnapshotBuilder.Build(Inputs(Provider() with { Cost = cost }) with
+        { Settings = new() { ShowCostTotals = true }, CostLedger = ledger.Object });
+        var result = snapshot.Providers.Single().Cost!;
+        result.Last30DaysCost.Should().Be(25m);
+        result.Last30DaysTokens.Should().Be(2500);
+        result.TodayCost.Should().Be(5m);
+        result.Provenance.Should().Be("live logs");
+        result.IsStale.Should().Be(stale);
+    }
+
     private static readonly DateTime Now = new(2026, 10, 5, 12, 0, 0, DateTimeKind.Utc);
     private static readonly DateOnly Today = DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(Now, TimeZoneInfo.Local));
     private static UsageWindow Window(double percent, int remaining = 150) => new()
