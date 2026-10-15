@@ -15,6 +15,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The overlay is moved back on screen after a monitor change even when its usage data is unchanged.
 - The dashboard no longer redraws every 30 seconds while the PC is locked.
 - The API credits poll no longer runs while the PC is locked, even with the dashboard window left open. It resumes on unlock.
+- The API credits breakdown no longer shows old per-person amounts next to a freshly fetched total, and it is left out when negative adjustments mean the contributors cannot be reconciled with the total.
+- API credits from a finished billing cycle are no longer shown as the new cycle's spend after the renewal day passes or the budget settings change, and the days left and daily pace follow UTC midnight.
+- A slow or older API credits request can no longer overwrite a newer result, and a request still running is cancelled when settings change or the app exits.
+- A provider's usage now appears as soon as it is ready instead of waiting for the slowest provider's status check.
+- Cost scans that finish while the app is closing are saved to the cost history before it exits.
+- The output of WSL commands is capped (4 MiB per command, 32 MiB per batch). A runaway command now fails with a clear message instead of growing memory without limit.
+- The cost history keeps days it already recorded when the CLI's logs rotate, and lowers a past day's cost only when that day's token counts are unchanged.
+- Cost history dates no longer break, or count a day twice, when Windows uses a non-Gregorian calendar such as the Thai one.
+- A cost history file with missing or null entries is recovered from its backup instead of failing later.
+- Last-30-days cost totals now include days the CLI's logs no longer hold after fresh scans as well as stale ones, without counting a day twice.
+- `tools\cost-ledger-report.ps1` reads the installed app's cost ledger by default; `-Path` still selects another file.
+
+### Changed
+- A release tag now runs the unit tests and the license check before anything is built, and the license check fails on a missing report or an unapproved license. The installer passes its administrator step in one encoded command, copies the Windows App Runtime installer into a protected folder before running it, and can pin the release signing certificate once its thumbprint is set.
 
 ## [1.5.1] - 2026-10-15
 
