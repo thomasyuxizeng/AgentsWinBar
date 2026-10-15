@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- The API credits poll no longer runs while the PC is locked, even with the dashboard window left open. It resumes on unlock.
+
 ## [1.5.1] - 2026-10-15
 
 ### Fixed

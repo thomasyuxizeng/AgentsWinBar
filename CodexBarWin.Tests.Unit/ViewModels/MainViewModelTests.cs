@@ -985,6 +985,28 @@ public class MainViewModelTests
     }
 
     [TestMethod]
+    public async Task RefreshAsync_BillingWhileSessionLocked_PollsAgainOnlyAfterTheUnlock()
+    {
+        _viewModel.Dispose();
+        var dashboard = new Mock<IDashboardService>();
+        dashboard.Setup(s => s.RefreshApiCreditsAsync(It.IsAny<bool>(), It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
+        _viewModel = new(_usage.Object, _settings.Object, new UsageAlertEvaluator(), _toast.Object,
+            _logger.Object, _history, _persistence, _activity, _session, _cache.Object, _memo.Object,
+            dashboardService: dashboard.Object);
+        SetupImmediateUsage();
+        using var visibility = _viewModel.AcquireDashboardVisibility();
+        dashboard.Verify(s => s.RefreshApiCreditsAsync(false, It.IsAny<CancellationToken>()), Times.Once);
+
+        _session.QueryLocked = true;
+        await PeriodicRefreshAsync();
+        dashboard.Verify(s => s.RefreshApiCreditsAsync(false, It.IsAny<CancellationToken>()), Times.Once);
+
+        _session.QueryLocked = false;
+        await PeriodicRefreshAsync();
+        dashboard.Verify(s => s.RefreshApiCreditsAsync(false, It.IsAny<CancellationToken>()), Times.Exactly(2));
+    }
+
+    [TestMethod]
     public void BatterySaverChanged_RefreshIntervalBelowCap_StretchesAndRestoresTheEffectiveInterval()
     {
         _values.RefreshIntervalSeconds = 300;

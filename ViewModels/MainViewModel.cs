@@ -731,9 +731,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     private void RefreshApiCredits(bool force)
     {
-        // Only the dashboard shows the API credits: without a visible one a background poll is wasted network wake-ups.
-        // The dashboard asks again when it becomes visible; a manual refresh (force) always goes through.
-        if (_dashboardService == null || (!force && Volatile.Read(ref _dashboardVisibility) == 0)) return;
+        // Only the dashboard shows the API credits: without a visible one (or on a locked screen) a background poll is
+        // wasted network wake-ups. The dashboard asks again when it becomes visible; a manual refresh (force) always goes through.
+        if (_dashboardService == null || (!force && (Volatile.Read(ref _dashboardVisibility) == 0 || IsSessionLocked))) return;
         _dashboardService.RefreshApiCreditsAsync(force).SafeFireAndForget(
             onError: _ => _logger.LogDebug("Background API billing refresh did not complete"));
     }
