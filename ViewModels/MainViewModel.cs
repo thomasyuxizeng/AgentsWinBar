@@ -58,6 +58,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private Task _retiredCostRefreshes = Task.CompletedTask;
     private bool _forceCostRefreshPending;
     private readonly UsageResetTracker _resetTracker = new();
+    private readonly ResetAnimationVisibility _resetVisibility;
+    private readonly HashSet<DateTime> _knownResetStamps = [];
     private readonly Dictionary<DateTime, ResetRefreshAttempt> _resetRefreshAttempts = [];
     private bool? _resetTrackerDeveloperMode;
 
@@ -98,8 +100,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
         ISetupMemoService setupMemo,
         IEarlyResetStore? earlyResetStore = null,
         IBatterySaverMonitor? batterySaverMonitor = null,
-        IDashboardService? dashboardService = null)
+        IDashboardService? dashboardService = null,
+        ResetAnimationVisibility? resetVisibility = null)
     {
+        _resetVisibility = resetVisibility ?? ResetAnimationVisibility.Shared;
         _codexBarService = codexBarService;
         _settingsService = settingsService;
         _alertEvaluator = alertEvaluator;
@@ -321,6 +325,21 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
     }
 
+    // A reset detected on a locked screen is remembered, so its bar animates once when the session is back (not unseen)
+    private void TrackResetStamps(UsageData data)
+    {
+        var locked = QuerySessionLocked();
+        var now = DateTime.UtcNow;
+        foreach (var window in new[] { data.Session, data.Weekly, data.Tertiary }.Concat(data.ExtraWindows.Select(e => e.Window)))
+        {
+            if (window?.ResetDetectedAtUtc is not { } stamp) continue;
+            // A stamp is the detection time, so only a fresh one can have been detected on this locked screen
+            if (_knownResetStamps.Add(stamp) && locked && now - stamp.ToUniversalTime() <= TimeSpan.FromMinutes(5))
+                _resetVisibility.NoteUnseen(stamp);
+        }
+        if (_knownResetStamps.Count > 64) _knownResetStamps.Clear();
+    }
+
     private void OnSessionLocked(object? sender, EventArgs e)
     {
         try
@@ -354,6 +373,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         if (_disposed) return;
         _sessionLocked = false;
+        // Resuming from sleep can land on the lock screen: the bars can be seen only once the session is unlocked
+        if (!QuerySessionLocked()) _resetVisibility.NoteVisible(DateTime.UtcNow);
         ResetAdaptiveRefresh();
         if (_stopped || _exiting) return;
         // Cancel even a fresh-data timer: its monotonic delay may have paused throughout sleep.
@@ -631,6 +652,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                         Cost = _settingsService.Settings.ShowCostTotals
                             ? CacheRetention.RetainedCost(previous.Cost, DateTime.UtcNow) : null
                     };
+                    TrackResetStamps(Providers[index]);
                 }
             }
 

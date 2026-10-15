@@ -353,6 +353,74 @@ public class MainViewModelTests
         _activity.RecentRefreshes.Should().HaveCount(2);
     }
 
+    private MainViewModel ViewModelWith(ResetAnimationVisibility visibility) => new(_usage.Object, _settings.Object,
+        new UsageAlertEvaluator(), _toast.Object, _logger.Object, _history, _persistence, _activity, _session, _cache.Object,
+        _memo.Object, _earlyResets.Object, _batterySaver.Object, resetVisibility: visibility);
+
+    private async Task<DateTime> NaturalResetWhileAsync(ResetAnimationVisibility visibility, bool locked)
+    {
+        _viewModel.Dispose();
+        _viewModel = ViewModelWith(visibility);
+        var now = DateTime.UtcNow;
+        var previous = Data(90) with { FetchedAt = now.AddMinutes(-1), DataUpdatedAt = now.AddMinutes(-1),
+            UsageFetchOutcome = FetchOutcome.Success, Session = new() { ResetAt = now.AddSeconds(-5), ReportedPercent = 90 } };
+        var current = previous with { FetchedAt = now, DataUpdatedAt = now,
+            Session = previous.Session! with { ResetAt = now.AddHours(5), ReportedPercent = 0 } };
+        _usage.SetupSequence(s => s.GetAllUsageStreamAsync(It.IsAny<CancellationToken>()))
+            .Returns(Stream(Task.CompletedTask, previous)).Returns(Stream(Task.CompletedTask, current))
+            .Returns(Stream(Task.CompletedTask, current));
+        await _viewModel.StartAsync();
+        _session.QueryLocked = locked;
+        await PeriodicRefreshAsync();
+        return _viewModel.Providers.Single().Session!.ResetDetectedAtUtc!.Value;
+    }
+
+    [TestMethod]
+    public async Task RefreshCoreAsync_ResetDetectedWhileLocked_ReplaysWhenTheSessionIsUnlocked()
+    {
+        var visibility = new ResetAnimationVisibility();
+        var raised = 0;
+        visibility.Resumed += (_, _) => raised++;
+        var stamp = await NaturalResetWhileAsync(visibility, locked: true);
+        visibility.VisibleSince(stamp).Should().BeNull();
+        raised.Should().Be(0);
+
+        _session.Unlock();
+
+        visibility.VisibleSince(stamp).Should().NotBeNull();
+        raised.Should().Be(1);
+    }
+
+    [TestMethod]
+    public async Task RefreshCoreAsync_ResetDetectedWhileUnlocked_IsNotQueuedForReplay()
+    {
+        var visibility = new ResetAnimationVisibility();
+        var raised = 0;
+        visibility.Resumed += (_, _) => raised++;
+        var stamp = await NaturalResetWhileAsync(visibility, locked: false);
+
+        _session.Lock();
+        _session.Unlock();
+
+        visibility.VisibleSince(stamp).Should().BeNull();
+        raised.Should().Be(0);
+    }
+
+    [TestMethod]
+    public async Task HandleSessionActivation_ResumeLandsOnTheLockScreen_WaitsForTheUnlock()
+    {
+        var visibility = new ResetAnimationVisibility();
+        var stamp = await NaturalResetWhileAsync(visibility, locked: true);
+
+        _session.QueryLocked = true;
+        typeof(MainViewModel).GetMethod("OnSessionActivated", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .Invoke(_viewModel, [null, EventArgs.Empty]);
+        visibility.VisibleSince(stamp).Should().BeNull();
+
+        _session.Unlock();
+        visibility.VisibleSince(stamp).Should().NotBeNull();
+    }
+
     [TestMethod]
     public async Task StartAsync_OverQuotaHistory_RestoresLatest105WhileFetchIsPending()
     {

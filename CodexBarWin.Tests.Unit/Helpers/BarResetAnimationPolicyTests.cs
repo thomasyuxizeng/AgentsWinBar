@@ -105,4 +105,32 @@ public class BarResetAnimationPolicyTests
     {
         BarResetAnimationPolicy.ShouldPlay(Now.AddSeconds(-1), null, Now, true, true).Should().BeTrue();
     }
+
+    [TestMethod]
+    public void ShouldPlay_ResetDetectedHoursAgoOnLockedScreen_PlaysWhenTheScreenJustReturned()
+    {
+        var detected = Now.AddHours(-6);
+        BarResetAnimationPolicy.ShouldPlay(detected, null, Now, true, true).Should().BeFalse();
+        BarResetAnimationPolicy.ShouldPlay(detected, null, Now, true, true, visibleSinceUtc: Now.AddSeconds(-2)).Should().BeTrue();
+    }
+
+    [TestMethod]
+    public void ShouldPlay_ScreenReturnedLongAgo_DoesNotReplay()
+    {
+        BarResetAnimationPolicy.ShouldPlay(Now.AddHours(-6), null, Now, true, true,
+            visibleSinceUtc: Now - BarResetAnimationPolicy.MaxAge - TimeSpan.FromSeconds(1)).Should().BeFalse();
+    }
+
+    [TestMethod]
+    public void ShouldPlay_ScreenReturnedBeforeTheResetWasDetected_UsesTheDetectionTime()
+    {
+        BarResetAnimationPolicy.ShouldPlay(Now.AddSeconds(-30), null, Now, true, true, visibleSinceUtc: Now.AddHours(-1)).Should().BeFalse();
+        BarResetAnimationPolicy.ShouldPlay(Now.AddSeconds(-3), null, Now, true, true, visibleSinceUtc: Now.AddHours(-1)).Should().BeTrue();
+    }
+
+    [TestMethod]
+    public void ShouldPlay_ScreenStillHidden_NeverPlaysEvenWhenReturnTimeIsKnown()
+    {
+        BarResetAnimationPolicy.ShouldPlay(Now.AddHours(-6), null, Now, true, false, visibleSinceUtc: Now).Should().BeFalse();
+    }
 }

@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- A usage bar's reset animation no longer plays on a locked screen, where it was missed. A reset detected while the PC is locked now plays once, on each bar, when you unlock (or resume from sleep to the desktop).
+
 ## [1.5.0] - 2026-10-15
 
 ### Added

@@ -1,4 +1,5 @@
 using CodexBarWin.Helpers;
+using CodexBarWin.Services;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.UI.Xaml;
@@ -127,9 +128,21 @@ public sealed partial class UsageMeter : UserControl
     {
         InitializeComponent();
         SizeChanged += OnSizeChanged;
-        Unloaded += (_, _) => _resetAnimation?.Stop();
-        Loaded += (_, _) => PlayPendingReset();
+        Unloaded += (_, _) =>
+        {
+            ResetAnimationVisibility.Shared.Resumed -= OnScreenVisibleAgain;
+            _resetAnimation?.Stop();
+        };
+        Loaded += (_, _) =>
+        {
+            ResetAnimationVisibility.Shared.Resumed -= OnScreenVisibleAgain;
+            ResetAnimationVisibility.Shared.Resumed += OnScreenVisibleAgain;
+            PlayPendingReset();
+        };
     }
+
+    // A reset detected while the session was locked waits here; the session coming back plays it once
+    private void OnScreenVisibleAgain(object? sender, EventArgs e) => DispatcherQueue?.TryEnqueue(PlayPendingReset);
 
     // The last timestamp this bar played, so a persistent bar that is re-loaded (page navigation) never replays it
     private DateTime? _playedResetAt;
@@ -148,8 +161,10 @@ public sealed partial class UsageMeter : UserControl
 
     private void TryPlayReset(DateTime? newValue, DateTime? oldValue)
     {
-        var shown = IsLoaded && Visibility == Visibility.Visible && ActualWidth > 0;
-        if (!BarResetAnimationPolicy.ShouldPlay(newValue, oldValue, DateTime.UtcNow, BarResetAnimation.AnimationsEnabled, shown, BarResetAnimation.PlaybackEnabled)) return;
+        // Nothing plays on a locked screen: it would be missed. The reset is remembered (see MainViewModel) and plays on return.
+        var shown = IsLoaded && Visibility == Visibility.Visible && ActualWidth > 0 && !SessionStateNative.IsCurrentSessionLocked();
+        var visibleSince = newValue is { } stamp ? ResetAnimationVisibility.Shared.VisibleSince(stamp) : null;
+        if (!BarResetAnimationPolicy.ShouldPlay(newValue, oldValue, DateTime.UtcNow, BarResetAnimation.AnimationsEnabled, shown, BarResetAnimation.PlaybackEnabled, visibleSince)) return;
         _playedResetAt = newValue;
         PlayResetAnimation();
     }
