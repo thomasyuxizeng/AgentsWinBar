@@ -3,33 +3,36 @@ using CodexBarWin.Helpers;
 using CodexBarWin.Models;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
-using Microsoft.UI.Xaml.Media;
-using Windows.UI;
+using Microsoft.UI.Xaml.Controls.Primitives;
 
 namespace CodexBarWin.Views;
 
-/// <summary>One headline number in the strip at the top of the dashboard.</summary>
-public sealed record DashboardTile(string Label, string Value, string Sub, Brush Accent);
+/// <summary>A provider's graphs switched on or off from the dashboard's graphs section.</summary>
+public sealed record GraphVisibilityChange(string ProviderId, bool Visible);
 
 /// <summary>
-/// The dashboard's content: toolbar, headline tiles, one panel per provider and the diagnostics cards below them.
-/// It only draws a <see cref="DashboardSnapshot"/>; fetching and timers live in <see cref="DashboardAppWindow"/>.
+/// The dashboard's content: toolbar, an optional summary (cross-provider problems and spend), one panel per provider
+/// side by side, and diagnostics in an expander. It only draws a <see cref="DashboardSnapshot"/>; fetching and timers
+/// live in <see cref="DashboardAppWindow"/>.
 /// </summary>
 public sealed partial class DashboardPage : Page
 {
-    private const double MinPanelWidth = 420;
-    private const double ColumnGap = 14;
-
-    private static readonly Brush Green = new SolidColorBrush(Color.FromArgb(255, 16, 163, 127));
-    private static readonly Brush Amber = new SolidColorBrush(Color.FromArgb(255, 255, 185, 0));
-    private static readonly Brush Red = new SolidColorBrush(Color.FromArgb(255, 232, 17, 35));
-    private static readonly Brush Blue = new SolidColorBrush(Color.FromArgb(255, 0, 120, 212));
-    private static readonly Brush Neutral = new SolidColorBrush(Color.FromArgb(60, 128, 128, 128));
+    /// <summary>Three panels fit side by side at the default 1350 DIP window (content about 1290 wide).</summary>
+    private const double MinPanelWidth = 380;
+    private const double ColumnGap = 16;
+    /// <summary>Below this width the spend block moves under the attention list instead of beside it.</summary>
+    private const double SummarySideBySideWidth = 640;
+    /// <summary>Room needed to show the spend (caption, total, 30-day line) on one line.</summary>
+    private const double SpendOneLineWidth = 900;
 
     private readonly Dictionary<string, DashboardProviderPanel> _panels = new();
     private readonly List<StackPanel> _columnStacks = new();
+    private readonly Dictionary<string, DashboardGraphCard> _graphCards = new();
+    private readonly Dictionary<string, ToggleButton> _graphToggles = new();
+    private readonly HashSet<string> _hiddenGraphs = new(StringComparer.OrdinalIgnoreCase);
+    private string _graphsArranged = string.Empty;
     private DashboardSnapshot? _snapshot;
-    private List<DashboardTile> _tiles = [];
+    private IReadOnlyList<AttentionItem> _attention = [];
     private int _arrangedColumns = -1;
     private string _arrangedOrder = string.Empty;
 
@@ -37,6 +40,7 @@ public sealed partial class DashboardPage : Page
     public event EventHandler? SettingsRequested;
     public event EventHandler<bool>? TopmostChanged;
     public event EventHandler<bool>? FullScreenChanged;
+    public event EventHandler<GraphVisibilityChange>? GraphVisibilityChanged;
 
     public DashboardPage()
     {
@@ -57,30 +61,30 @@ public sealed partial class DashboardPage : Page
     {
         _snapshot = snapshot;
         UpdateSubtitle(snapshot.Summary);
-
-        UpdateTiles(snapshot);
+        UpdateSummary(snapshot);
         if (!DashboardContent.DiagnosticsEquals(Diagnostics.Data, snapshot.Diagnostics)) Diagnostics.Data = snapshot.Diagnostics;
         else Diagnostics.RefreshTimes();
-        Overview.Update(snapshot.Providers);
+        UpdateDiagnosticsSummary(snapshot.Diagnostics);
         UpdateProviders(snapshot.Providers);
+        UpdateGraphs(snapshot.Providers);
+    }
+
+    /// <summary>The providers whose graphs the user switched off (from settings); redraws the graphs section when it changed.</summary>
+    public void SetHiddenGraphs(IEnumerable<string> providerIds)
+    {
+        var hidden = new HashSet<string>(providerIds, StringComparer.OrdinalIgnoreCase);
+        if (hidden.SetEquals(_hiddenGraphs)) return;
+        _hiddenGraphs.Clear();
+        _hiddenGraphs.UnionWith(hidden);
+        if (_snapshot != null) UpdateGraphs(_snapshot.Providers);
     }
 
     public void RefreshTimes()
     {
         if (_snapshot == null) return;
         UpdateSubtitle(_snapshot.Summary);
-        UpdateTiles(_snapshot);
-        Overview.RefreshTimes();
         foreach (var panel in _panels.Values) panel.RefreshTimes();
         Diagnostics.RefreshTimes();
-    }
-
-    private void UpdateTiles(DashboardSnapshot snapshot)
-    {
-        // Seven small tiles: when any value changed, hand the repeater the new list (cheap, and always correct)
-        var tiles = BuildTiles(snapshot);
-        if (_tiles.Count == tiles.Count && _tiles.SequenceEqual(tiles)) return;
-        TilesRepeater.ItemsSource = _tiles = tiles.ToList();
     }
 
     private void UpdateSubtitle(DashboardSummary summary)
@@ -92,46 +96,67 @@ public sealed partial class DashboardPage : Page
                   ? $" · every {DashboardFormat.Seconds(summary.EffectiveRefreshIntervalSeconds)} while usage is idle"
                   : $" · every {DashboardFormat.Seconds(summary.RefreshIntervalSeconds)}")
             : "Waiting for the first refresh…";
-
     }
 
-    private IReadOnlyList<DashboardTile> BuildTiles(DashboardSnapshot snapshot)
+    /// <summary>
+    /// The summary card: what needs attention across providers (each entry scrolls to its provider) and, when two or more
+    /// providers report cost, the combined spend. With nothing to say the card collapses and the toolbar shows "All clear".
+    /// </summary>
+    private void UpdateSummary(DashboardSnapshot snapshot)
     {
-        var s = snapshot.Summary;
-        var tiles = new List<DashboardTile>();
+        var attention = DashboardGlance.Attention(snapshot.Providers);
+        if (!_attention.SequenceEqual(attention))
+        {
+            _attention = attention;
+            AttentionRepeater.ItemsSource = attention.ToList();
+        }
 
-        tiles.Add(new("PROVIDERS", $"{s.HealthyProviderCount} of {s.ProviderCount} healthy",
-            s.ErrorProviderCount + s.StaleProviderCount == 0 ? "All reporting normally"
-                : $"{DashboardFormat.Plural(s.ErrorProviderCount, "error")} · {s.StaleProviderCount} stale",
-            s.ErrorProviderCount > 0 ? Red : s.StaleProviderCount > 0 ? Amber : Green));
+        var spend = snapshot.Summary.CostAvailable && DashboardGlance.ShowCombinedSpend(snapshot.Providers);
+        if (spend)
+        {
+            var s = snapshot.Summary;
+            SpendToday.Text = DashboardFormat.Money(s.TotalCostToday, s.CostCurrency);
+            SpendMonth.Text = $"{DashboardFormat.Money(s.TotalCost30Days, s.CostCurrency)} in the last 30 days · " +
+                              $"{DashboardFormat.Tokens(s.TotalTokens30Days)} tokens";
+        }
 
-        tiles.Add(new("SERVICE STATUS", s.IncidentCount == 0 ? "No incidents" : DashboardFormat.Plural(s.IncidentCount, "incident"),
-            "From each provider's status page", s.IncidentCount > 0 ? Red : Green));
+        AttentionPanel.Visibility = attention.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+        SpendPanel.Visibility = spend ? Visibility.Visible : Visibility.Collapsed;
+        SummaryCard.Visibility = attention.Count > 0 || spend ? Visibility.Visible : Visibility.Collapsed;
+        AllClear.Visibility = attention.Count == 0 && snapshot.Providers.Count > 0 && snapshot.Summary.LastRefreshUtc.HasValue
+            ? Visibility.Visible : Visibility.Collapsed;
+        ArrangeSummary();
+    }
 
-        tiles.Add(new("LIMITS", $"{s.WindowsAtLimit} at · {s.WindowsNearLimit} near",
-            $"{s.WindowsAheadOfPace} ahead of pace · {DashboardFormat.Plural(s.WindowCount, "window")} tracked",
-            s.WindowsAtLimit > 0 ? Red : s.WindowsNearLimit > 0 || s.WindowsAheadOfPace > 0 ? Amber : Green));
+    /// <summary>Spend beside the attention list when there is room (or when it is alone), under it otherwise.</summary>
+    private void ArrangeSummary()
+    {
+        var alone = AttentionPanel.Visibility != Visibility.Visible;
+        // Alone, the spend reads as one line instead of a three-line block in an otherwise empty card
+        var oneLine = alone && MainScroll.ActualWidth >= SpendOneLineWidth;
+        SpendPanel.Orientation = oneLine ? Orientation.Horizontal : Orientation.Vertical;
+        SpendPanel.Spacing = oneLine ? 16 : 2;
+        var sideBySide = alone || MainScroll.ActualWidth >= SummarySideBySideWidth;
+        SummaryGrid.RowSpacing = sideBySide ? 0 : 12;
+        Grid.SetColumn(SpendPanel, sideBySide && !alone ? 1 : 0);
+        Grid.SetRow(SpendPanel, sideBySide ? 0 : 1);
+        Grid.SetColumnSpan(AttentionPanel, sideBySide && SpendPanel.Visibility == Visibility.Visible ? 1 : 2);
+    }
 
-        tiles.Add(s.MostUsedWindow is { } most
-            ? new("MOST USED", $"{most.UsedPercent:F0}%", $"{most.ProviderName} · {most.WindowTitle} · resets {DashboardFormat.In(most.ResetsAtUtc)}",
-                most.UsedPercent >= UsageThresholds.Critical ? Red : most.UsedPercent >= UsageThresholds.Warning ? Amber : Blue)
-            : new("MOST USED", "—", "No usage windows yet", Neutral));
-
-        tiles.Add(s.NextResetWindow is { } next
-            ? new("NEXT RESET", DashboardFormat.In(next.ResetsAtUtc), $"{next.ProviderName} · {next.WindowTitle} · {DashboardFormat.Local(next.ResetsAtUtc)}", Blue)
-            : new("NEXT RESET", "—", "No reset times reported", Neutral));
-
-        tiles.Add(s.CostAvailable
-            ? new("COST TODAY", DashboardFormat.Money(s.TotalCostToday, s.CostCurrency),
-                $"{DashboardFormat.Tokens(s.TotalTokensToday)} tokens · estimated", Blue)
-            : new("COST TODAY", "—", "Cost totals are off or not scanned yet", Neutral));
-
-        tiles.Add(s.CostAvailable
-            ? new("COST · 30 DAYS", DashboardFormat.Money(s.TotalCost30Days, s.CostCurrency),
-                $"{DashboardFormat.Tokens(s.TotalTokens30Days)} tokens · all providers", Blue)
-            : new("COST · 30 DAYS", "—", "Enable cost totals in Settings", Neutral));
-
-        return tiles;
+    private void UpdateDiagnosticsSummary(DashboardDiagnostics d)
+    {
+        var version = string.IsNullOrWhiteSpace(d.AppVersion) ? null : d.AppVersion.Split('+')[0];
+        var failed = d.RecentRefreshes.Count(r => !r.Success);
+        var parts = new List<string?>
+        {
+            version != null ? $"App {version}" : null,
+            d.CliAvailable switch { true => $"CLI {DashboardFormat.Unknown(d.CliVersion)}", false => "CLI not found in WSL", _ => null },
+            d.RecentRefreshes.Count == 0 ? "no refreshes logged yet"
+                : DashboardFormat.Plural(d.RecentRefreshes.Count, "refresh", "refreshes") + " logged" + (failed > 0 ? $" ({failed} failed)" : string.Empty),
+            d.RecentAlerts.Count == 0 ? "no alerts this session" : DashboardFormat.Plural(d.RecentAlerts.Count, "alert") + " this session",
+            "system, settings in effect, history store, refresh log"
+        };
+        DiagnosticsSummary.Text = string.Join(" · ", parts.Where(p => !string.IsNullOrWhiteSpace(p)));
     }
 
     private void UpdateProviders(IReadOnlyList<DashboardProvider> providers)
@@ -156,24 +181,122 @@ public sealed partial class DashboardPage : Page
 
     private void OnScrollSizeChanged(object sender, SizeChangedEventArgs e)
     {
-        try { Arrange(force: false); }
+        try
+        {
+            ArrangeSummary();
+            Arrange(force: false);
+            ArrangeGraphs();
+        }
         catch (Exception ex) { App.LogHandled("Dashboard layout update failed", ex); }
     }
 
-    /// <summary>Lays the provider panels out in as many columns as fit (each at least <see cref="MinPanelWidth"/> wide).</summary>
+    /// <summary>One toggle per provider in the section header, one chart card per provider whose graphs are on.</summary>
+    private void UpdateGraphs(IReadOnlyList<DashboardProvider> providers)
+    {
+        var ids = providers.Select(p => p.Id).ToList();
+        foreach (var stale in _graphCards.Keys.Where(k => !ids.Contains(k)).ToList()) _graphCards.Remove(stale);
+        foreach (var stale in _graphToggles.Keys.Where(k => !ids.Contains(k)).ToList()) _graphToggles.Remove(stale);
+
+        foreach (var provider in providers)
+        {
+            if (!_graphToggles.TryGetValue(provider.Id, out var toggle))
+            {
+                toggle = new ToggleButton { Tag = provider.Id, Padding = new Thickness(10, 4, 10, 4), FontSize = 12 };
+                toggle.Click += OnGraphToggleClicked;
+                _graphToggles[provider.Id] = toggle;
+            }
+            toggle.Content = provider.DisplayName;
+            var shown = !_hiddenGraphs.Contains(provider.Id);
+            if (toggle.IsChecked != shown) toggle.IsChecked = shown;
+            Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(toggle, $"{provider.DisplayName} graphs");
+            ToolTipService.SetToolTip(toggle, shown ? $"Hide {provider.DisplayName} graphs" : $"Show {provider.DisplayName} graphs");
+
+            if (shown)
+            {
+                if (!_graphCards.TryGetValue(provider.Id, out var card))
+                {
+                    card = new DashboardGraphCard { VerticalAlignment = VerticalAlignment.Top };
+                    _graphCards[provider.Id] = card;
+                }
+                if (!DashboardContent.ProviderEquals(card.Data, provider)) card.Data = provider;
+            }
+            else _graphCards.Remove(provider.Id);
+        }
+
+        var wanted = providers.Select(p => _graphToggles[p.Id]).ToList();
+        if (!GraphToggles.Children.SequenceEqual(wanted))
+        {
+            GraphToggles.Children.Clear();
+            foreach (var toggle in wanted) GraphToggles.Children.Add(toggle);
+        }
+
+        GraphsSection.Visibility = providers.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+        GraphsHiddenNote.Visibility = providers.Count > 0 && _graphCards.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        ArrangeGraphs(providers);
+    }
+
+    private void ArrangeGraphs(IReadOnlyList<DashboardProvider>? providers = null)
+    {
+        providers ??= _snapshot?.Providers;
+        if (providers == null) return;
+        var order = providers.Where(p => _graphCards.ContainsKey(p.Id)).Select(p => p.Id).ToList();
+        var available = Math.Max(0, MainScroll.ActualWidth - 12);
+        // Sized by all providers, not just the visible ones, so one card left on does not stretch across the window
+        var columns = Math.Clamp((int)Math.Floor((available + ColumnGap) / (MinPanelWidth + ColumnGap)), 1, Math.Max(1, providers.Count));
+        var key = $"{columns}|{string.Join('|', order)}";
+        if (key == _graphsArranged) return;
+        _graphsArranged = key;
+
+        foreach (var card in _graphCards.Values) if (card.Parent is Panel parent) parent.Children.Remove(card);
+        GraphsGrid.Children.Clear();
+        GraphsGrid.ColumnDefinitions.Clear();
+        GraphsGrid.RowDefinitions.Clear();
+        for (var c = 0; c < columns; c++) GraphsGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        for (var r = 0; r < (order.Count + columns - 1) / columns; r++) GraphsGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        for (var i = 0; i < order.Count; i++)
+        {
+            var card = _graphCards[order[i]];
+            Grid.SetColumn(card, i % columns);
+            Grid.SetRow(card, i / columns);
+            GraphsGrid.Children.Add(card);
+        }
+    }
+
+    private void OnGraphToggleClicked(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            if (sender is not ToggleButton { Tag: string id } toggle) return;
+            var visible = toggle.IsChecked == true;
+            if (visible) _hiddenGraphs.Remove(id); else _hiddenGraphs.Add(id);
+            if (_snapshot != null) UpdateGraphs(_snapshot.Providers);
+            GraphVisibilityChanged?.Invoke(this, new GraphVisibilityChange(id, visible));
+        }
+        catch (Exception ex) { App.LogHandled("Dashboard graphs toggle failed", ex); }
+    }
+
+    private void OnAttentionClicked(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            if (sender is FrameworkElement { Tag: string id } && _panels.TryGetValue(id, out var panel))
+                panel.StartBringIntoView(new BringIntoViewOptions { AnimationDesired = true, VerticalAlignmentRatio = 0, VerticalOffset = -8 });
+        }
+        catch (Exception ex) { App.LogHandled("Dashboard scroll to provider failed", ex); }
+    }
+
+    /// <summary>
+    /// Lays the provider panels out side by side in as many columns as fit (each at least <see cref="MinPanelWidth"/> wide),
+    /// so the tops of the panels form the comparison row. With fewer columns than panels each panel goes into the
+    /// currently shortest column. Opening a panel's details never re-arranges (nothing jumps under the pointer).
+    /// </summary>
     private void Arrange(bool force)
     {
         var available = Math.Max(0, MainScroll.ActualWidth - 12);
-        var count = Math.Max(1, _panels.Count);
-        var columns = Math.Clamp((int)Math.Floor((available + ColumnGap) / (MinPanelWidth + ColumnGap)), 1, count);
-
         var order = _panels.Keys.ToList();
-        // Panels with an External pool (Gemini) show two window columns of their own, so with two or more
-        // columns they take a full-width row below the others instead of sharing a narrow column
-        var spanning = columns >= 2 ? order.Where(id => SpansRow(_panels[id].Data)).ToList() : [];
-        // Never more columns than panels that share them (two regular panels never get an empty third column)
-        columns = Math.Max(1, Math.Min(columns, order.Count - spanning.Count));
-        var orderKey = string.Join('|', order) + "#" + string.Join('|', spanning);
+        var count = Math.Max(1, order.Count);
+        var columns = Math.Clamp((int)Math.Floor((available + ColumnGap) / (MinPanelWidth + ColumnGap)), 1, count);
+        var orderKey = string.Join('|', order);
         if (!force && columns == _arrangedColumns && orderKey == _arrangedOrder) return;
 
         _arrangedColumns = columns;
@@ -183,13 +306,7 @@ public sealed partial class DashboardPage : Page
         _columnStacks.Clear();
         ProvidersGrid.Children.Clear();
         ProvidersGrid.ColumnDefinitions.Clear();
-        ProvidersGrid.RowDefinitions.Clear();
-        ProvidersGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
 
-        var regular = order.Where(id => !spanning.Contains(id)).ToList();
-
-        // Balanced columns: each panel goes into the currently shortest column, so a tall panel next to a short
-        // one doesn't leave a hole (three providers in two columns become tall | short + short)
         var heights = new double[columns];
         for (var c = 0; c < columns; c++)
         {
@@ -199,30 +316,30 @@ public sealed partial class DashboardPage : Page
             _columnStacks.Add(stack);
             ProvidersGrid.Children.Add(stack);
         }
-        foreach (var id in regular)
+        foreach (var id in order)
         {
             var panel = _panels[id];
             var shortest = Array.IndexOf(heights, heights.Min());
             _columnStacks[shortest].Children.Add(panel);
-            heights[shortest] += EstimateHeight(panel.Data);
-        }
-        foreach (var id in spanning)
-        {
-            ProvidersGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-            var panel = _panels[id];
-            Grid.SetRow(panel, ProvidersGrid.RowDefinitions.Count - 1);
-            Grid.SetColumnSpan(panel, columns);
-            ProvidersGrid.Children.Add(panel);
+            heights[shortest] += EstimateHeight(panel.Data) + ColumnGap;
         }
     }
 
-    /// <summary>True for a provider whose windows split into its own models and an External pool.</summary>
-    private static bool SpansRow(DashboardProvider? provider) =>
-        provider != null && provider.Windows.Any(w => w.Kind == DashboardWindowKind.Extra && w.Accent == Helpers.WindowAccent.ClaudeAndOpenAi);
-
-    /// <summary>A rough height for balancing columns (real heights aren't known before layout).</summary>
+    /// <summary>A rough collapsed height for balancing columns (real heights aren't known before layout).</summary>
     private static double EstimateHeight(DashboardProvider? provider) =>
-        provider == null ? 0 : 150 + provider.Windows.Count * 215 + (provider.Cost != null ? 640 : 0);
+        provider == null ? 0
+            : 90 + provider.Windows.Count * 64
+              + (string.IsNullOrWhiteSpace(provider.Error) ? 0 : 110)
+              + (DashboardFormat.HasIncident(provider) ? 130 : 0)
+              + (provider.Credits != null ? 30 : 0)
+              + (provider.Cost != null ? 250 : 0)
+              + ApiSectionHeight(provider.ApiCredits);
+
+    /// <summary>The Claude API credits section: about 150 plus a row per rendered contributor when Ok, a line otherwise, nothing without a key.</summary>
+    private static double ApiSectionHeight(ApiCreditsInfo? api) => api == null ? 0
+        : api.State == ApiCreditsState.NoKey ? 0
+        : api.State != ApiCreditsState.Ok ? 70
+        : 150 + 28 * DashboardProviderPanel.ApiUseRowCount(api);
 
     private void OnRefreshClicked(object sender, RoutedEventArgs e) => RefreshRequested?.Invoke(this, EventArgs.Empty);
     private void OnSettingsClicked(object sender, RoutedEventArgs e) => SettingsRequested?.Invoke(this, EventArgs.Empty);

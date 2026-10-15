@@ -4,33 +4,51 @@
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:views="using:CodexBarWin.Views"
+    xmlns:helpers="using:CodexBarWin.Helpers"
     xmlns:controls="using:CodexBarWin.Controls"
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     mc:Ignorable="d"
     Background="Transparent">
 
-    <Grid Padding="24,4,24,0" RowSpacing="14">
+    <Page.Resources>
+        <Style x:Key="SectionCaption" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="CharacterSpacing" Value="60"/>
+            <Setter Property="Foreground" Value="{ThemeResource TextFillColorSecondaryBrush}"/>
+        </Style>
+    </Page.Resources>
+
+    <Grid Padding="24,8,24,0" RowSpacing="12">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>   <!-- Toolbar -->
-            <RowDefinition Height="Auto"/>   <!-- Headline tiles -->
-            <RowDefinition Height="*"/>      <!-- Providers + diagnostics -->
+            <RowDefinition Height="*"/>      <!-- Summary, providers, diagnostics -->
         </Grid.RowDefinitions>
 
-        <!-- Toolbar -->
+        <!-- Toolbar: when the data is from (the title bar already names the window) and the four actions -->
         <Grid Grid.Row="0" ColumnSpacing="8">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*"/>
                 <ColumnDefinition Width="Auto"/>
             </Grid.ColumnDefinitions>
-            <StackPanel VerticalAlignment="Center">
-                <TextBlock Text="Dashboard" FontSize="26" FontWeight="SemiBold"/>
-                <TextBlock x:Name="SubtitleText" FontSize="12"
+            <Grid VerticalAlignment="Center">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <StackPanel x:Name="AllClear" Orientation="Horizontal" Spacing="6" Margin="0,0,12,0" VerticalAlignment="Center" Visibility="Collapsed"
+                            ToolTipService.ToolTip="No incidents, nothing near a limit, no failed or stale data">
+                    <FontIcon FontFamily="Segoe Fluent Icons" Glyph="&#xE73E;" FontSize="12"
+                              Foreground="{ThemeResource SystemFillColorSuccessBrush}"/>
+                    <TextBlock Text="All clear" FontSize="13" Foreground="{ThemeResource SystemFillColorSuccessBrush}"/>
+                </StackPanel>
+                <TextBlock x:Name="SubtitleText" Grid.Column="1" FontSize="13" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"
                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
-            </StackPanel>
-            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+            </Grid>
+            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
                 <Button x:Name="RefreshButton" Click="OnRefreshClicked" AutomationProperties.Name="Refresh now"
-                        ToolTipService.ToolTip="Refresh now" Padding="12,7">
+                        ToolTipService.ToolTip="Refresh now" Padding="12,6">
                     <StackPanel Orientation="Horizontal" Spacing="8">
                         <FontIcon x:Name="RefreshIcon" FontFamily="Segoe Fluent Icons" Glyph="&#xE72C;" FontSize="14"/>
                         <ProgressRing x:Name="RefreshRing" Width="14" Height="14" IsActive="False" Visibility="Collapsed"/>
@@ -38,73 +56,123 @@
                     </StackPanel>
                 </Button>
                 <ToggleButton x:Name="TopmostToggle" Click="OnTopmostClicked" AutomationProperties.Name="Keep on top"
-                              ToolTipService.ToolTip="Keep this window above others" Padding="10,7">
+                              ToolTipService.ToolTip="Keep this window above others" Padding="10,6">
                     <FontIcon FontFamily="Segoe Fluent Icons" Glyph="&#xE840;" FontSize="14"/>
                 </ToggleButton>
                 <ToggleButton x:Name="FullScreenToggle" Click="OnFullScreenClicked" AutomationProperties.Name="Full screen"
-                              ToolTipService.ToolTip="Full screen (F11)" Padding="10,7">
+                              ToolTipService.ToolTip="Full screen (F11)" Padding="10,6">
                     <FontIcon FontFamily="Segoe Fluent Icons" Glyph="&#xE740;" FontSize="14"/>
                 </ToggleButton>
                 <Button Click="OnSettingsClicked" AutomationProperties.Name="Settings" ToolTipService.ToolTip="Settings"
-                        Padding="10,7">
+                        Padding="10,6">
                     <FontIcon FontFamily="Segoe Fluent Icons" Glyph="&#xE713;" FontSize="14"/>
                 </Button>
             </StackPanel>
         </Grid>
 
-        <!-- Headline tiles -->
-        <ItemsRepeater Grid.Row="1" x:Name="TilesRepeater">
-            <ItemsRepeater.Layout>
-                <UniformGridLayout MinItemWidth="175" MinItemHeight="100" MinColumnSpacing="10" MinRowSpacing="10" ItemsStretch="Fill"/>
-            </ItemsRepeater.Layout>
-            <ItemsRepeater.ItemTemplate>
-                <DataTemplate x:DataType="views:DashboardTile">
-                    <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                            BorderThickness="1" CornerRadius="8">
-                        <Grid>
-                            <Border Height="3" VerticalAlignment="Top" CornerRadius="8,8,0,0" Background="{x:Bind Accent}"/>
-                            <StackPanel Padding="14,12,14,12" Spacing="1">
-                                <TextBlock Text="{x:Bind Label}" FontSize="11" FontWeight="SemiBold" CharacterSpacing="60"
-                                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
-                                <TextBlock Text="{x:Bind Value}" FontSize="22" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
-                                <TextBlock Text="{x:Bind Sub}" FontSize="11" TextWrapping="Wrap" MaxLines="2" TextTrimming="CharacterEllipsis"
-                                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
-                            </StackPanel>
-                        </Grid>
-                    </Border>
-                </DataTemplate>
-            </ItemsRepeater.ItemTemplate>
-        </ItemsRepeater>
-
-        <!-- Providers and diagnostics -->
-        <ScrollViewer Grid.Row="2" x:Name="MainScroll" VerticalScrollBarVisibility="Auto" Padding="0,0,12,24"
+        <ScrollViewer Grid.Row="1" x:Name="MainScroll" VerticalScrollBarVisibility="Auto" Padding="0,0,12,24"
                       SizeChanged="OnScrollSizeChanged">
-            <Grid x:Name="ContentGrid" RowSpacing="14">
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="Auto"/>
-                </Grid.RowDefinitions>
+            <StackPanel x:Name="ContentStack" Spacing="16">
 
-                <!-- Every usage bar at once -->
-                <controls:DashboardUsageOverview x:Name="Overview" Grid.Row="0"/>
+                <!-- Summary: only what no provider panel says (cross-provider problems and the all-provider spend); hidden when empty -->
+                <Border x:Name="SummaryCard" Visibility="Collapsed" Padding="20,12,20,14" CornerRadius="8" BorderThickness="1"
+                        Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}">
+                    <Grid x:Name="SummaryGrid" ColumnSpacing="24" RowSpacing="12">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
 
-                <Grid x:Name="ProvidersGrid" Grid.Row="1" ColumnSpacing="14" RowSpacing="14"/>
+                        <StackPanel x:Name="AttentionPanel" Spacing="6">
+                            <TextBlock Text="NEEDS ATTENTION" Style="{StaticResource SectionCaption}"/>
+                            <ItemsRepeater x:Name="AttentionRepeater">
+                                <ItemsRepeater.Layout>
+                                    <UniformGridLayout MinItemWidth="380" MinItemHeight="24" MinColumnSpacing="16" MinRowSpacing="2"
+                                                       ItemsStretch="Fill"/>
+                                </ItemsRepeater.Layout>
+                                <ItemsRepeater.ItemTemplate>
+                                    <DataTemplate x:DataType="helpers:AttentionItem">
+                                        <HyperlinkButton Padding="0,2" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
+                                                         Click="OnAttentionClicked" Tag="{x:Bind ProviderId}"
+                                                         AutomationProperties.Name="{x:Bind views:DashboardFormat.AttentionText(Label, Detail)}"
+                                                         ToolTipService.ToolTip="{x:Bind views:DashboardFormat.AttentionText(Label, Detail)}">
+                                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                                <Grid Width="8" Height="8" VerticalAlignment="Center">
+                                                    <Ellipse Fill="{ThemeResource SystemFillColorCriticalBrush}"
+                                                             Visibility="{x:Bind views:DashboardFormat.VisCritical(Severity)}"/>
+                                                    <Ellipse Fill="{ThemeResource SystemFillColorCautionBrush}"
+                                                             Visibility="{x:Bind views:DashboardFormat.VisCaution(Severity)}"/>
+                                                </Grid>
+                                                <TextBlock FontSize="13" TextTrimming="CharacterEllipsis"
+                                                           Foreground="{ThemeResource TextFillColorPrimaryBrush}">
+                                                    <Run Text="{x:Bind Label}" FontWeight="SemiBold"/><Run Text=": "/><Run Text="{x:Bind Detail}"/>
+                                                </TextBlock>
+                                            </StackPanel>
+                                        </HyperlinkButton>
+                                    </DataTemplate>
+                                </ItemsRepeater.ItemTemplate>
+                            </ItemsRepeater>
+                        </StackPanel>
 
-                <!-- Always below the providers, at any window size -->
-                <controls:DashboardDiagnosticsPanel x:Name="Diagnostics" Grid.Row="2" VerticalAlignment="Top"/>
+                        <!-- Shown only when two or more providers report cost, so it never repeats one panel -->
+                        <StackPanel x:Name="SpendPanel" Grid.Column="1" Spacing="2" MinWidth="220"
+                                    ToolTipService.ToolTip="List-price estimate from local session logs, not your bill">
+                            <TextBlock Text="ESTIMATED SPEND · ALL PROVIDERS" Style="{StaticResource SectionCaption}" VerticalAlignment="Center"/>
+                            <TextBlock FontSize="26" FontWeight="SemiBold" LineHeight="32" VerticalAlignment="Center">
+                                <Run x:Name="SpendToday"/><Run Text=" today" FontSize="14" FontWeight="Normal"
+                                                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                            </TextBlock>
+                            <TextBlock x:Name="SpendMonth" FontSize="12" VerticalAlignment="Center" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                        </StackPanel>
+                    </Grid>
+                </Border>
+
+                <Grid x:Name="ProvidersGrid" ColumnSpacing="16" RowSpacing="16"/>
+
+                <!-- Graphs: usage history and daily cost per provider, below the panels; each provider can be switched off -->
+                <StackPanel x:Name="GraphsSection" Spacing="12" Visibility="Collapsed">
+                    <Grid ColumnSpacing="12">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Text="GRAPHS" Style="{StaticResource SectionCaption}" VerticalAlignment="Center"/>
+                        <StackPanel x:Name="GraphToggles" Grid.Column="1" Orientation="Horizontal" Spacing="6"
+                                    HorizontalAlignment="Right" VerticalAlignment="Center"/>
+                    </Grid>
+                    <Grid x:Name="GraphsGrid" ColumnSpacing="16" RowSpacing="16"/>
+                    <TextBlock x:Name="GraphsHiddenNote" Text="Graphs are hidden. Turn a provider on above to show its charts."
+                               FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Visibility="Collapsed"/>
+                </StackPanel>
 
                 <!-- Shown when no provider is enabled -->
-                <StackPanel x:Name="EmptyPanel" Grid.Row="1" Visibility="Collapsed"
-                            HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="6" Padding="0,60">
+                <StackPanel x:Name="EmptyPanel" Visibility="Collapsed"
+                            HorizontalAlignment="Center" Spacing="6" Padding="0,60">
                     <FontIcon FontFamily="Segoe Fluent Icons" Glyph="&#xE7BA;" FontSize="30"
                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
                     <TextBlock Text="No providers to show" FontSize="16" FontWeight="SemiBold" HorizontalAlignment="Center"/>
                     <TextBlock Text="Turn providers on in Settings." Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                HorizontalAlignment="Center"/>
                 </StackPanel>
-            </Grid>
+
+                <!-- Diagnostics: collapsed by default, a one-line summary in the header -->
+                <Expander x:Name="DiagnosticsExpander" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch"
+                          AutomationProperties.Name="Diagnostics">
+                    <Expander.Header>
+                        <StackPanel Padding="0,10" Spacing="2">
+                            <TextBlock Text="Diagnostics" FontSize="14" FontWeight="SemiBold"/>
+                            <TextBlock x:Name="DiagnosticsSummary" FontSize="12" TextTrimming="CharacterEllipsis"
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                        </StackPanel>
+                    </Expander.Header>
+                    <controls:DashboardDiagnosticsPanel x:Name="Diagnostics"/>
+                </Expander>
+            </StackPanel>
         </ScrollViewer>
 
     </Grid>

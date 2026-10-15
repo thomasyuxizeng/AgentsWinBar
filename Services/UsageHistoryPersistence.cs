@@ -13,6 +13,8 @@ public sealed class UsageHistoryPersistence
     private readonly SemaphoreSlim _ioGate = new(1, 1);
     private DateTimeOffset _lastSavedAt = DateTimeOffset.MinValue;
     private long _savedRevision = -1;
+    private bool _isLoaded;
+    public bool IsLoaded => _isLoaded;
     public string FilePath { get; }
 
     public UsageHistoryPersistence(UsageHistoryStore store, ISettingsService settings,
@@ -30,10 +32,22 @@ public sealed class UsageHistoryPersistence
         try
         {
             await _ioGate.WaitAsync(ct); acquired = true;
-            if (!File.Exists(FilePath)) return;
+            if (!File.Exists(FilePath))
+            {
+                _isLoaded = true;
+                return;
+            }
             var json = await File.ReadAllTextAsync(FilePath, ct);
-            var samples = JsonSerializer.Deserialize(json, AppJsonSerializerContext.Default.ListUsageHistorySample);
-            _store.Restore(samples ?? [], _clock.GetUtcNow().UtcDateTime);
+            try
+            {
+                var samples = JsonSerializer.Deserialize(json, AppJsonSerializerContext.Default.ListUsageHistorySample);
+                _store.Restore(samples ?? [], _clock.GetUtcNow().UtcDateTime);
+            }
+            catch (JsonException)
+            {
+                _store.Restore([], _clock.GetUtcNow().UtcDateTime);
+            }
+            _isLoaded = true;
         }
         catch (Exception ex) { _logger.LogDebug(ex, "Usage history could not be loaded"); }
         finally { if (acquired) _ioGate.Release(); }
@@ -41,10 +55,12 @@ public sealed class UsageHistoryPersistence
 
     public async Task SaveAsync(bool force = false, CancellationToken ct = default)
     {
+        if (!_isLoaded) return;
         var acquired = false;
         try
         {
             await _ioGate.WaitAsync(ct); acquired = true;
+            if (!_isLoaded) return;
             var now = _clock.GetUtcNow();
             _store.Prune(now.UtcDateTime);
             var revision = _store.Revision;

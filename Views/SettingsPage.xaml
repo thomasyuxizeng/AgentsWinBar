@@ -105,7 +105,7 @@
                     CornerRadius="8">
                     <StackPanel>
                         <TextBlock
-                            Text="Choose which providers to show and their display order"
+                            Text="Choose which providers to show, whether the dashboard charts them, and their display order"
                             Style="{StaticResource CaptionTextBlockStyle}"
                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                             Margin="0,0,0,12"/>
@@ -121,10 +121,15 @@
                                             <ColumnDefinition Width="Auto"/>
                                             <ColumnDefinition Width="Auto"/>
                                         </Grid.ColumnDefinitions>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                        </Grid.RowDefinitions>
 
                                         <!-- Provider Icon -->
                                         <Viewbox
                                             Grid.Column="0"
+                                            Grid.RowSpan="2"
                                             Width="16"
                                             Height="16"
                                             Margin="0,0,12,0"
@@ -135,6 +140,7 @@
                                         <!-- Provider Checkbox -->
                                         <CheckBox
                                             Grid.Column="1"
+                                            Grid.ColumnSpan="2"
                                             Content="{Binding DisplayName}"
                                             IsChecked="{Binding IsEnabled, Mode=TwoWay}"
                                             VerticalAlignment="Center"
@@ -143,9 +149,22 @@
                                         <!-- Spacer -->
                                         <Grid Grid.Column="2"/>
 
+                                        <!-- Graphs on the dashboard -->
+                                        <CheckBox
+                                            Grid.Row="1"
+                                            Grid.Column="1"
+                                            Grid.ColumnSpan="2"
+                                            Content="Show graphs"
+                                            FontSize="12"
+                                            IsChecked="{Binding ShowGraphs, Mode=TwoWay}"
+                                            VerticalAlignment="Center"
+                                            ToolTipService.ToolTip="Show this provider's charts below the dashboard panels"/>
+
                                         <!-- Move Up Button -->
                                         <Button
+                                            Grid.RowSpan="2"
                                             Grid.Column="3"
+                                            VerticalAlignment="Center"
                                             ToolTipService.ToolTip="Move up"
                                             Padding="8,6"
                                             Margin="4,0"
@@ -158,7 +177,9 @@
 
                                         <!-- Move Down Button -->
                                         <Button
+                                            Grid.RowSpan="2"
                                             Grid.Column="4"
+                                            VerticalAlignment="Center"
                                             ToolTipService.ToolTip="Move down"
                                             Padding="8,6"
                                             Background="Transparent"
@@ -190,6 +211,43 @@
                     </StackPanel>
                     <ToggleSwitch Grid.Column="1" x:Name="CostTotalsToggle" AutomationProperties.Name="Show cost and token totals" OnContent="" OffContent=""
                                   MinWidth="0" VerticalAlignment="Center"/>
+                </Grid>
+
+                <!-- Claude API credit pool (spend itself is read automatically) -->
+                <Grid Padding="16,12" Margin="0,8,0,0" CornerRadius="8"
+                      Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                      BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <StackPanel VerticalAlignment="Center" Margin="0,0,12,0">
+                        <TextBlock Text="Monthly API budget (USD)" TextWrapping="Wrap"/>
+                        <TextBlock Text="Spend is read automatically with your Anthropic Admin key."
+                                   TextWrapping="Wrap" Style="{StaticResource CaptionTextBlockStyle}"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                    </StackPanel>
+                    <NumberBox Grid.Column="1" x:Name="ApiCreditsMonthlyBox" AutomationProperties.Name="Monthly API budget (USD)"
+                               Minimum="1" Maximum="100000" SmallChange="10" LargeChange="50"
+                               SpinButtonPlacementMode="Compact" Width="110" VerticalAlignment="Center"/>
+                </Grid>
+
+                <Grid Padding="16,12" Margin="0,8,0,0" CornerRadius="8"
+                      Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                      BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <StackPanel VerticalAlignment="Center" Margin="0,0,12,0">
+                        <TextBlock Text="Credit renewal day" TextWrapping="Wrap"/>
+                        <TextBlock Text="Day of the month credits renew (UTC)."
+                                   TextWrapping="Wrap" Style="{StaticResource CaptionTextBlockStyle}"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                    </StackPanel>
+                    <NumberBox Grid.Column="1" x:Name="ApiCreditsCycleDayBox" AutomationProperties.Name="Credit renewal day"
+                               Minimum="1" Maximum="28" SmallChange="1" LargeChange="7"
+                               SpinButtonPlacementMode="Compact" Width="110" VerticalAlignment="Center"/>
                 </Grid>
 
                 <TextBlock

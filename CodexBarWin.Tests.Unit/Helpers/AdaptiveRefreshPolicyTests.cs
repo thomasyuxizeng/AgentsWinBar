@@ -44,6 +44,33 @@ public class AdaptiveRefreshPolicyTests
     }
 
     [TestMethod]
+    [DataRow(0, true, 600)]
+    [DataRow(2, true, 1200)]
+    [DataRow(4, true, 1800)]
+    [DataRow(0, false, 600)]
+    [DataRow(4, false, 600)]
+    public void GetDelay_BatterySaver_DoublesTheDelayUpToThirtyMinutes(int streak, bool adaptive, int seconds)
+    {
+        AdaptiveRefreshPolicy.GetDelay(TimeSpan.FromSeconds(300), streak, adaptive, batterySaver: true)
+            .Should().Be(TimeSpan.FromSeconds(seconds));
+    }
+
+    [TestMethod]
+    public void GetDelay_BatterySaverOff_IsUnchanged()
+    {
+        AdaptiveRefreshPolicy.GetDelay(TimeSpan.FromSeconds(300), 4, true, batterySaver: false)
+            .Should().Be(TimeSpan.FromSeconds(900));
+    }
+
+    [TestMethod]
+    public void GetDelay_BatterySaverWithLargeBase_NeverShortensOrOverflows()
+    {
+        AdaptiveRefreshPolicy.GetDelay(TimeSpan.FromMinutes(45), 4, true, batterySaver: true)
+            .Should().Be(TimeSpan.FromMinutes(45));
+        AdaptiveRefreshPolicy.GetDelay(TimeSpan.MaxValue, 4, true, batterySaver: true).Should().Be(TimeSpan.MaxValue);
+    }
+
+    [TestMethod]
     public void GetDelay_MaximumInterval_DoesNotOverflow()
     {
         AdaptiveRefreshPolicy.GetDelay(TimeSpan.MaxValue, 4, true).Should().Be(TimeSpan.MaxValue);

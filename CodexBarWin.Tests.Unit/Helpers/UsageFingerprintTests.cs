@@ -58,9 +58,36 @@ public class UsageFingerprintTests
     }
 
     [TestMethod]
-    public void HasChangedFrom_ResetTimeChanged_ReturnsTrue()
+    public void HasChangedFrom_ResetTimeDriftsWithinTolerance_ReturnsFalse()
     {
-        UsageFingerprint.Create([Data() with { Session = Data().Session! with { ResetAt = Reset.AddSeconds(1) } }])
+        // An idle rolling window reports "now + window length", so its reset time follows the refresh interval
+        UsageFingerprint.Create([Data() with { Session = Data().Session! with { ResetAt = Reset.AddMinutes(15) } }])
+            .HasChangedFrom(UsageFingerprint.Create([Data()])).Should().BeFalse();
+        UsageFingerprint.Create([Data() with { Session = Data().Session! with { ResetAt = Reset.AddMinutes(-30) } }])
+            .HasChangedFrom(UsageFingerprint.Create([Data()])).Should().BeFalse();
+    }
+
+    [TestMethod]
+    public void HasChangedFrom_ResetTimeMovesBeyondTolerance_ReturnsTrue()
+    {
+        UsageFingerprint.Create([Data() with { Session = Data().Session! with { ResetAt = Reset.AddHours(1).AddSeconds(1) } }])
+            .HasChangedFrom(UsageFingerprint.Create([Data()])).Should().BeTrue();
+        UsageFingerprint.Create([Data() with { Session = Data().Session! with { ResetAt = Reset.AddHours(-2) } }])
+            .HasChangedFrom(UsageFingerprint.Create([Data()])).Should().BeTrue();
+    }
+
+    [TestMethod]
+    public void HasChangedFrom_ResetTimeAppearsOrDisappears_ReturnsTrue()
+    {
+        var withoutReset = Data() with { Session = Data().Session! with { ResetAt = null } };
+        UsageFingerprint.Create([withoutReset]).HasChangedFrom(UsageFingerprint.Create([Data()])).Should().BeTrue();
+        UsageFingerprint.Create([Data()]).HasChangedFrom(UsageFingerprint.Create([withoutReset])).Should().BeTrue();
+    }
+
+    [TestMethod]
+    public void HasChangedFrom_ResetTimeDriftsButPercentMoves_ReturnsTrue()
+    {
+        UsageFingerprint.Create([Data(25) with { Session = new UsageWindow { ReportedPercent = 25, ResetAt = Reset.AddMinutes(5) } }])
             .HasChangedFrom(UsageFingerprint.Create([Data()])).Should().BeTrue();
     }
 

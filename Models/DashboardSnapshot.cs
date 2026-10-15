@@ -93,6 +93,7 @@ public sealed record DashboardProvider
     /// <summary>The reading's own time when it is much older than the fetch (a cached result); otherwise null.</summary>
     public DateTime? OldReadingUtc { get; init; }
     public CreditsInfo? Credits { get; init; }
+    public ApiCreditsInfo? ApiCredits { get; init; }
 
     /// <summary>Session, weekly, tertiary, then every extra window, in that order.</summary>
     public IReadOnlyList<DashboardWindow> Windows { get; init; } = [];

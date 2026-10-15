@@ -41,9 +41,19 @@
     <Compile Include="..\Helpers\BarResetGhost.cs" Link="Linked\BarResetGhost.cs" />
     <Compile Include="..\Helpers\UsageFingerprint.cs" Link="Linked\UsageFingerprint.cs" />
     <Compile Include="..\Helpers\WorkingSetTrimmer.cs" Link="Linked\WorkingSetTrimmer.cs" />
+    <Compile Include="..\Models\ApiCreditsInfo.cs" Link="Linked\ApiCreditsInfo.cs" />
+    <Compile Include="..\Models\ApiCreditsContributor.cs" Link="Linked\ApiCreditsContributor.cs" />
+    <Compile Include="..\Helpers\ApiCreditsAttribution.cs" Link="Linked\ApiCreditsAttribution.cs" />
+    <Compile Include="..\Models\ApiCostReport.cs" Link="Linked\ApiCostReport.cs" />
+    <Compile Include="..\Helpers\ApiCreditsCalculator.cs" Link="Linked\ApiCreditsCalculator.cs" />
+    <Compile Include="..\Services\IApiBillingService.cs" Link="Linked\IApiBillingService.cs" />
+    <Compile Include="..\Services\ApiBillingService.cs" Link="Linked\ApiBillingService.cs" />
+    <Compile Include="..\ViewModels\SettingsViewModel.cs" Link="Linked\SettingsViewModel.cs" />
     <Compile Include="..\Models\DashboardSnapshot.cs" Link="Linked\DashboardSnapshot.cs" />
     <Compile Include="..\Helpers\DashboardValues.cs" Link="Linked\DashboardValues.cs" />
     <Compile Include="..\Helpers\DashboardContent.cs" Link="Linked\DashboardContent.cs" />
+    <Compile Include="..\Helpers\DashboardGlance.cs" Link="Linked\DashboardGlance.cs" />
+    <Compile Include="..\Helpers\GraphVisibility.cs" Link="Linked\GraphVisibility.cs" />
     <Compile Include="..\Helpers\DashboardSnapshotBuilder.cs" Link="Linked\DashboardSnapshotBuilder.cs" />
     <Compile Include="..\Helpers\DataAge.cs" Link="Linked\DataAge.cs" />
     <Compile Include="..\Helpers\StaleCaption.cs" Link="Linked\StaleCaption.cs" />

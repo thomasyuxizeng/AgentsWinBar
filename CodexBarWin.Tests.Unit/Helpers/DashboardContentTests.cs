@@ -113,6 +113,8 @@ public class DashboardContentTests
             new() { ServiceStatus = a }, new() { ServiceStatus = b }));
         Verify(new CreditsInfo(), (a, b) => DashboardContent.ProviderEquals(
             new() { Credits = a }, new() { Credits = b }));
+        Verify(new ApiCreditsInfo(), (a, b) => DashboardContent.ProviderEquals(
+            new() { ApiCredits = a }, new() { ApiCredits = b }));
         Verify(new CostCoverage(), (a, b) => DashboardContent.CostEquals(
             new() { Coverage = a }, new() { Coverage = b }));
         Verify(new PaceProjection(PaceKind.Unknown), (a, b) => DashboardContent.WindowEquals(

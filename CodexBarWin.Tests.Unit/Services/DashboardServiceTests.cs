@@ -44,6 +44,41 @@ public class DashboardServiceTests
     }
 
     [TestMethod]
+    public async Task RefreshApiCreditsAsync_SlowBilling_DoesNotBlockSnapshotOrDiagnostics()
+    {
+        var source = new TaskCompletionSource<ApiCreditsInfo>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var billing = new Mock<IApiBillingService>();
+        billing.Setup(s => s.GetAsync(true, It.IsAny<CancellationToken>())).Returns(() =>
+        { started.SetResult(); return source.Task; });
+        _service = new(_settings.Object, _history, _persistence, _activity, _cli.Object,
+            NullLogger<DashboardService>.Instance, _clock, apiBilling: billing.Object);
+        var refresh = _service.RefreshApiCreditsAsync(true);
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        refresh.IsCompleted.Should().BeFalse();
+        var snapshot = _service.GetSnapshot([new() { Provider = "claude" }], null);
+        snapshot.Providers.Single().ApiCredits.Should().BeNull();
+        await _service.RefreshDiagnosticsAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        var credits = CodexBarWin.Helpers.ApiCreditsCalculator.BuildOk(200, 95.33m, 1,
+            _clock.Now.UtcDateTime, _clock.Now.UtcDateTime);
+        source.SetResult(credits); await refresh.WaitAsync(TimeSpan.FromSeconds(5));
+        _service.GetSnapshot([new() { Provider = "claude" }], null).Providers.Single().ApiCredits.Should().Be(credits);
+        _clock.Now = _clock.Now.AddMinutes(16);
+        _service.GetSnapshot([new() { Provider = "claude" }], null).Providers.Single().ApiCredits!.IsStale.Should().BeTrue();
+    }
+
+    [TestMethod]
+    public async Task RefreshApiCreditsAsync_BillingThrows_DoesNotThrowOrBreakSnapshot()
+    {
+        var billing = new Mock<IApiBillingService>();
+        billing.Setup(s => s.GetAsync(false, It.IsAny<CancellationToken>())).ThrowsAsync(new HttpRequestException("untrusted"));
+        _service = new(_settings.Object, _history, _persistence, _activity, _cli.Object,
+            NullLogger<DashboardService>.Instance, _clock, apiBilling: billing.Object);
+        await _service.RefreshApiCreditsAsync(false);
+        _service.GetSnapshot([new() { Provider = "claude" }], null).Providers.Should().HaveCount(1);
+    }
+
+    [TestMethod]
     public void GetSnapshot_CapturedState_PassesHistoryActivityCostCacheAndClockWithoutCallingCli()
     {
         var now = _clock.Now.UtcDateTime;

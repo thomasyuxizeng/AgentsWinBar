@@ -107,6 +107,26 @@ public class MainViewModelTests
             .Invoke(_viewModel, [new ResetRefreshSchedule(TimeSpan.Zero, reset, retry), ct])!;
 
     [TestMethod]
+    public async Task RefreshAsync_SlowBillingAndHiddenCostTotals_CompletesUsageAndForcesBilling()
+    {
+        _viewModel.Dispose();
+        _values.ShowCostTotals = false;
+        var pending = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var dashboard = new Mock<IDashboardService>();
+        dashboard.Setup(s => s.RefreshApiCreditsAsync(true, It.IsAny<CancellationToken>())).Returns(pending.Task);
+        _viewModel = new(_usage.Object, _settings.Object, new UsageAlertEvaluator(), _toast.Object,
+            _logger.Object, _history, _persistence, _activity, _session, _cache.Object, _memo.Object,
+            dashboardService: dashboard.Object);
+        _usage.Setup(s => s.GetAllUsageStreamAsync(It.IsAny<CancellationToken>()))
+            .Returns(Stream(Task.CompletedTask, Data(40)));
+        await _viewModel.RefreshCommand.ExecuteAsync(null).WaitAsync(TimeSpan.FromSeconds(5));
+        _viewModel.Providers.Single().Session!.Percent.Should().Be(40);
+        _viewModel.IsLoading.Should().BeFalse(); pending.Task.IsCompleted.Should().BeFalse();
+        dashboard.Verify(s => s.RefreshApiCreditsAsync(true, It.IsAny<CancellationToken>()), Times.Once);
+        pending.SetResult();
+    }
+
+    [TestMethod]
     public void ShouldPlayResetAnimation_BatteryAndSettingsChanges_NotifiesAndRecomputes()
     {
         var notifications = 0;
@@ -826,12 +846,13 @@ public class MainViewModelTests
     }
 
     [TestMethod]
-    public async Task RefreshCoreAsync_CacheSaveFails_StillCompletesRefresh()
+    public async Task RefreshCoreAsync_UsageStreamCompleted_LeavesCachePersistenceToTheService()
     {
         SetupImmediateUsage();
         _cache.Setup(c => c.SaveAsync()).ThrowsAsync(new IOException("cache unavailable"));
         await _viewModel.StartAsync();
-        _cache.Verify(c => c.SaveAsync(), Times.Once);
+        // CodexBarService saves the cache when its stream ends; saving the same data again is a wasted disk write
+        _cache.Verify(c => c.SaveAsync(), Times.Never);
         _viewModel.ErrorMessage.Should().BeNull();
         _viewModel.LastUpdated.Should().NotBe(default);
     }
@@ -857,6 +878,54 @@ public class MainViewModelTests
         _usage.Verify(s => s.GetCostsAsync(It.IsAny<IReadOnlyList<string>>(), false, It.IsAny<CancellationToken>()), Times.Never);
         await PeriodicRefreshAsync();
         _usage.Verify(s => s.GetCostsAsync(It.IsAny<IReadOnlyList<string>>(), false, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [TestMethod]
+    public async Task PeriodicRefresh_SessionLockedWithCostDemand_SkipsCostScanUntilUnlocked()
+    {
+        SetupImmediateUsage();
+        await _viewModel.StartAsync();
+        _viewModel.Providers[0] = _viewModel.Providers[0] with
+        { Cost = new CostData { Provider = "claude", FetchedAt = DateTime.UtcNow.AddHours(-2) } };
+        using var demand = _viewModel.AcquireCostDemand();
+        _session.QueryLocked = true;
+        await PeriodicRefreshAsync();
+        // A window left open behind the lock screen must not boot the WSL VM for a cost scan
+        _usage.Verify(s => s.GetCostsAsync(It.IsAny<IReadOnlyList<string>>(), false, It.IsAny<CancellationToken>()), Times.Never);
+        _session.QueryLocked = false;
+        await PeriodicRefreshAsync();
+        _usage.Verify(s => s.GetCostsAsync(It.IsAny<IReadOnlyList<string>>(), false, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [TestMethod]
+    public async Task RefreshAsync_BillingWithoutVisibleDashboard_PollsOnlyOnceTheDashboardBecomesVisible()
+    {
+        _viewModel.Dispose();
+        var dashboard = new Mock<IDashboardService>();
+        dashboard.Setup(s => s.RefreshApiCreditsAsync(It.IsAny<bool>(), It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
+        _viewModel = new(_usage.Object, _settings.Object, new UsageAlertEvaluator(), _toast.Object,
+            _logger.Object, _history, _persistence, _activity, _session, _cache.Object, _memo.Object,
+            dashboardService: dashboard.Object);
+        SetupImmediateUsage();
+        await PeriodicRefreshAsync();
+        dashboard.Verify(s => s.RefreshApiCreditsAsync(false, It.IsAny<CancellationToken>()), Times.Never);
+
+        using var visibility = _viewModel.AcquireDashboardVisibility();
+        dashboard.Verify(s => s.RefreshApiCreditsAsync(false, It.IsAny<CancellationToken>()), Times.Once);
+        await PeriodicRefreshAsync();
+        dashboard.Verify(s => s.RefreshApiCreditsAsync(false, It.IsAny<CancellationToken>()), Times.Exactly(2));
+    }
+
+    [TestMethod]
+    public void BatterySaverChanged_RefreshIntervalBelowCap_StretchesAndRestoresTheEffectiveInterval()
+    {
+        _values.RefreshIntervalSeconds = 300;
+        _batterySaver.SetupGet(m => m.BatterySaverActive).Returns(true);
+        _batterySaver.Raise(m => m.BatterySaverChanged += null, EventArgs.Empty);
+        _viewModel.EffectiveRefreshInterval.Should().Be(TimeSpan.FromSeconds(600));
+        _batterySaver.SetupGet(m => m.BatterySaverActive).Returns(false);
+        _batterySaver.Raise(m => m.BatterySaverChanged += null, EventArgs.Empty);
+        _viewModel.EffectiveRefreshInterval.Should().Be(TimeSpan.FromSeconds(300));
     }
 
     [TestMethod]
@@ -1655,5 +1724,85 @@ public class MainViewModelTests
         _viewModel.Providers.Select(p => p.Provider).Should().Equal("claude");
         _cache.Verify(c => c.Get("codex"), Times.Never);
         _usage.Verify(s => s.GetAllUsageStreamAsync(It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [TestMethod]
+    public async Task StartAndExit_WhenDeveloperModeEnabled_PreservesExistingHistoryFile()
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(_persistence.FilePath)!);
+        var originalJson = "[{\"provider\":\"claude\",\"windowKey\":\"session\",\"usedPercent\":42.0}]";
+        await File.WriteAllTextAsync(_persistence.FilePath, originalJson);
+
+        _values.DeveloperModeEnabled = true;
+        SetupImmediateUsage();
+
+        await _viewModel.StartAsync();
+        await _viewModel.ExitCommand.ExecuteAsync(null);
+
+        (await File.ReadAllTextAsync(_persistence.FilePath)).Should().Be(originalJson);
+        _history.Samples.Should().BeEmpty();
+    }
+
+    [TestMethod]
+    public async Task Exit_WhenPersistenceNotLoaded_DoesNotOverwriteExistingHistoryFile()
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(_persistence.FilePath)!);
+        var originalJson = "[{\"provider\":\"claude\",\"windowKey\":\"session\",\"usedPercent\":42.0}]";
+        await File.WriteAllTextAsync(_persistence.FilePath, originalJson);
+
+        _persistence.IsLoaded.Should().BeFalse();
+        await _viewModel.ExitCommand.ExecuteAsync(null);
+
+        (await File.ReadAllTextAsync(_persistence.FilePath)).Should().Be(originalJson);
+    }
+
+    [TestMethod]
+    public async Task RefreshAndExit_WhenLiveMode_SavesHistoryToFile()
+    {
+        _values.DeveloperModeEnabled = false;
+        SetupImmediateUsage();
+
+        await _viewModel.StartAsync();
+        await _viewModel.ExitCommand.ExecuteAsync(null);
+
+        File.Exists(_persistence.FilePath).Should().BeTrue();
+        var content = await File.ReadAllTextAsync(_persistence.FilePath);
+        content.Should().Contain("20");
+        _history.Samples.Should().ContainSingle().Which.UsedPercent.Should().Be(20);
+    }
+
+    [TestMethod]
+    public async Task SettingsChanged_DeveloperModeSwitchedOff_LoadsHistoryBeforeFirstWriteAndSaves()
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(_persistence.FilePath)!);
+        var originalSample = new UsageHistorySample
+        {
+            Provider = "claude",
+            WindowKey = "session",
+            UsedPercent = 42.0,
+            Timestamp = DateTime.UtcNow.AddMinutes(-30)
+        };
+        var json = JsonSerializer.Serialize(new List<UsageHistorySample> { originalSample },
+            AppJsonSerializerContext.Default.ListUsageHistorySample);
+        await File.WriteAllTextAsync(_persistence.FilePath, json);
+
+        _values.DeveloperModeEnabled = true;
+        SetupImmediateUsage();
+        await _viewModel.StartAsync();
+
+        _persistence.IsLoaded.Should().BeFalse();
+        _history.Samples.Should().BeEmpty();
+
+        _values.DeveloperModeEnabled = false;
+        _settings.Raise(s => s.SettingsChanged += null, EventArgs.Empty);
+        await WaitForRefreshAsync();
+
+        _persistence.IsLoaded.Should().BeTrue();
+        _history.Samples.Should().Contain(s => s.UsedPercent == 42.0);
+        _history.Samples.Should().Contain(s => s.UsedPercent == 20.0);
+
+        var savedContent = await File.ReadAllTextAsync(_persistence.FilePath);
+        savedContent.Should().Contain("42");
+        savedContent.Should().Contain("20");
     }
 }

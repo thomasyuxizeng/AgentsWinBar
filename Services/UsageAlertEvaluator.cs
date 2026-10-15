@@ -34,7 +34,7 @@ public class UsageAlertEvaluator
 
         foreach (var data in providers)
         {
-            if (data.HasError || data.IsLoading)
+            if (data.HasError || data.IsLoading || data.UsageIsStale)
             {
                 continue;
             }
@@ -56,7 +56,12 @@ public class UsageAlertEvaluator
     /// <param name="subject">What the alert is about, e.g. "Claude session" or "Gemini · Claude and GPT 5-hour".</param>
     private void Check(List<UsageAlert> alerts, UsageData data, string subject, string slot, UsageWindow? window, DateTime nowUtc)
     {
-        if (window == null)
+        if (window == null || data.UsageIsStale)
+        {
+            return;
+        }
+
+        if (window.ResetAt is { } resetAt && DashboardValues.Utc(resetAt) <= DashboardValues.Utc(nowUtc))
         {
             return;
         }

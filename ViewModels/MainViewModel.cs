@@ -27,6 +27,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private readonly ISetupMemoService _setupMemo;
     private readonly IEarlyResetStore? _earlyResetStore;
     private readonly IBatterySaverMonitor? _batterySaverMonitor;
+    private readonly IDashboardService? _dashboardService;
 
     public bool ShouldPlayResetAnimation => ResetAnimationGate.ShouldAnimate(
         _settingsService.Settings.ResetAnimationMode, _batterySaverMonitor?.BatterySaverActive ?? false);
@@ -96,7 +97,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
         ICacheService cacheService,
         ISetupMemoService setupMemo,
         IEarlyResetStore? earlyResetStore = null,
-        IBatterySaverMonitor? batterySaverMonitor = null)
+        IBatterySaverMonitor? batterySaverMonitor = null,
+        IDashboardService? dashboardService = null)
     {
         _codexBarService = codexBarService;
         _settingsService = settingsService;
@@ -111,6 +113,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _setupMemo = setupMemo;
         _earlyResetStore = earlyResetStore;
         _batterySaverMonitor = batterySaverMonitor;
+        _dashboardService = dashboardService;
         if (_batterySaverMonitor != null) _batterySaverMonitor.BatterySaverChanged += OnBatterySaverChanged;
 
         _settingsService.SettingsChanged += OnSettingsChanged;
@@ -133,7 +136,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
         if (_disposed || _exiting || stopVersion != _stopVersion) return;
         _stopped = false;
         ResetAdaptiveRefresh();
-        if (TryRestoreFreshCache()) return;
+        if (TryRestoreFreshCache())
+        {
+            RefreshApiCredits(false);
+            return;
+        }
         RestoreLastKnownUsage();
         await RefreshCoreAsync();
     }
@@ -264,7 +271,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     /// <summary>Tracks visible dashboards independently of their cost-demand lifetime.</summary>
     public IDisposable AcquireDashboardVisibility()
     {
-        Interlocked.Increment(ref _dashboardVisibility);
+        if (Interlocked.Increment(ref _dashboardVisibility) == 1) OnUiThread(() => RefreshApiCredits(false));
         return new ActionLease(() =>
         {
             Interlocked.Decrement(ref _dashboardVisibility);
@@ -297,10 +304,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         var delay = AdaptiveRefreshPolicy.GetDelay(
             TimeSpan.FromSeconds(_settingsService.Settings.RefreshIntervalSeconds), _unchangedRefreshes,
-            _settingsService.Settings.AdaptiveRefreshEnabled);
+            _settingsService.Settings.AdaptiveRefreshEnabled, _batterySaverMonitor?.BatterySaverActive ?? false);
         var lockedInterval = TimeSpan.FromMinutes(_settingsService.Settings.LockedRefreshIntervalMinutes);
         return (_sessionLocked || QuerySessionLocked()) && lockedInterval > delay ? lockedInterval : delay;
     }
+
+    private bool IsSessionLocked => _sessionLocked || QuerySessionLocked();
 
     private bool QuerySessionLocked()
     {
@@ -356,7 +365,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private async Task RefreshDemandedCostsAsync()
     {
         if (_disposed || _stopped || _exiting || !_settingsService.Settings.ShowCostTotals ||
-            _settingsService.Settings.DeveloperModeEnabled ||
+            _settingsService.Settings.DeveloperModeEnabled || IsSessionLocked ||
             Volatile.Read(ref _costDemand) == 0 || _costRefreshCts != null ||
             _backgroundCostRefreshCts != null || _forceCostRefreshPending) return;
         var enabled = _settingsService.Settings.Providers.Where(p => p.IsEnabled)
@@ -381,7 +390,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
             if (ReferenceEquals(_costRefreshCts, scanCts)) _costRefreshCts = null;
             if (ReferenceEquals(_costRefreshCompletion, completion)) _costRefreshCompletion = null;
             completion.TrySetResult();
-            ScheduleWorkingSetTrim();
             // Reopening, restarting or changing settings can restore demand before cancellation settles.
             // Retry only canceled passes; a completed empty scan remains subject to the service cache.
             if (scanCts.IsCancellationRequested)
@@ -394,7 +402,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         if (_disposed || _stopped || _exiting || !_settingsService.Settings.ShowCostTotals ||
             _settingsService.Settings.DeveloperModeEnabled) return;
-        if (!forceRefresh && (Volatile.Read(ref _costDemand) == 0 || _costRefreshCts != null ||
+        // A window left open behind the lock screen must not boot the WSL VM for a cost scan nobody can see
+        if (!forceRefresh && (IsSessionLocked || Volatile.Read(ref _costDemand) == 0 || _costRefreshCts != null ||
             _backgroundCostRefreshCts != null || _forceCostRefreshPending)) return;
 
         var activeDemand = forceRefresh ? _costRefreshCompletion?.Task : null;
@@ -438,7 +447,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
             }
             if (ReferenceEquals(_backgroundCostRefreshCompletion, completion)) _backgroundCostRefreshCompletion = null;
             completion.TrySetResult();
-            ScheduleWorkingSetTrim();
             if (scanCts.IsCancellationRequested)
                 RefreshDemandedCostsAsync().SafeFireAndForget(
                     onError: ex => _logger.LogError(ex, "Pending demanded cost refresh failed"));
@@ -514,6 +522,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
             return;
         }
 
+        RefreshApiCredits(forceCostRefresh);
+
         if (forceCostRefresh)
         {
             _forceCostRefreshPending = true;
@@ -543,6 +553,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
         var developerMode = _settingsService.Settings.DeveloperModeEnabled;
         if (_resetTrackerDeveloperMode != developerMode) _resetTracker.Clear();
         _resetTrackerDeveloperMode = developerMode;
+        if (!developerMode && !_historyPersistence.IsLoaded)
+        {
+            await _historyPersistence.LoadAsync(ct);
+        }
         List<string>? costProviders = null;
         var refreshStarted = Stopwatch.GetTimestamp();
 
@@ -622,14 +636,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
             // Usage appears as soon as it arrives. The heavier log scans run afterwards, at a slow cadence.
             ct.ThrowIfCancellationRequested();
-            await _historyPersistence.SaveAsync(ct: ct);
-            if (!developerMode && Providers.All(p => !p.HasError))
-            {
-                // Serialize and persist away from the UI context; cache failures cannot fail a refresh.
-                try { await Task.Run(() => _cacheService.SaveAsync(), ct); }
-                catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-                catch (Exception ex) { _logger.LogWarning(ex, "Usage cache could not be saved"); }
-            }
+            if (!developerMode) await _historyPersistence.SaveAsync(ct: ct);
             ct.ThrowIfCancellationRequested();
             var fingerprint = UsageFingerprint.Create(Providers);
             _unchangedRefreshes = resetAdaptiveStreak || resetVersion != _adaptiveResetVersion || forceCostRefresh ||
@@ -685,7 +692,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
             }
             completion.TrySetResult();
             if (!_disposed && !_stopped && !_exiting) RecreateTimer();
-            ScheduleWorkingSetTrim();
             // Finish usage and restore its timer before starting any potentially slow cost work.
             // Keep the forced-pending guard until the background scan registers its owner synchronously.
             forceCostRefresh |= _forceCostRefreshPending;
@@ -699,6 +705,15 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 RefreshCoreAsync(forceCostRefresh).SafeFireAndForget(onError: ex => _logger.LogError(ex, "Pending settings refresh failed"));
             }
         }
+    }
+
+    private void RefreshApiCredits(bool force)
+    {
+        // Only the dashboard shows the API credits: without a visible one a background poll is wasted network wake-ups.
+        // The dashboard asks again when it becomes visible; a manual refresh (force) always goes through.
+        if (_dashboardService == null || (!force && Volatile.Read(ref _dashboardVisibility) == 0)) return;
+        _dashboardService.RefreshApiCreditsAsync(force).SafeFireAndForget(
+            onError: _ => _logger.LogDebug("Background API billing refresh did not complete"));
     }
 
     /// <summary>
@@ -749,7 +764,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         // Iterator disposal waits for the service producer to persist completed costs even on cancellation.
         if (activeDemand != null) await activeDemand;
         await activeBackground;
-        await _historyPersistence.SaveAsync(force: true);
+        if (!_settingsService.Settings.DeveloperModeEnabled) await _historyPersistence.SaveAsync(force: true);
         if (_earlyResetStore != null) await _earlyResetStore.FlushAsync();
         ExitRequested?.Invoke(this, EventArgs.Empty);
     }
@@ -825,7 +840,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
         {
             OnUiThread(() =>
             {
-                if (!_disposed) OnPropertyChanged(nameof(ShouldPlayResetAnimation));
+                if (_disposed) return;
+                OnPropertyChanged(nameof(ShouldPlayResetAnimation));
+                // Battery saver stretches the refresh interval: apply it (or lift it) to the pending refresh too.
+                EffectiveRefreshInterval = GetScheduledDelay();
+                if (!_stopped && !_exiting && !IsLoading) RecreateTimer();
             });
         }
         catch (Exception ex) { _logger.LogError(ex, "Failed to dispatch battery saver change"); }

@@ -21,6 +21,15 @@ public sealed partial class BurndownChart : UserControl
         typeof(bool), typeof(BurndownChart), new PropertyMetadata(false, OnCompactChanged));
     public bool IsCompact { get => (bool)GetValue(IsCompactProperty); set => SetValue(IsCompactProperty, value); }
     public BurndownSeries? Series { get => (BurndownSeries?)GetValue(SeriesProperty); set => SetValue(SeriesProperty, value); }
+
+    private double? _plotHeight;
+
+    /// <summary>Overrides the plot height (the default is 72 compact, 100 full) for layouts with room for a taller chart.</summary>
+    public double PlotHeight
+    {
+        get => Plot.Height;
+        set { _plotHeight = value; Plot.Height = value; RequestDraw(); }
+    }
     public WindowAccent Accent { get => (WindowAccent)GetValue(AccentProperty); set => SetValue(AccentProperty, value); }
 
     public BurndownChart()
@@ -36,7 +45,7 @@ public sealed partial class BurndownChart : UserControl
         chart.TitleText.Visibility = chart.AxisLabels.Visibility = chart.LegendPanel.Visibility =
             compact ? Visibility.Collapsed : Visibility.Visible;
         chart.CompactBackdrop.Visibility = compact ? Visibility.Visible : Visibility.Collapsed;
-        chart.Plot.Height = compact ? 72 : 100;
+        chart.Plot.Height = chart._plotHeight ?? (compact ? 72 : 100);
         chart.RequestDraw();
     }
 
@@ -101,15 +110,16 @@ public sealed partial class BurndownChart : UserControl
                 : $" · Observed pace: {projected:F0}% by reset";
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(this, $"Usage history. {Placeholder.Text} {CaptureText.Text}");
         if (width <= 0 || !series.IsReady) return;
-        AddLine(series.Guide, guideBrush, width, height, dashed: false, thickness: 1.5);
+        // The even-use guide is only a reference: keep it faint so the observed usage line reads first.
+        AddLine(series.Guide, guideBrush, width, height, dashed: false, thickness: 1.5, opacity: 0.4);
         AddLine(series.Usage, usageBrush, width, height, dashed: false, thickness: 2);
         AddLine(series.Projection, usageBrush, width, height, dashed: true, thickness: 1);
     }
 
-    private void AddLine(IReadOnlyList<BurndownPoint> points, Brush brush, double width, double height, bool dashed, double thickness)
+    private void AddLine(IReadOnlyList<BurndownPoint> points, Brush brush, double width, double height, bool dashed, double thickness, double opacity = 1)
     {
         if (points.Count < 2) return;
-        var line = new Polyline { Stroke = brush, StrokeThickness = thickness };
+        var line = new Polyline { Stroke = brush, StrokeThickness = thickness, Opacity = opacity };
         // Leave projections above 100% outside the canvas so clipping keeps their slope accurate.
         foreach (var point in points) line.Points.Add(new Point(point.ElapsedFraction * width, height * (1 - point.UsedPercent / 100)));
         if (dashed) { line.StrokeDashArray = new DoubleCollection { 3, 3 }; line.Opacity = 0.6; }

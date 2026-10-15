@@ -33,6 +33,7 @@ public class UsageHistoryPersistenceTests
     {
         var clock = new Clock(); var store = new UsageHistoryStore(); Add(store, clock, 10);
         var persistence = Create(store, clock);
+        await persistence.LoadAsync();
         await persistence.SaveAsync();
         File.Exists(persistence.FilePath).Should().BeTrue();
         File.Exists(persistence.FilePath + ".tmp").Should().BeFalse();
@@ -45,7 +46,7 @@ public class UsageHistoryPersistenceTests
     public async Task SaveAsync_WhenThrottled_PreservesPreviousFileAndFlushesLatestAfterMinuteOrOnExit()
     {
         var clock = new Clock(); var store = new UsageHistoryStore(); Add(store, clock, 10);
-        var persistence = Create(store, clock); await persistence.SaveAsync();
+        var persistence = Create(store, clock); await persistence.LoadAsync(); await persistence.SaveAsync();
         var original = await File.ReadAllTextAsync(persistence.FilePath);
         clock.Now += TimeSpan.FromSeconds(30); Add(store, clock, 20); await persistence.SaveAsync();
         (await File.ReadAllTextAsync(persistence.FilePath)).Should().Be(original);
@@ -75,10 +76,45 @@ public class UsageHistoryPersistenceTests
     {
         var clock = new Clock(); var store = new UsageHistoryStore(); Add(store, clock, 10);
         var persistence = Create(store, clock);
+        await persistence.LoadAsync();
         Directory.CreateDirectory(persistence.FilePath); // The target is a directory, so atomic replace fails.
         await persistence.SaveAsync(); store.Samples.Should().ContainSingle();
         var cts = new CancellationTokenSource(); cts.Cancel();
         await persistence.LoadAsync(cts.Token); await persistence.SaveAsync(ct: cts.Token);
         store.Samples.Should().ContainSingle();
+    }
+
+    [TestMethod]
+    public async Task SaveAsync_WhenNotLoaded_DoesNotWriteOrOverwriteExistingHistoryFile()
+    {
+        var clock = new Clock(); var store = new UsageHistoryStore();
+        var persistence = Create(store, clock);
+        Directory.CreateDirectory(Path.GetDirectoryName(persistence.FilePath)!);
+        var original = "[{\"provider\":\"claude\",\"windowKey\":\"session\",\"usedPercent\":42.0}]";
+        await File.WriteAllTextAsync(persistence.FilePath, original);
+        Add(store, clock, 99);
+
+        persistence.IsLoaded.Should().BeFalse();
+        await persistence.SaveAsync();
+        await persistence.SaveAsync(force: true);
+
+        persistence.IsLoaded.Should().BeFalse();
+        (await File.ReadAllTextAsync(persistence.FilePath)).Should().Be(original);
+    }
+
+    [TestMethod]
+    public async Task LoadAsync_WhenCalled_SetsIsLoadedAndAllowsSubsequentSaves()
+    {
+        var clock = new Clock(); var store = new UsageHistoryStore();
+        var persistence = Create(store, clock);
+        persistence.IsLoaded.Should().BeFalse();
+
+        await persistence.LoadAsync();
+        persistence.IsLoaded.Should().BeTrue();
+
+        Add(store, clock, 50);
+        await persistence.SaveAsync();
+        File.Exists(persistence.FilePath).Should().BeTrue();
+        (await File.ReadAllTextAsync(persistence.FilePath)).Should().Contain("50");
     }
 }

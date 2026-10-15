@@ -2,12 +2,19 @@ using CodexBarWin.Helpers;
 using CodexBarWin.Models;
 using CodexBarWin.Views;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
 
 namespace CodexBarWin.Controls;
 
 /// <summary>A label, a value and a 0-100 bar (token mix, top models).</summary>
 public sealed record DashboardBarRow(string Label, string Value, double Percent);
+
+/// <summary>One team member's use of the API credits pool: name, amount, share text and the share as a 0-100 bar. <paramref name="IsOthers"/> marks the folded "N others" row.</summary>
+public sealed record DashboardApiUseRow(string Label, string Amount, string Share, double Percent, bool IsYou, bool IsOthers = false)
+{
+    public string AutomationName => $"{Label}, {Amount}, {Share} of the pool";
+}
 
 /// <summary>A label and a value line (cost facts, diagnostics).</summary>
 public sealed record DashboardFact(string Label, string Value);
@@ -30,9 +37,18 @@ public sealed partial class DashboardProviderPanel : UserControl
     public IReadOnlyList<DashboardBarRow> TokenRows { get; private set; } = [];
     public IReadOnlyList<DashboardBarRow> ModelRows { get; private set; } = [];
     public IReadOnlyList<DashboardFact> CostFacts { get; private set; } = [];
+    public IReadOnlyList<DashboardApiUseRow> ApiUseRows { get; private set; } = [];
     public int WindowCount => Data?.Windows.Count ?? 0;
 
+    /// <summary>Pace projections, window facts, cost breakdowns and the history footer.</summary>
+    public bool ShowDetails { get; private set; }
+
     private const double SplitMinWidth = 580;
+    private const double RowGap = 16;
+    private const double GroupedRowGap = 10;
+
+    /// <summary>The details state per provider, kept while the app runs so reopening the dashboard keeps it.</summary>
+    private static readonly Dictionary<string, bool> DetailsByProvider = new(StringComparer.OrdinalIgnoreCase);
 
     private readonly Dictionary<string, DashboardWindowRow> _rows = new();
     private string _windowsLayout = string.Empty;
@@ -41,6 +57,36 @@ public sealed partial class DashboardProviderPanel : UserControl
     public DashboardProviderPanel()
     {
         InitializeComponent();
+        UpdateDetailsButton();
+    }
+
+    private void OnDetailsClicked(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            ShowDetails = !ShowDetails;
+            if (Data?.Id is { Length: > 0 } id) DetailsByProvider[id] = ShowDetails;
+            ApplyDetails();
+        }
+        catch (Exception ex) { App.LogHandled("Dashboard details toggle failed", ex); }
+    }
+
+    private void ApplyDetails()
+    {
+        UpdateDetailsButton();
+        BuildWindows(Data);
+        Bindings.Update();
+    }
+
+    private void UpdateDetailsButton()
+    {
+        var name = Data?.DisplayName is { Length: > 0 } provider ? $" for {provider}" : string.Empty;
+        DetailsText.Text = ShowDetails ? "Hide details" : "Show details";
+        DetailsGlyph.Glyph = ShowDetails ? "" : "";   // chevron up / down
+        AutomationProperties.SetName(DetailsButton, (ShowDetails ? "Hide details" : "Show details") + name);
+        ToolTipService.SetToolTip(DetailsButton, ShowDetails
+            ? "Hide pace projections and breakdowns"
+            : "Show pace projections and breakdowns");
     }
 
     private void OnWindowsHostSizeChanged(object sender, SizeChangedEventArgs e)
@@ -71,11 +117,15 @@ public sealed partial class DashboardProviderPanel : UserControl
     {
         var data = Data;
         if (Content is UIElement content) content.Visibility = data == null ? Visibility.Collapsed : Visibility.Visible;
+        var details = data?.Id is { Length: > 0 } id && DetailsByProvider.TryGetValue(id, out var open) && open;
+        ShowDetails = details;
+        UpdateDetailsButton();
         BuildWindows(data);
         BuildCostRows(data?.Cost);
+        BuildApiUseRows(data?.ApiCredits);
 
         CreditsText.Text = data?.Credits is { } credits
-            ? $"{credits.Used:0.##} of {credits.Limit:0.##} used · {credits.Remaining:0.##} remaining"
+            ? $"Credits: {credits.Used:0.##} of {credits.Limit:0.##} used · {credits.Remaining:0.##} remaining"
             : string.Empty;
 
         HistoryText.Text = data is { HistorySampleCount: > 0 }
@@ -86,16 +136,17 @@ public sealed partial class DashboardProviderPanel : UserControl
     }
 
     /// <summary>
-    /// Lays the usage windows out. A provider with an External pool (Gemini through Antigravity) gets two columns,
-    /// its own models on the left and the External windows on the right, paired row by row so the bars line up;
-    /// every other provider lists its windows in one column.
+    /// Lays the usage windows out. A provider with an External pool (Gemini through Antigravity) gets two columns in a
+    /// wide panel, its own models on the left and the External windows on the right; a narrow panel stacks them under a
+    /// sub-heading. Consecutive windows that reset at the same moment sit closer together and share one reset caption.
     /// </summary>
     private void BuildWindows(DashboardProvider? data)
     {
         var windows = data?.Windows ?? [];
-        var split = !_stacked && windows.Any(w => w.Kind == DashboardWindowKind.Extra && w.Accent == WindowAccent.ClaudeAndOpenAi);
-        var left = split ? windows.Where(w => w.Kind != DashboardWindowKind.Extra).ToList() : windows.ToList();
-        var right = split ? windows.Where(w => w.Kind == DashboardWindowKind.Extra).ToList() : [];
+        var hasExternal = windows.Any(w => w.Kind == DashboardWindowKind.Extra && w.Accent == WindowAccent.ClaudeAndOpenAi);
+        var split = !_stacked && hasExternal;
+        var own = hasExternal ? windows.Where(w => w.Kind != DashboardWindowKind.Extra).ToList() : windows.ToList();
+        var external = hasExternal ? windows.Where(w => w.Kind == DashboardWindowKind.Extra).ToList() : [];
 
         foreach (var window in windows)
         {
@@ -108,34 +159,109 @@ public sealed partial class DashboardProviderPanel : UserControl
             else row.RefreshTimes();
         }
 
-        var layout = $"{split}|{string.Join(',', left.Select(w => $"{w.Key.Length}:{w.Key}"))}|{string.Join(',', right.Select(w => $"{w.Key.Length}:{w.Key}"))}|{data?.DisplayName}";
-        if (layout == _windowsLayout) return;
-        _windowsLayout = layout;
+        // With the details open each window carries its own facts and chart, so each also keeps its own reset line
+        var ownGroups = ShowDetails ? Enumerable.Range(0, own.Count).ToList() : DashboardGlance.ResetGroups(own);
+        var externalGroups = ShowDetails ? Enumerable.Range(0, external.Count).ToList() : DashboardGlance.ResetGroups(external);
 
-        foreach (var stale in _rows.Keys.Where(k => windows.All(w => w.Key != k)).ToList()) _rows.Remove(stale);
-        WindowsHost.Children.Clear();
-        WindowsHost.ColumnDefinitions.Clear();
-        WindowsHost.RowDefinitions.Clear();
-        if (windows.Count == 0) return;
-
-        var columns = split ? 2 : 1;
-        for (var c = 0; c < columns; c++) WindowsHost.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        var caption = (Style)Resources["SectionCaption"];
-        var rows = Math.Max(left.Count, right.Count);
-        for (var r = 0; r < rows + 1; r++) WindowsHost.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-
-        void Place(UIElement element, int row, int column)
+        // Rows are only re-parented when the set of windows or the column split changes. Regrouping (one of two
+        // co-resetting windows resets first) and the details toggle are applied in place, so a row's meter is never
+        // unloaded in the middle of its reset animation.
+        var layout = $"{split}|{Keys(own)}|{Keys(external)}|{data?.DisplayName}";
+        if (layout != _windowsLayout)
         {
-            Grid.SetRow((FrameworkElement)element, row);
-            Grid.SetColumn((FrameworkElement)element, column);
-            WindowsHost.Children.Add(element);
+            _windowsLayout = layout;
+            Rebuild();
+        }
+        ApplyGroups(own, ownGroups, split ? 8 : 0);
+        ApplyGroups(external, externalGroups, 8);
+
+        void ApplyGroups(IReadOnlyList<DashboardWindow> list, IReadOnlyList<int> groups, double firstTop)
+        {
+            for (var i = 0; i < list.Count; i++)
+            {
+                var row = _rows[list[i].Key];
+                var size = groups.Count(g => g == groups[i]);
+                var lastInGroup = i == list.Count - 1 || groups[i + 1] != groups[i];
+                var grouped = i > 0 && groups[i - 1] == groups[i];
+                var margin = new Thickness(0, i == 0 ? firstTop : grouped ? GroupedRowGap : RowGap, 0, 0);
+                if (row.Margin != margin) row.Margin = margin;
+                row.SetLayout(lastInGroup, size, ShowDetails);
+            }
         }
 
-        // The caption sits closer to its first row than the rows are to each other
-        Place(new TextBlock { Text = split ? $"{data!.DisplayName.ToUpperInvariant()} MODELS" : "USAGE WINDOWS", Style = caption, Margin = new Thickness(0, 0, 0, -8) }, 0, 0);
-        if (split) Place(new TextBlock { Text = "EXTERNAL · CLAUDE AND GPT", Style = caption, Margin = new Thickness(0, 0, 0, -8) }, 0, 1);
-        for (var i = 0; i < left.Count; i++) Place(_rows[left[i].Key], i + 1, 0);
-        for (var i = 0; i < right.Count; i++) Place(_rows[right[i].Key], i + 1, 1);
+        void Rebuild()
+        {
+            foreach (var stale in _rows.Keys.Where(k => windows.All(w => w.Key != k)).ToList()) _rows.Remove(stale);
+            foreach (var row in _rows.Values) if (row.Parent is Panel parent) parent.Children.Remove(row);
+            WindowsHost.Children.Clear();
+            WindowsHost.ColumnDefinitions.Clear();
+            if (windows.Count == 0) return;
+
+            var columns = split ? 2 : 1;
+            for (var c = 0; c < columns; c++) WindowsHost.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            var subHeading = (Style)Resources["SubHeading"];
+
+            StackPanel Column(int column)
+            {
+                var stack = new StackPanel { VerticalAlignment = VerticalAlignment.Top };
+                Grid.SetColumn(stack, column);
+                WindowsHost.Children.Add(stack);
+                return stack;
+            }
+            void AddRows(StackPanel stack, IEnumerable<DashboardWindow> list) { foreach (var w in list) stack.Children.Add(_rows[w.Key]); }
+            TextBlock Heading(string text, double top) => new() { Text = text, Style = subHeading, Margin = new Thickness(0, top, 0, 0) };
+
+            var left = Column(0);
+            if (split)
+            {
+                left.Children.Add(Heading($"{data!.DisplayName} models", 0));
+                AddRows(left, own);
+                var right = Column(1);
+                right.Children.Add(Heading("External · Claude and GPT", 0));
+                AddRows(right, external);
+            }
+            else
+            {
+                AddRows(left, own);
+                if (external.Count > 0)
+                {
+                    left.Children.Add(Heading("External · Claude and GPT", RowGap + 4));
+                    AddRows(left, external);
+                }
+            }
+        }
+
+        static string Keys(IEnumerable<DashboardWindow> list) => string.Join(',', list.Select(w => $"{w.Key.Length}:{w.Key}"));
+    }
+
+    private const int MaxApiUseRows = 5;
+    private const decimal MinApiUseSpend = 0.005m;
+
+    /// <summary>
+    /// One row per contributor in the order given (You first); bars are each member's share of the pool, so they add up to the main bar.
+    /// Zero-spend teammates are dropped, at most <see cref="MaxApiUseRows"/> rows show and the rest fold into one "N others" row.
+    /// </summary>
+    private void BuildApiUseRows(ApiCreditsInfo? api)
+    {
+        var rows = ApiUseRowsFor(api);
+        if (!ApiUseRows.SequenceEqual(rows)) ApiUseRows = rows;
+    }
+
+    /// <summary>How many "Used by" rows <paramref name="api"/> renders (for height estimates).</summary>
+    internal static int ApiUseRowCount(ApiCreditsInfo? api) => ApiUseRowsFor(api).Count;
+
+    private static List<DashboardApiUseRow> ApiUseRowsFor(ApiCreditsInfo? api)
+    {
+        if (api is not { State: ApiCreditsState.Ok, HasBreakdown: true }) return [];
+        DashboardApiUseRow Row(string label, decimal spent, bool isYou, bool isOthers = false) => new(label,
+            DashboardFormat.Money(spent, "USD"), DashboardFormat.ApiShare(spent, api.MonthlyUsd),
+            api.MonthlyUsd > 0 ? Math.Clamp((double)(spent / api.MonthlyUsd) * 100, 0, 100) : 0, isYou, isOthers);
+
+        var shown = api.Contributors.Where(c => c.IsYou || c.SpentUsd >= MinApiUseSpend).ToList();
+        var rows = shown.Take(MaxApiUseRows).Select(c => Row(c.IsYou ? "You" : c.Name, c.SpentUsd, c.IsYou)).ToList();
+        var rest = shown.Skip(MaxApiUseRows).ToList();
+        if (rest.Count > 0) rows.Add(Row(rest.Count == 1 ? "1 other" : $"{rest.Count} others", rest.Sum(c => c.SpentUsd), false, isOthers: true));
+        return rows;
     }
 
     private DashboardCost? _costRowsData;

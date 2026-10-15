@@ -77,6 +77,8 @@ public class AppSettings
     public bool AlertsEnabled { get; set; } = true;
 
     public bool ShowCostTotals { get; set; } = true;
+    public decimal ApiCreditsMonthlyUsd { get; set; } = 200;
+    public int ApiCreditsCycleStartDay { get; set; } = 1;
 
     /// <summary>
     /// Saved overlay position in screen pixels (null = default corner).
@@ -102,6 +104,8 @@ public class AppSettings
         if (LockedRefreshIntervalMinutes < 0 || LockedRefreshIntervalMinutes > 1440)
             LockedRefreshIntervalMinutes = 30;
         CacheExpiryMinutes = ValidRange(CacheExpiryMinutes, 1440, 5);
+        if (ApiCreditsMonthlyUsd <= 0 || ApiCreditsMonthlyUsd > 100000) ApiCreditsMonthlyUsd = 200;
+        if (ApiCreditsCycleStartDay < 1 || ApiCreditsCycleStartDay > 28) ApiCreditsCycleStartDay = 1;
         Timeouts ??= new();
         Timeouts.WslCommandTimeoutSeconds = ValidRange(Timeouts.WslCommandTimeoutSeconds, 3600, 30);
         Timeouts.WslStatusCheckTimeoutSeconds = ValidRange(Timeouts.WslStatusCheckTimeoutSeconds, 3600, 10);
@@ -142,6 +146,8 @@ public class AppSettings
         AlwaysOnOverlayEnabled = false,
         TaskbarDisplayEnabled = false,
         AlertsEnabled = true,
-        ShowCostTotals = true
+        ShowCostTotals = true,
+        ApiCreditsMonthlyUsd = 200,
+        ApiCreditsCycleStartDay = 1
     };
 }

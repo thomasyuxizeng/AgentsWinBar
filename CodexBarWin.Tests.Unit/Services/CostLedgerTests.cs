@@ -625,4 +625,75 @@ public class CostLedgerTests
         cost!.Last30DaysCost.Should().Be(25m);
         cost.Last30DaysTokens.Should().Be(250000);
     }
+
+    [TestMethod]
+    public async Task RecordScansAsync_MultipleProviders_PersistsAllProvidersInSingleWrite()
+    {
+        var ledger = CreateLedger();
+        var date = new DateOnly(2026, 10, 1);
+        var claudeScan = SampleScan("claude", date, 5.0m, 5000);
+        var codexScan = SampleScan("codex", date, 3.0m, 3000);
+
+        await ledger.RecordScansAsync([claudeScan, codexScan]);
+
+        var claudeLifetime = ledger.GetLifetime("claude");
+        claudeLifetime.TotalCostUSD.Should().Be(5.0m);
+        claudeLifetime.TotalTokens.Should().Be(5000);
+
+        var codexLifetime = ledger.GetLifetime("codex");
+        codexLifetime.TotalCostUSD.Should().Be(3.0m);
+        codexLifetime.TotalTokens.Should().Be(3000);
+
+        var totalLifetime = ledger.GetLifetime();
+        totalLifetime.TotalCostUSD.Should().Be(8.0m);
+        totalLifetime.TotalTokens.Should().Be(8000);
+
+        // Verify roundtrip from disk
+        var reloaded = CreateLedger();
+        await reloaded.LoadAsync();
+        reloaded.GetLifetime("claude").TotalCostUSD.Should().Be(5.0m);
+        reloaded.GetLifetime("codex").TotalCostUSD.Should().Be(3.0m);
+    }
+
+    [TestMethod]
+    public async Task RecordScansAsync_EmptyOrInvalidScans_DoesNotWriteOrModifyLedger()
+    {
+        var ledger = CreateLedger();
+        await ledger.RecordScansAsync([]);
+        File.Exists(_ledgerPath).Should().BeFalse();
+
+        var invalidScan = new CostData { Provider = "invalid_prov", FetchOutcome = FetchOutcome.Success, Last30DaysCostUSD = 10m };
+        var failedScan = new CostData { Provider = "claude", FetchOutcome = FetchOutcome.Failed };
+        await ledger.RecordScansAsync([invalidScan, failedScan]);
+        File.Exists(_ledgerPath).Should().BeFalse();
+    }
+
+    [TestMethod]
+    public async Task RecordScansAsync_PersistenceFailure_RollsBackInMemoryState()
+    {
+        var blockingFile = Path.Combine(_directory, "blocking-file");
+        await File.WriteAllTextAsync(blockingFile, "not a directory");
+        var invalidPath = Path.Combine(blockingFile, "cost-ledger.json");
+        var ledger = CreateLedger(ledgerPath: invalidPath);
+
+        var date = new DateOnly(2026, 10, 1);
+        var claudeScan = SampleScan("claude", date, 5.0m, 5000);
+
+        await ledger.RecordScansAsync([claudeScan]);
+
+        ledger.GetLifetime("claude").TotalCostUSD.Should().Be(0);
+    }
+
+    [TestMethod]
+    public async Task RecordScanAsync_SingleScan_DelegatesToRecordScansAsync()
+    {
+        var ledger = CreateLedger();
+        var date = new DateOnly(2026, 10, 1);
+        var claudeScan = SampleScan("claude", date, 7.5m, 7500);
+
+        await ledger.RecordScanAsync(claudeScan);
+
+        ledger.GetLifetime("claude").TotalCostUSD.Should().Be(7.5m);
+        ledger.GetLifetime("claude").TotalTokens.Should().Be(7500);
+    }
 }

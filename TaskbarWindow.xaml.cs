@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using CodexBarWin.Helpers;
 using CodexBarWin.Models;
+using CodexBarWin.Services;
 using CodexBarWin.ViewModels;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.UI;
@@ -63,14 +64,23 @@ public sealed partial class TaskbarWindow : Window
     private const double TopLineDip = 1;   // the thin line along the taskbar's top edge
 
     private readonly MainViewModel _viewModel;
+    private readonly ISessionStateSource _sessionState;
     private readonly IntPtr _hwnd;
     private readonly DispatcherTimer _keepOnTopTimer;
     private int _tickCount;
     private bool _roundedRightEnd;
     private bool _hiddenForFullscreen;
+    private bool _closed;
     private WindowZOrder.ForegroundWatcher? _foregroundWatcher;
     private DesktopAcrylicController? _acrylicController;
     private SystemBackdropConfiguration? _backdropConfiguration;
+    private string? _lastSignature;
+    private string? _lastRepositionSignature;
+    private double _lastScale;
+    private (int, int, int, int, WindowZOrder.TaskbarEdge)? _lastTaskbarBounds;
+    private RectInt32 _lastScreenBounds;
+    private RectInt32 _lastTarget;
+    private bool _hasTarget;
 
     public ObservableCollection<TaskbarItem> Items { get; } = [];
 
@@ -89,6 +99,7 @@ public sealed partial class TaskbarWindow : Window
         InitializeComponent();
 
         _viewModel = App.Services.GetRequiredService<MainViewModel>();
+        _sessionState = App.Services.GetRequiredService<ISessionStateSource>();
         _hwnd = WindowNative.GetWindowHandle(this);
 
         ConfigureWindow();
@@ -96,21 +107,32 @@ public sealed partial class TaskbarWindow : Window
 
         _viewModel.Providers.CollectionChanged += OnProvidersChanged;
         RootGrid.ActualThemeChanged += (_, _) => Rebuild();
+        _sessionState.Locked += OnSessionLocked;
+        _sessionState.Unlocked += OnSessionUnlocked;
+        _sessionState.Resumed += OnSessionUnlocked;
         Rebuild();
 
         // The taskbar re-raises itself when clicked, so keep reasserting our position and z-order.
         _keepOnTopTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
         _keepOnTopTimer.Tick += (_, _) =>
         {
+            if (_closed || !AppWindow.IsVisible || _sessionState.IsLocked)
+            {
+                _keepOnTopTimer.Stop();
+                return;
+            }
+
             UpdateFullscreenVisibility();
-            Reposition();
-            WindowZOrder.AssertTopmost(_hwnd);
+            if (_hiddenForFullscreen) return;
 
             // Time keeps passing between data refreshes, so refresh the time layer about every 30s
             if (++_tickCount % 15 == 0)
             {
                 Rebuild();
             }
+
+            Reposition();
+            WindowZOrder.AssertTopmost(_hwnd);
         };
 
         App.Windows.Add(this);
@@ -136,10 +158,16 @@ public sealed partial class TaskbarWindow : Window
         _foregroundWatcher ??= new WindowZOrder.ForegroundWatcher(() =>
         {
             UpdateFullscreenVisibility();
-            Reposition();
-            WindowZOrder.AssertTopmost(_hwnd);
+            if (!_hiddenForFullscreen && !_sessionState.IsLocked && AppWindow.IsVisible)
+            {
+                Reposition();
+                WindowZOrder.AssertTopmost(_hwnd);
+            }
         });
-        _keepOnTopTimer.Start();
+        if (!_sessionState.IsLocked)
+        {
+            _keepOnTopTimer.Start();
+        }
     }
 
     /// <summary>
@@ -152,12 +180,55 @@ public sealed partial class TaskbarWindow : Window
         {
             _hiddenForFullscreen = true;
             AppWindow.Hide();
+            _keepOnTopTimer.Stop();
         }
         else if (!fullscreen && _hiddenForFullscreen)
         {
             _hiddenForFullscreen = false;
             AppWindow.Show(false);
+            if (!_closed && !_sessionState.IsLocked)
+            {
+                _tickCount = 0;
+                Rebuild();
+                Reposition();
+                WindowZOrder.AssertTopmost(_hwnd);
+                _keepOnTopTimer.Start();
+            }
         }
+    }
+
+    private void OnSessionLocked(object? sender, EventArgs e)
+    {
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            try
+            {
+                _keepOnTopTimer.Stop();
+            }
+            catch { }
+        });
+    }
+
+    private void OnSessionUnlocked(object? sender, EventArgs e)
+    {
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            try
+            {
+                if (_closed || !AppWindow.IsVisible || _sessionState.IsLocked) return;
+
+                UpdateFullscreenVisibility();
+                if (_hiddenForFullscreen) return;
+
+                _tickCount = 0;
+                Rebuild();
+                Reposition();
+                WindowZOrder.AssertTopmost(_hwnd);
+
+                _keepOnTopTimer.Start();
+            }
+            catch { }
+        });
     }
 
     private void ConfigureWindow()
@@ -212,9 +283,71 @@ public sealed partial class TaskbarWindow : Window
         DispatcherQueue.TryEnqueue(Rebuild);
     }
 
+    internal static int RoundTimePercent(double? elapsed)
+    {
+        if (elapsed is not { } value || !double.IsFinite(value) || value < 0)
+        {
+            return -1;
+        }
+        return (int)Math.Clamp(Math.Round(value, MidpointRounding.AwayFromZero), 0, 100);
+    }
+
+    private static int WarningBrushKind(UsageWindow? window) => window?.Percent switch
+    {
+        >= UsageThresholds.Critical => 2,
+        >= UsageThresholds.Warning => 1,
+        _ => 0
+    };
+
+    internal static string ComputeSignature(IEnumerable<UsageData> providers, bool isLight, DateTime nowUtc)
+    {
+        var sb = new System.Text.StringBuilder();
+        sb.Append(isLight ? 'L' : 'D');
+        foreach (var data in providers)
+        {
+            var bars = WidgetBarSelector.Pick(data, nowUtc);
+            var first = bars.ElementAtOrDefault(0);
+            var second = bars.ElementAtOrDefault(1);
+            var firstText = Cell(first?.Window, data.IsLoading);
+            var secondText = Cell(second?.Window, data.IsLoading);
+
+            sb.Append('|').Append(data.Provider)
+              .Append(';').Append(data.IsLoading)
+              .Append(';').Append(data.ServiceStatus?.Indicator)
+              .Append(';').Append(StatusDetailCaption.Tooltip(data.ServiceStatus, nowUtc))
+              .Append(';').Append(first?.Window.Percent ?? 0)
+              .Append(';').Append(firstText)
+              .Append(';').Append(RoundTimePercent(first?.Window.ElapsedPercent))
+              .Append(';').Append(first?.TooltipText)
+              .Append(';').Append(first?.Accent)
+              .Append(';').Append(first?.Window.ResetFromUsedPercent)
+              .Append(';').Append(first?.Window.ResetDetectedAtUtc?.Ticks)
+              .Append(';').Append(BarLabel(data, first))
+              .Append(';').Append(WarningBrushKind(first?.Window))
+              .Append(';').Append(second?.Window.Percent ?? 0)
+              .Append(';').Append(secondText)
+              .Append(';').Append(RoundTimePercent(second?.Window.ElapsedPercent))
+              .Append(';').Append(second?.TooltipText)
+              .Append(';').Append(second?.Accent)
+              .Append(';').Append(second?.Window.ResetFromUsedPercent)
+              .Append(';').Append(second?.Window.ResetDetectedAtUtc?.Ticks)
+              .Append(';').Append(BarLabel(data, second))
+              .Append(';').Append(WarningBrushKind(second?.Window));
+        }
+        return sb.ToString();
+    }
+
     private void Rebuild()
     {
         var isLight = RootGrid.ActualTheme == ElementTheme.Light;
+        var nowUtc = DateTime.UtcNow;
+        var signature = ComputeSignature(_viewModel.Providers, isLight, nowUtc);
+        if (_lastSignature != null && _lastSignature == signature)
+        {
+            return;
+        }
+        _lastSignature = signature;
+
         var primary = new SolidColorBrush(isLight ? ColorHelper.FromArgb(255, 32, 32, 32) : ColorHelper.FromArgb(255, 240, 240, 240));
 
         Items.Clear();
@@ -224,7 +357,7 @@ public sealed partial class TaskbarWindow : Window
 
             // The two most relevant bars: normally session + weekly, but a more relevant window
             // (at/near its limit, ahead of schedule, or recently changed) can take a slot
-            var bars = WidgetBarSelector.Pick(data, DateTime.UtcNow);
+            var bars = WidgetBarSelector.Pick(data, nowUtc);
             var first = bars.ElementAtOrDefault(0);
             var second = bars.ElementAtOrDefault(1);
             var firstText = Cell(first?.Window, data.IsLoading);
@@ -236,7 +369,7 @@ public sealed partial class TaskbarWindow : Window
                 Icon = ProviderIcons.GetGeometry(data.Provider),
                 StatusBrush = Controls.ProviderStatusVisuals.Brush(data.ServiceStatus),
                 IncidentVisibility = ProviderStatusPresentation.IsIncident(data.ServiceStatus) ? Visibility.Visible : Visibility.Collapsed,
-                StatusDescription = StatusDetailCaption.Tooltip(data.ServiceStatus, DateTime.UtcNow),
+                StatusDescription = StatusDetailCaption.Tooltip(data.ServiceStatus, nowUtc),
                 SessionPercent = first?.Window.Percent ?? 0,
                 WeeklyPercent = second?.Window.Percent ?? 0,
                 SessionWindow = first?.Window,
@@ -285,8 +418,33 @@ public sealed partial class TaskbarWindow : Window
     private void Reposition()
     {
         var scale = WindowZOrder.GetScale(_hwnd);
-        var count = Math.Max(1, Items.Count);
         var bar = WindowZOrder.GetTaskbarBounds() is { Edge: WindowZOrder.TaskbarEdge.Bottom } b ? b : ((int, int, int, int, WindowZOrder.TaskbarEdge)?)null;
+        var screen = bar == null ? DisplayArea.Primary.OuterBounds : default;
+
+        var contentChanged = _lastRepositionSignature != _lastSignature;
+        var environmentChanged = scale != _lastScale ||
+            !Equals(bar, _lastTaskbarBounds) ||
+            (bar == null && (screen.X != _lastScreenBounds.X || screen.Y != _lastScreenBounds.Y || screen.Width != _lastScreenBounds.Width || screen.Height != _lastScreenBounds.Height));
+
+        if (!contentChanged && !environmentChanged && _hasTarget)
+        {
+            var position = AppWindow.Position;
+            var size = AppWindow.Size;
+            if (position.X == _lastTarget.X && position.Y == _lastTarget.Y &&
+                size.Width == _lastTarget.Width && size.Height == _lastTarget.Height)
+            {
+                return;
+            }
+            AppWindow.MoveAndResize(_lastTarget);
+            return;
+        }
+
+        _lastScale = scale;
+        _lastTaskbarBounds = bar;
+        _lastScreenBounds = screen;
+        _lastRepositionSignature = _lastSignature;
+
+        var count = Math.Max(1, Items.Count);
 
         // Rounded right end, square left end: DWM rounds all four corners or none, so when nothing is
         // to the left of the taskbar we push the window's left end just past the screen edge, where
@@ -329,14 +487,16 @@ public sealed partial class TaskbarWindow : Window
         }
         else
         {
-            var screen = DisplayArea.Primary.OuterBounds;
             var height = (int)(FallbackHeightDip * scale);
             target = new RectInt32(screen.X, screen.Y + screen.Height - height, width, height);
         }
 
-        var position = AppWindow.Position;
-        var size = AppWindow.Size;
-        if (position.X != target.X || position.Y != target.Y || size.Width != target.Width || size.Height != target.Height)
+        _lastTarget = target;
+        _hasTarget = true;
+
+        var currentPos = AppWindow.Position;
+        var currentSize = AppWindow.Size;
+        if (currentPos.X != target.X || currentPos.Y != target.Y || currentSize.Width != target.Width || currentSize.Height != target.Height)
         {
             AppWindow.MoveAndResize(target);
         }
@@ -362,7 +522,11 @@ public sealed partial class TaskbarWindow : Window
 
     private void OnClosed(object sender, WindowEventArgs args)
     {
+        _closed = true;
         _keepOnTopTimer.Stop();
+        _sessionState.Locked -= OnSessionLocked;
+        _sessionState.Unlocked -= OnSessionUnlocked;
+        _sessionState.Resumed -= OnSessionUnlocked;
         _foregroundWatcher?.Dispose();
         _foregroundWatcher = null;
         _viewModel.Providers.CollectionChanged -= OnProvidersChanged;

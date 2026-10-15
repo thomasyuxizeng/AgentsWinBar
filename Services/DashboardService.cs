@@ -24,15 +24,19 @@ public sealed class DashboardService : IDashboardService
     private string? _cliVersion;
     private bool? _cliAvailable;
     private readonly IEarlyResetStore? _earlyResetStore;
+    private readonly IApiBillingService? _apiBilling;
+    private ApiCreditsInfo? _apiCredits;
+    private int _billingGeneration;
 
     public DashboardService(ISettingsService settings, UsageHistoryStore history, UsageHistoryPersistence persistence,
         IActivityLog activity, ICodexBarService cli, ILogger<DashboardService> logger, TimeProvider? timeProvider = null,
-        ICostLedger? costLedger = null, IEarlyResetStore? earlyResetStore = null)
+        ICostLedger? costLedger = null, IEarlyResetStore? earlyResetStore = null, IApiBillingService? apiBilling = null)
     {
         _settings = settings; _history = history; _persistence = persistence;
         _activity = activity; _cli = cli; _logger = logger; _clock = timeProvider ?? TimeProvider.System;
         _costLedger = costLedger;
         _earlyResetStore = earlyResetStore;
+        _apiBilling = apiBilling;
     }
 
     public DashboardSnapshot GetSnapshot(IReadOnlyList<UsageData> providers, DateTime? lastRefreshUtc,
@@ -53,8 +57,35 @@ public sealed class DashboardService : IDashboardService
             SettingsPath = _settings.SettingsFilePath, RecentRefreshes = _activity.RecentRefreshes,
             RecentAlerts = _activity.RecentAlerts, CostCache = _cli.GetCostCacheInfo(),
             CostLedger = _costLedger,
-            EarlyResetStore = _earlyResetStore
+            EarlyResetStore = _earlyResetStore,
+            ApiCredits = CurrentApiCredits()
         });
+    }
+
+    private ApiCreditsInfo? CurrentApiCredits()
+    {
+        var credits = Volatile.Read(ref _apiCredits);
+        if (credits?.State == ApiCreditsState.Ok && credits.FetchedAtUtc is { } fetched)
+            return credits with { IsStale = credits.IsStale || _clock.GetUtcNow().UtcDateTime - fetched > TimeSpan.FromMinutes(15) };
+        return credits;
+    }
+
+    /// <summary>Independent of usage/CLI cost scans; all billing work runs away from the UI context.</summary>
+    public async Task RefreshApiCreditsAsync(bool force, CancellationToken ct = default)
+    {
+        if (_apiBilling == null) return;
+        var generation = Interlocked.Increment(ref _billingGeneration);
+        try
+        {
+            var result = await Task.Run(() => _apiBilling.GetAsync(force, ct), ct).ConfigureAwait(false);
+            if (!ct.IsCancellationRequested && generation == Volatile.Read(ref _billingGeneration))
+                Volatile.Write(ref _apiCredits, result);
+        }
+        catch (Exception)
+        {
+            // A replacement billing implementation must not expose transport exception details either.
+            _logger.LogDebug("Background API billing refresh did not complete");
+        }
     }
 
     public Task RefreshDiagnosticsAsync(CancellationToken ct = default)

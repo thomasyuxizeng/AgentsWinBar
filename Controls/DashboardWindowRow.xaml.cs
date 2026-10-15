@@ -46,6 +46,25 @@ public sealed partial class DashboardWindowRow : UserControl
         InitializeComponent();
     }
 
+    /// <summary>How many consecutive windows (ending with this one) share this window's reset; the caption names the group.</summary>
+    public int GroupSize { get; private set; } = 1;
+
+    /// <summary>False for a window whose group's reset caption is shown under a later row.</summary>
+    public bool ShowReset { get; private set; } = true;
+
+    /// <summary>Pace projection and window facts (the panel's "Show details").</summary>
+    public bool ShowDetails { get; private set; }
+
+    /// <summary>Sets the reset grouping and the details state together, redrawing once when either changed.</summary>
+    public void SetLayout(bool showReset, int groupSize, bool showDetails)
+    {
+        if (ShowReset == showReset && GroupSize == groupSize && ShowDetails == showDetails) return;
+        ShowReset = showReset;
+        GroupSize = Math.Max(1, groupSize);
+        ShowDetails = showDetails;
+        Bindings.Update();
+    }
+
     public void RefreshTimes() => Bindings.Update();
 
     private static void OnDataChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)

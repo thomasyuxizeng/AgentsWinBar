@@ -12,221 +12,397 @@
     HorizontalContentAlignment="Stretch">
 
     <UserControl.Resources>
+        <!-- Small caps are kept for section headers only -->
         <Style x:Key="SectionCaption" TargetType="TextBlock">
             <Setter Property="FontSize" Value="11"/>
             <Setter Property="FontWeight" Value="SemiBold"/>
             <Setter Property="CharacterSpacing" Value="60"/>
             <Setter Property="Foreground" Value="{ThemeResource TextFillColorSecondaryBrush}"/>
         </Style>
-        <Style x:Key="Meta" TargetType="TextBlock">
-            <Setter Property="FontSize" Value="11"/>
+        <Style x:Key="Caption" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="12"/>
             <Setter Property="Foreground" Value="{ThemeResource TextFillColorSecondaryBrush}"/>
             <Setter Property="TextWrapping" Value="Wrap"/>
+        </Style>
+        <Style x:Key="SubHeading" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Foreground" Value="{ThemeResource TextFillColorSecondaryBrush}"/>
+        </Style>
+        <Style x:Key="Hero" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="26"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="LineHeight" Value="32"/>
         </Style>
         <Style x:Key="Chip" TargetType="Border">
             <Setter Property="Padding" Value="8,2"/>
             <Setter Property="CornerRadius" Value="10"/>
             <Setter Property="Background" Value="{ThemeResource SubtleFillColorSecondaryBrush}"/>
         </Style>
+        <Style x:Key="Divider" TargetType="Border">
+            <Setter Property="Height" Value="1"/>
+            <Setter Property="Background" Value="{ThemeResource DividerStrokeColorDefaultBrush}"/>
+        </Style>
     </UserControl.Resources>
 
     <Border
-        Padding="18,16,18,18"
+        Padding="20,16,20,16"
         Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
         BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
         BorderThickness="1"
         CornerRadius="8">
 
-        <StackPanel Spacing="14">
+        <StackPanel Spacing="16">
 
-            <!-- Header: logo, name, plan, service status -->
-            <Grid ColumnSpacing="10">
+            <!-- Header: identity, then one freshness line; on the right one status indicator and the details toggle -->
+            <Grid ColumnSpacing="12" RowSpacing="2">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
-                <Viewbox Grid.Column="0" Width="26" Height="26" VerticalAlignment="Center">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+                <Viewbox Grid.RowSpan="2" Width="24" Height="24" VerticalAlignment="Center">
                     <PathIcon Data="{x:Bind views:DashboardFormat.Icon(Data.Id), Mode=OneWay}"
                               Foreground="{ThemeResource TextFillColorPrimaryBrush}"/>
                 </Viewbox>
-                <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="2">
-                    <StackPanel Orientation="Horizontal" Spacing="8">
-                        <TextBlock Text="{x:Bind Data.DisplayName, Mode=OneWay}" FontSize="20" FontWeight="SemiBold"/>
-                        <Border Style="{StaticResource Chip}" VerticalAlignment="Center"
-                                Visibility="{x:Bind views:DashboardFormat.VisText(Data.Plan), Mode=OneWay}">
-                            <TextBlock Text="{x:Bind Data.Plan, Mode=OneWay}" FontSize="11"/>
-                        </Border>
-                        <Border Style="{StaticResource Chip}" VerticalAlignment="Center" Background="#33FFB900"
-                                Visibility="{x:Bind views:DashboardFormat.Vis(Data.IsStale), Mode=OneWay}">
-                            <TextBlock Text="Stale data" FontSize="11"/>
-                        </Border>
-                    </StackPanel>
-                    <TextBlock Style="{StaticResource Meta}"
-                               Text="{x:Bind views:DashboardFormat.Freshness(Data), Mode=OneWay}"/>
+                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
+                    <TextBlock Text="{x:Bind Data.DisplayName, Mode=OneWay}" FontSize="20" FontWeight="SemiBold"
+                               TextTrimming="CharacterEllipsis"/>
+                    <Border Style="{StaticResource Chip}" VerticalAlignment="Center"
+                            Visibility="{x:Bind views:DashboardFormat.VisText(Data.Plan), Mode=OneWay}">
+                        <TextBlock Text="{x:Bind Data.Plan, Mode=OneWay}" FontSize="12"/>
+                    </Border>
                 </StackPanel>
-                <StackPanel Grid.Column="2" VerticalAlignment="Center" HorizontalAlignment="Right" Spacing="2">
-                    <StackPanel Orientation="Horizontal" Spacing="6" HorizontalAlignment="Right">
-                        <Ellipse Width="9" Height="9" VerticalAlignment="Center"
-                                 Fill="{x:Bind views:DashboardFormat.StatusBrush(Data.ServiceStatus), Mode=OneWay}"/>
-                        <TextBlock Text="{x:Bind views:DashboardFormat.StatusText(Data.ServiceStatus), Mode=OneWay}"
-                                   FontSize="12" TextWrapping="Wrap" TextAlignment="Right" MaxWidth="220"/>
+
+                <!-- Freshness and source, said once; amber with a warning glyph when the numbers are last-known -->
+                <Grid Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="2" HorizontalAlignment="Left" Background="Transparent"
+                      ToolTipService.ToolTip="{x:Bind views:DashboardFormat.FreshnessTip(Data), Mode=OneWay}">
+                    <TextBlock Style="{StaticResource Caption}" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"
+                               Text="{x:Bind views:DashboardFormat.FreshnessLine(Data), Mode=OneWay}"
+                               Visibility="{x:Bind views:DashboardFormat.VisFresh(Data), Mode=OneWay}"/>
+                    <StackPanel Orientation="Horizontal" Spacing="6"
+                                Visibility="{x:Bind views:DashboardFormat.VisStale(Data), Mode=OneWay}">
+                        <FontIcon FontFamily="Segoe Fluent Icons" Glyph="&#xE7BA;" FontSize="12" VerticalAlignment="Center"
+                                  Foreground="{ThemeResource SystemFillColorCautionBrush}"/>
+                        <TextBlock FontSize="12" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"
+                                   Foreground="{ThemeResource SystemFillColorCautionBrush}"
+                                   Text="{x:Bind views:DashboardFormat.FreshnessLine(Data), Mode=OneWay}"/>
                     </StackPanel>
-                    <TextBlock Style="{StaticResource Meta}" HorizontalAlignment="Right" TextAlignment="Right"
-                               Text="{x:Bind views:DashboardFormat.StatusChecked(Data), Mode=OneWay}"/>
-                    <TextBlock Style="{StaticResource Meta}" HorizontalAlignment="Right"
-                               Text="{x:Bind views:DashboardFormat.SourceLine(Data.Source), Mode=OneWay}"
-                               ToolTipService.ToolTip="Where these numbers came from"/>
+                </Grid>
+
+                <!-- One service status indicator: dot and description, a link to the status page when there is one -->
+                <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="6" HorizontalAlignment="Right" VerticalAlignment="Center"
+                            ToolTipService.ToolTip="{x:Bind views:DashboardFormat.StatusHeaderTip(Data), Mode=OneWay}"
+                            Visibility="{x:Bind views:DashboardFormat.VisStatus(Data.ServiceStatus), Mode=OneWay}">
+                    <Ellipse Width="8" Height="8" VerticalAlignment="Center"
+                             Fill="{x:Bind views:DashboardFormat.StatusBrush(Data.ServiceStatus), Mode=OneWay}"/>
+                    <HyperlinkButton Padding="0" FontSize="12" MaxWidth="240"
+                                     Foreground="{ThemeResource TextFillColorPrimaryBrush}"
+                                     ToolTipService.ToolTip="Open the status page"
+                                     NavigateUri="{x:Bind views:DashboardFormat.StatusUri(Data.ServiceStatus), Mode=OneWay}"
+                                     AutomationProperties.Name="{x:Bind views:DashboardFormat.StatusText(Data.ServiceStatus), Mode=OneWay}"
+                                     Visibility="{x:Bind views:DashboardFormat.VisStatusLink(Data.ServiceStatus), Mode=OneWay}">
+                        <StackPanel Orientation="Horizontal" Spacing="4">
+                            <TextBlock Text="{x:Bind views:DashboardFormat.StatusText(Data.ServiceStatus), Mode=OneWay}"
+                                       TextTrimming="CharacterEllipsis"/>
+                            <FontIcon FontFamily="Segoe Fluent Icons" Glyph="&#xE8A7;" FontSize="10" VerticalAlignment="Center"
+                                      Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                        </StackPanel>
+                    </HyperlinkButton>
+                    <TextBlock FontSize="12" MaxWidth="220" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"
+                               Text="{x:Bind views:DashboardFormat.StatusText(Data.ServiceStatus), Mode=OneWay}"
+                               Visibility="{x:Bind views:DashboardFormat.VisStatusPlain(Data.ServiceStatus), Mode=OneWay}"/>
                 </StackPanel>
             </Grid>
 
-            <!-- Incident banner -->
-            <Border Padding="12,10" CornerRadius="6" BorderThickness="1.5"
-                    BorderBrush="{x:Bind views:DashboardFormat.StatusBrush(Data.ServiceStatus), Mode=OneWay}"
-                    Visibility="{x:Bind views:DashboardFormat.StatusBanner(Data.ServiceStatus), Mode=OneWay}">
-                <StackPanel Spacing="2">
-                    <TextBlock Text="Provider service status" FontWeight="SemiBold" FontSize="12"/>
-                    <TextBlock Text="{x:Bind views:DashboardFormat.StatusText(Data.ServiceStatus), Mode=OneWay}"
-                               TextWrapping="Wrap" FontSize="12"/>
-                    <TextBlock Text="{x:Bind views:DashboardFormat.IncidentTitle(Data), Mode=OneWay}"
-                               TextWrapping="Wrap" FontSize="12" FontWeight="Medium"
-                               Visibility="{x:Bind views:DashboardFormat.VisIncidentTitle(Data), Mode=OneWay}"/>
+            <!-- Incident detail (only when the status page has more to say than the header's description) -->
+            <InfoBar IsOpen="{x:Bind views:DashboardFormat.HasIncident(Data), Mode=OneWay}" IsClosable="False"
+                     Visibility="{x:Bind views:DashboardFormat.VisIncident(Data), Mode=OneWay}"
+                     Severity="{x:Bind views:DashboardFormat.IncidentSeverity(Data.ServiceStatus), Mode=OneWay}"
+                     Title="{x:Bind views:DashboardFormat.IncidentHeading(Data), Mode=OneWay}">
+                <StackPanel Spacing="4" Margin="0,-8,0,12">
                     <TextBlock Text="{x:Bind views:DashboardFormat.IncidentBody(Data), Mode=OneWay}"
                                TextWrapping="Wrap" MaxLines="3" TextTrimming="CharacterEllipsis" FontSize="12"
                                ToolTipService.ToolTip="{x:Bind views:DashboardFormat.IncidentBody(Data), Mode=OneWay}"
                                Visibility="{x:Bind views:DashboardFormat.VisIncidentBody(Data), Mode=OneWay}"/>
-                    <TextBlock Style="{StaticResource Meta}" Text="{x:Bind views:DashboardFormat.IncidentAge(Data), Mode=OneWay}"
-                               Visibility="{x:Bind views:DashboardFormat.VisIncidentAge(Data), Mode=OneWay}"/>
-                    <HyperlinkButton Content="Open status page" Padding="0" FontSize="12"
-                                     NavigateUri="{x:Bind views:DashboardFormat.StatusUri(Data.ServiceStatus), Mode=OneWay}"
-                                     Visibility="{x:Bind views:DashboardFormat.StatusLink(Data.ServiceStatus), Mode=OneWay}"/>
+                    <StackPanel Orientation="Horizontal" Spacing="12">
+                        <TextBlock Style="{StaticResource Caption}" VerticalAlignment="Center"
+                                   Text="{x:Bind views:DashboardFormat.IncidentAge(Data), Mode=OneWay}"
+                                   Visibility="{x:Bind views:DashboardFormat.VisIncidentAge(Data), Mode=OneWay}"/>
+                        <HyperlinkButton Content="Open status page" Padding="0" FontSize="12"
+                                         NavigateUri="{x:Bind views:DashboardFormat.StatusUri(Data.ServiceStatus), Mode=OneWay}"
+                                         Visibility="{x:Bind views:DashboardFormat.StatusLink(Data.ServiceStatus), Mode=OneWay}"/>
+                    </StackPanel>
                 </StackPanel>
-            </Border>
+            </InfoBar>
 
             <!-- Fetch error -->
-            <Border Padding="12,10" CornerRadius="6" Background="#22E81123" BorderBrush="#66E81123" BorderThickness="1"
-                    Visibility="{x:Bind views:DashboardFormat.VisText(Data.Error), Mode=OneWay}">
-                <StackPanel Spacing="2">
-                    <TextBlock Text="Last fetch failed" FontWeight="SemiBold" FontSize="12"/>
+            <InfoBar IsOpen="{x:Bind views:DashboardFormat.HasText(Data.Error), Mode=OneWay}" IsClosable="False"
+                     Visibility="{x:Bind views:DashboardFormat.VisText(Data.Error), Mode=OneWay}"
+                     Severity="Error" Title="Last fetch failed">
+                <StackPanel Spacing="4" Margin="0,-8,0,12">
                     <TextBlock Text="{x:Bind Data.Error, Mode=OneWay}" TextWrapping="Wrap" FontSize="12" IsTextSelectionEnabled="True"/>
-                    <TextBlock Style="{StaticResource Meta}" Text="{x:Bind views:DashboardFormat.LastKnownData(Data), Mode=OneWay}"
+                    <TextBlock Style="{StaticResource Caption}" Text="{x:Bind views:DashboardFormat.LastKnownData(Data), Mode=OneWay}"
                                Visibility="{x:Bind views:DashboardFormat.VisLastKnownData(Data), Mode=OneWay}"/>
                 </StackPanel>
-            </Border>
+            </InfoBar>
 
-            <!-- Usage windows: one list, or two side by side (Gemini models | External) -->
-            <Grid x:Name="WindowsHost" ColumnSpacing="28" RowSpacing="18" SizeChanged="OnWindowsHostSizeChanged"
+            <!-- Usage windows: one list, or two side by side in a wide panel (Gemini models | External) -->
+            <Grid x:Name="WindowsHost" ColumnSpacing="28" SizeChanged="OnWindowsHostSizeChanged"
                   Visibility="{x:Bind views:DashboardFormat.VisCount(WindowCount), Mode=OneWay}"/>
 
-            <!-- Credits -->
-            <StackPanel Spacing="4" Visibility="{x:Bind views:DashboardFormat.VisNotNull(Data.Credits), Mode=OneWay}">
-                <TextBlock Text="CREDITS" Style="{StaticResource SectionCaption}"/>
-                <TextBlock x:Name="CreditsText" FontSize="13"/>
+            <!-- CLI credits -->
+            <TextBlock x:Name="CreditsText" FontSize="13" TextWrapping="Wrap"
+                       Visibility="{x:Bind views:DashboardFormat.VisNotNull(Data.Credits), Mode=OneWay}"/>
+
+            <!-- Claude Platform API credits (read from the Anthropic Cost API; unrelated to the CLI credits above) -->
+            <StackPanel Spacing="8" x:Name="ApiCreditsSection"
+                        Visibility="{x:Bind views:DashboardFormat.VisApiSection(Data.ApiCredits, ShowDetails), Mode=OneWay}">
+                <Border Style="{StaticResource Divider}" Margin="0,0,0,8"/>
+                <Grid>
+                    <TextBlock Text="API CREDITS · THIS BILLING CYCLE" Style="{StaticResource SectionCaption}" VerticalAlignment="Center"/>
+                    <HyperlinkButton HorizontalAlignment="Right" Padding="0" FontSize="12"
+                                     AutomationProperties.Name="Open billing page"
+                                     ToolTipService.ToolTip="Open the Claude Platform billing page"
+                                     NavigateUri="{x:Bind views:DashboardFormat.ApiBillingUri()}"
+                                     Visibility="{x:Bind views:DashboardFormat.VisApiOk(Data.ApiCredits), Mode=OneWay}">
+                        <StackPanel Orientation="Horizontal" Spacing="4">
+                            <TextBlock Text="Billing"/>
+                            <FontIcon FontFamily="Segoe Fluent Icons" Glyph="&#xE8A7;" FontSize="11"/>
+                        </StackPanel>
+                    </HyperlinkButton>
+                </Grid>
+
+                <!-- Ok: spent of the pool, what is left, the bar with the cycle's elapsed-time tick, who used it -->
+                <StackPanel Spacing="8" Visibility="{x:Bind views:DashboardFormat.VisApiOk(Data.ApiCredits), Mode=OneWay}"
+                            ToolTipService.ToolTip="{x:Bind views:DashboardFormat.ApiUpdatedTip(Data.ApiCredits), Mode=OneWay}">
+                    <Grid ColumnSpacing="12">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <TextBlock Style="{StaticResource Hero}"
+                                       Text="{x:Bind views:DashboardFormat.ApiSpent(Data.ApiCredits), Mode=OneWay}"/>
+                            <TextBlock FontSize="13" VerticalAlignment="Bottom" Margin="0,0,0,5"
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                       Text="{x:Bind views:DashboardFormat.ApiOf(Data.ApiCredits), Mode=OneWay}"/>
+                        </StackPanel>
+                        <TextBlock Grid.Column="1" FontSize="14" FontWeight="SemiBold" VerticalAlignment="Bottom" Margin="0,0,0,4"
+                                   Text="{x:Bind views:DashboardFormat.ApiLeft(Data.ApiCredits), Mode=OneWay}"
+                                   Visibility="{x:Bind views:DashboardFormat.VisApiLeftOk(Data.ApiCredits), Mode=OneWay}"/>
+                        <TextBlock Grid.Column="1" FontSize="14" FontWeight="SemiBold" VerticalAlignment="Bottom" Margin="0,0,0,4"
+                                   Foreground="{ThemeResource SystemFillColorCriticalBrush}"
+                                   Text="{x:Bind views:DashboardFormat.ApiLeft(Data.ApiCredits), Mode=OneWay}"
+                                   Visibility="{x:Bind views:DashboardFormat.VisApiLeftOver(Data.ApiCredits), Mode=OneWay}"/>
+                    </Grid>
+
+                    <controls:UsageMeter Height="8"
+                                         Percent="{x:Bind Data.ApiCredits.PercentUsed, Mode=OneWay}"
+                                         TimePercent="{x:Bind views:DashboardFormat.ApiTime(Data.ApiCredits), Mode=OneWay}"
+                                         AutomationProperties.Name="{x:Bind views:DashboardFormat.ApiAutomationName(Data.ApiCredits), Mode=OneWay}"/>
+                    <TextBlock Style="{StaticResource Caption}"
+                               Text="{x:Bind views:DashboardFormat.ApiCaption(Data.ApiCredits), Mode=OneWay}"/>
+                    <StackPanel Orientation="Horizontal" Spacing="6"
+                                Visibility="{x:Bind views:DashboardFormat.VisApiStale(Data.ApiCredits), Mode=OneWay}">
+                        <FontIcon FontFamily="Segoe Fluent Icons" Glyph="&#xE7BA;" FontSize="12" VerticalAlignment="Center"
+                                  Foreground="{ThemeResource SystemFillColorCautionBrush}"/>
+                        <TextBlock FontSize="12" TextWrapping="Wrap" Foreground="{ThemeResource SystemFillColorCautionBrush}"
+                                   Text="{x:Bind views:DashboardFormat.ApiStaleText(Data.ApiCredits), Mode=OneWay}"/>
+                    </StackPanel>
+
+                    <!-- Who used the shared pool: one line per member (You first); bars are shares of the pool -->
+                    <StackPanel Spacing="6" Margin="0,4,0,0"
+                                Visibility="{x:Bind views:DashboardFormat.VisApiBreakdown(Data.ApiCredits), Mode=OneWay}">
+                        <TextBlock Text="Used by" Style="{StaticResource SubHeading}"/>
+                        <ItemsControl ItemsSource="{x:Bind ApiUseRows, Mode=OneWay}" IsTabStop="False">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate><StackPanel Spacing="6"/></ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="controls:DashboardApiUseRow">
+                                    <Grid ColumnSpacing="12" AutomationProperties.Name="{x:Bind AutomationName}">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="2*" MinWidth="64"/>
+                                            <ColumnDefinition Width="3*"/>
+                                            <ColumnDefinition Width="Auto" MinWidth="56"/>
+                                            <ColumnDefinition Width="36"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Text="{x:Bind Label}" FontSize="13" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"
+                                                   Visibility="{x:Bind views:DashboardFormat.VisNot(IsOthers)}"/>
+                                        <TextBlock Text="{x:Bind Label}" FontSize="13" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"
+                                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                                   Visibility="{x:Bind views:DashboardFormat.Vis(IsOthers)}"/>
+                                        <ProgressBar Grid.Column="1" Minimum="0" Maximum="100" Value="{x:Bind Percent}" VerticalAlignment="Center"
+                                                     AutomationProperties.Name="{x:Bind AutomationName}"
+                                                     Visibility="{x:Bind views:DashboardFormat.Vis(IsYou)}"/>
+                                        <!-- A neutral fill that differs from the track (ControlStrong... is the track's own colour) -->
+                                        <ProgressBar Grid.Column="1" Minimum="0" Maximum="100" Value="{x:Bind Percent}" VerticalAlignment="Center"
+                                                     AutomationProperties.Name="{x:Bind AutomationName}"
+                                                     Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                                     Visibility="{x:Bind views:DashboardFormat.VisNot(IsYou)}"/>
+                                        <TextBlock Grid.Column="2" Text="{x:Bind Amount}" FontSize="13" TextAlignment="Right" VerticalAlignment="Center"/>
+                                        <TextBlock Grid.Column="3" Text="{x:Bind Share}" FontSize="12" TextAlignment="Right" VerticalAlignment="Center"
+                                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                                    </Grid>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                        <Grid ColumnSpacing="12" Visibility="{x:Bind views:DashboardFormat.VisApiUnattributed(Data.ApiCredits), Mode=OneWay}"
+                              ToolTipService.ToolTip="Non-token charges (for example web search), console playground use or deleted keys">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto" MinWidth="56"/>
+                                <ColumnDefinition Width="36"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="Other / not attributable" FontSize="13" TextTrimming="CharacterEllipsis"
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                            <TextBlock Grid.Column="1" FontSize="13" TextAlignment="Right" Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                       Text="{x:Bind views:DashboardFormat.ApiUnattributed(Data.ApiCredits), Mode=OneWay}"/>
+                        </Grid>
+                    </StackPanel>
+                </StackPanel>
+
+                <!-- Rejected / Unavailable: the reason; no key: how to add one (in the details) -->
+                <TextBlock Style="{StaticResource Caption}"
+                           Text="{x:Bind Data.ApiCredits.Message, Mode=OneWay}"
+                           Visibility="{x:Bind views:DashboardFormat.VisApiMessage(Data.ApiCredits), Mode=OneWay}"/>
+                <TextBlock Style="{StaticResource Caption}"
+                           Text="{x:Bind views:DashboardFormat.ApiNoKeyText(Data.ApiCredits), Mode=OneWay}"
+                           Visibility="{x:Bind views:DashboardFormat.VisApiNoKey(Data.ApiCredits), Mode=OneWay}"/>
+                <HyperlinkButton Content="Create an Admin key" Padding="0" FontSize="12"
+                                 AutomationProperties.Name="Create an Admin key"
+                                 NavigateUri="{x:Bind views:DashboardFormat.ApiAdminKeysUri()}"
+                                 Visibility="{x:Bind views:DashboardFormat.VisApiKeyLink(Data.ApiCredits), Mode=OneWay}"/>
             </StackPanel>
 
-            <!-- Cost and tokens -->
-            <StackPanel Spacing="12" x:Name="CostSection"
+            <!-- Cost and tokens: totals and the daily chart; breakdowns in the details -->
+            <StackPanel Spacing="8" x:Name="CostSection"
                         Visibility="{x:Bind views:DashboardFormat.VisNotNull(Data.Cost), Mode=OneWay}">
-                <TextBlock Text="COST AND TOKENS · ESTIMATED FROM LOCAL LOGS" Style="{StaticResource SectionCaption}"/>
-                <TextBlock Style="{StaticResource Meta}"
-                           Text="{x:Bind views:DashboardFormat.CostStale(Data.Cost), Mode=OneWay}"
-                           Visibility="{x:Bind views:DashboardFormat.VisCostStale(Data.Cost), Mode=OneWay}"/>
+                <Border Style="{StaticResource Divider}" Margin="0,0,0,8"/>
+                <TextBlock Text="ESTIMATED COST · LOCAL LOGS" Style="{StaticResource SectionCaption}"
+                           ToolTipService.ToolTip="List-price estimate from local session logs, not your bill"/>
+                <StackPanel Orientation="Horizontal" Spacing="6"
+                            Visibility="{x:Bind views:DashboardFormat.VisCostStale(Data.Cost), Mode=OneWay}">
+                    <FontIcon FontFamily="Segoe Fluent Icons" Glyph="&#xE7BA;" FontSize="12" VerticalAlignment="Center"
+                              Foreground="{ThemeResource SystemFillColorCautionBrush}"/>
+                    <TextBlock FontSize="12" TextWrapping="Wrap" Foreground="{ThemeResource SystemFillColorCautionBrush}"
+                               Text="{x:Bind views:DashboardFormat.CostStale(Data.Cost), Mode=OneWay}"/>
+                </StackPanel>
 
                 <Grid ColumnSpacing="16">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*"/>
                         <ColumnDefinition Width="*"/>
                     </Grid.ColumnDefinitions>
-                    <StackPanel Spacing="1">
-                        <TextBlock Text="Today" Style="{StaticResource Meta}"/>
-                        <TextBlock FontSize="26" FontWeight="SemiBold"
+                    <StackPanel>
+                        <TextBlock Text="Today" Style="{StaticResource Caption}"/>
+                        <TextBlock Style="{StaticResource Hero}"
                                    Text="{x:Bind views:DashboardFormat.Money(Data.Cost.TodayCost, Data.Cost.Currency), Mode=OneWay}"/>
-                        <TextBlock Style="{StaticResource Meta}"
-                                   Text="{x:Bind views:DashboardFormat.Tokens(Data.Cost.TodayTokens), Mode=OneWay}"/>
+                        <TextBlock Style="{StaticResource Caption}"
+                                   Text="{x:Bind views:DashboardFormat.TokenCount(Data.Cost.TodayTokens), Mode=OneWay}"/>
                     </StackPanel>
-                    <StackPanel Grid.Column="1" Spacing="1">
-                        <TextBlock Text="Last 30 days" Style="{StaticResource Meta}"/>
-                        <TextBlock FontSize="26" FontWeight="SemiBold"
+                    <StackPanel Grid.Column="1">
+                        <TextBlock Text="Last 30 days" Style="{StaticResource Caption}"/>
+                        <TextBlock Style="{StaticResource Hero}"
                                    Text="{x:Bind views:DashboardFormat.Money(Data.Cost.Last30DaysCost, Data.Cost.Currency), Mode=OneWay}"/>
-                        <TextBlock Style="{StaticResource Meta}"
-                                   Text="{x:Bind views:DashboardFormat.Tokens(Data.Cost.Last30DaysTokens), Mode=OneWay}"/>
+                        <TextBlock Style="{StaticResource Caption}"
+                                   Text="{x:Bind views:DashboardFormat.TokenCount(Data.Cost.Last30DaysTokens), Mode=OneWay}"/>
                     </StackPanel>
                 </Grid>
 
-                <controls:DailyCostChart PlotHeight="76"
-                                         Series="{x:Bind Data.Cost.Daily, Mode=OneWay}"
-                                         Currency="{x:Bind Data.Cost.Currency, Mode=OneWay}"/>
+                <!-- Details: token mix, top models and how the numbers were made -->
+                <StackPanel Spacing="8" Margin="0,8,0,0" Visibility="{x:Bind views:DashboardFormat.Vis(ShowDetails), Mode=OneWay}">
+                    <TextBlock Text="Token mix (30 days)" Style="{StaticResource SubHeading}"/>
+                    <ItemsControl ItemsSource="{x:Bind TokenRows, Mode=OneWay}" IsTabStop="False">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate><StackPanel Spacing="6"/></ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="controls:DashboardBarRow">
+                                <Grid ColumnSpacing="12">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="2*" MinWidth="80"/>
+                                        <ColumnDefinition Width="3*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Text="{x:Bind Label}" FontSize="12" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
+                                    <ProgressBar Grid.Column="1" Minimum="0" Maximum="100" Value="{x:Bind Percent}" VerticalAlignment="Center"/>
+                                    <TextBlock Grid.Column="2" Text="{x:Bind Value}" FontSize="12" VerticalAlignment="Center"
+                                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                                </Grid>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
 
-                <TextBlock Text="Token mix (30 days)" Style="{StaticResource Meta}" FontWeight="SemiBold"/>
-                <ItemsControl ItemsSource="{x:Bind TokenRows, Mode=OneWay}" IsTabStop="False">
-                    <ItemsControl.ItemsPanel>
-                        <ItemsPanelTemplate><StackPanel Spacing="5"/></ItemsPanelTemplate>
-                    </ItemsControl.ItemsPanel>
-                    <ItemsControl.ItemTemplate>
-                        <DataTemplate x:DataType="controls:DashboardBarRow">
-                            <Grid ColumnSpacing="8" RowSpacing="1">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="Auto"/>
-                                </Grid.ColumnDefinitions>
-                                <Grid.RowDefinitions>
-                                    <RowDefinition Height="Auto"/>
-                                    <RowDefinition Height="Auto"/>
-                                </Grid.RowDefinitions>
-                                <TextBlock Text="{x:Bind Label}" FontSize="12"/>
-                                <TextBlock Grid.Column="1" Text="{x:Bind Value}" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
-                                <ProgressBar Grid.Row="1" Grid.ColumnSpan="2" Minimum="0" Maximum="100" Value="{x:Bind Percent}"/>
-                            </Grid>
-                        </DataTemplate>
-                    </ItemsControl.ItemTemplate>
-                </ItemsControl>
+                    <TextBlock Text="Top models (30 days)" Style="{StaticResource SubHeading}" Margin="0,4,0,0"
+                               Visibility="{x:Bind views:DashboardFormat.VisCount(ModelRows.Count), Mode=OneWay}"/>
+                    <ItemsControl ItemsSource="{x:Bind ModelRows, Mode=OneWay}" IsTabStop="False">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate><StackPanel Spacing="6"/></ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="controls:DashboardBarRow">
+                                <Grid ColumnSpacing="8" RowSpacing="2">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                    </Grid.RowDefinitions>
+                                    <TextBlock Text="{x:Bind Label}" FontSize="12" TextTrimming="CharacterEllipsis"/>
+                                    <TextBlock Grid.Column="1" Text="{x:Bind Value}" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                                    <ProgressBar Grid.Row="1" Grid.ColumnSpan="2" Minimum="0" Maximum="100" Value="{x:Bind Percent}"/>
+                                </Grid>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
 
-                <TextBlock Text="Top models (30 days)" Style="{StaticResource Meta}" FontWeight="SemiBold"
-                           Visibility="{x:Bind views:DashboardFormat.VisCount(ModelRows.Count), Mode=OneWay}"/>
-                <ItemsControl ItemsSource="{x:Bind ModelRows, Mode=OneWay}" IsTabStop="False">
-                    <ItemsControl.ItemsPanel>
-                        <ItemsPanelTemplate><StackPanel Spacing="5"/></ItemsPanelTemplate>
-                    </ItemsControl.ItemsPanel>
-                    <ItemsControl.ItemTemplate>
-                        <DataTemplate x:DataType="controls:DashboardBarRow">
-                            <Grid ColumnSpacing="8" RowSpacing="1">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="Auto"/>
-                                </Grid.ColumnDefinitions>
-                                <Grid.RowDefinitions>
-                                    <RowDefinition Height="Auto"/>
-                                    <RowDefinition Height="Auto"/>
-                                </Grid.RowDefinitions>
-                                <TextBlock Text="{x:Bind Label}" FontSize="12" TextTrimming="CharacterEllipsis"/>
-                                <TextBlock Grid.Column="1" Text="{x:Bind Value}" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
-                                <ProgressBar Grid.Row="1" Grid.ColumnSpan="2" Minimum="0" Maximum="100" Value="{x:Bind Percent}"/>
-                            </Grid>
-                        </DataTemplate>
-                    </ItemsControl.ItemTemplate>
-                </ItemsControl>
-
-                <ItemsControl ItemsSource="{x:Bind CostFacts, Mode=OneWay}" IsTabStop="False">
-                    <ItemsControl.ItemsPanel>
-                        <ItemsPanelTemplate><StackPanel Spacing="3"/></ItemsPanelTemplate>
-                    </ItemsControl.ItemsPanel>
-                    <ItemsControl.ItemTemplate>
-                        <DataTemplate x:DataType="controls:DashboardFact">
-                            <Grid ColumnSpacing="12">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="110"/>
-                                    <ColumnDefinition Width="*"/>
-                                </Grid.ColumnDefinitions>
-                                <TextBlock Text="{x:Bind Label}" Style="{StaticResource Meta}"/>
-                                <TextBlock Grid.Column="1" Text="{x:Bind Value}" FontSize="11" TextWrapping="Wrap"/>
-                            </Grid>
-                        </DataTemplate>
-                    </ItemsControl.ItemTemplate>
-                </ItemsControl>
+                    <ItemsControl ItemsSource="{x:Bind CostFacts, Mode=OneWay}" IsTabStop="False" Margin="0,4,0,0">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate><StackPanel Spacing="4"/></ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="controls:DashboardFact">
+                                <Grid ColumnSpacing="12">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="112"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Text="{x:Bind Label}" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                                    <TextBlock Grid.Column="1" Text="{x:Bind Value}" FontSize="12" TextWrapping="Wrap"/>
+                                </Grid>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </StackPanel>
             </StackPanel>
 
-            <!-- History footer -->
-            <TextBlock Style="{StaticResource Meta}" x:Name="HistoryText"/>
+            <!-- Footer: the details toggle, and in the details how much usage history this provider has -->
+            <Grid ColumnSpacing="12" Margin="0,-4,0,-4">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <Button x:Name="DetailsButton" Padding="8,4" Margin="-8,0,0,0" Background="Transparent" BorderThickness="0"
+                        Click="OnDetailsClicked">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <TextBlock x:Name="DetailsText" Text="Show details" FontSize="12"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                        <FontIcon x:Name="DetailsGlyph" FontFamily="Segoe Fluent Icons" Glyph="&#xE70D;" FontSize="10"
+                                  Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                    </StackPanel>
+                </Button>
+                <TextBlock Grid.Column="1" Style="{StaticResource Caption}" x:Name="HistoryText" VerticalAlignment="Center"
+                           TextAlignment="Right" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"
+                           Visibility="{x:Bind views:DashboardFormat.Vis(ShowDetails), Mode=OneWay}"/>
+            </Grid>
         </StackPanel>
     </Border>
 </UserControl>

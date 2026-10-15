@@ -246,6 +246,61 @@ public class CodexBarServiceReviewRegressionTests
     }
 
     [TestMethod]
+    [DataRow("minor")]
+    [DataRow("major")]
+    public async Task GetUsageAsync_ReplayCliOutage_FetchedHealthyWins(string cliIndicator)
+    {
+        var observation = _clock.Now.UtcDateTime;
+        var service = Service();
+        _fetcher.Setup(f => f.GetIncidentAsync("claude", It.IsAny<CancellationToken>())).ReturnsAsync(Incident("Initial outage"));
+        Respond(Reading("claude", observation, indicator: cliIndicator));
+        await service.GetUsageAsync("claude");
+        _clock.Now += TimeSpan.FromMinutes(1);
+        var healthy = new ProviderStatus { Indicator = ProviderStatusIndicator.None, Description = "All systems operational" };
+        _fetcher.Setup(f => f.GetIncidentAsync("claude", It.IsAny<CancellationToken>())).ReturnsAsync(healthy);
+        Respond(Reading("claude", observation, cached: true, indicator: cliIndicator));
+        var replay = (await service.GetUsageAsync("claude"))!;
+        replay.ServiceStatus!.Indicator.Should().Be(ProviderStatusIndicator.None);
+        replay.ServiceStatus.IncidentTitle.Should().BeNull();
+        replay.StatusIsStale.Should().BeFalse();
+        replay.LastSuccessfulStatusFetch.Should().Be(_clock.Now.UtcDateTime);
+    }
+
+    [TestMethod]
+    [DataRow("minor", ProviderStatusIndicator.Minor)]
+    [DataRow("major", ProviderStatusIndicator.Major)]
+    public async Task GetUsageAsync_ReplayCliOutage_NoPrefetchAvailable_StaysCachedOutageAsStale(string cliIndicator, ProviderStatusIndicator expectedIndicator)
+    {
+        var observation = _clock.Now.UtcDateTime;
+        var service = Service();
+        _fetcher.Setup(f => f.GetIncidentAsync("claude", It.IsAny<CancellationToken>())).ReturnsAsync(Incident("Initial outage"));
+        Respond(Reading("claude", observation, indicator: cliIndicator));
+        var first = (await service.GetUsageAsync("claude"))!;
+        _clock.Now += TimeSpan.FromMinutes(1);
+        _fetcher.Setup(f => f.GetIncidentAsync("claude", It.IsAny<CancellationToken>())).ReturnsAsync((ProviderStatus?)null);
+        Respond(Reading("claude", observation, cached: true, indicator: cliIndicator));
+        var replay = (await service.GetUsageAsync("claude"))!;
+        replay.ServiceStatus!.Indicator.Should().Be(expectedIndicator);
+        replay.StatusIsStale.Should().BeTrue();
+        replay.LastSuccessfulStatusFetch.Should().Be(first.LastSuccessfulStatusFetch);
+    }
+
+    [TestMethod]
+    [DataRow("minor", ProviderStatusIndicator.Minor)]
+    [DataRow("major", ProviderStatusIndicator.Major)]
+    public async Task GetUsageAsync_FreshCliOutage_FetchedHealthy_CliOutageStillWins(string cliIndicator, ProviderStatusIndicator expectedIndicator)
+    {
+        var service = Service();
+        var healthy = new ProviderStatus { Indicator = ProviderStatusIndicator.None, Description = "All systems operational" };
+        _fetcher.Setup(f => f.GetIncidentAsync("claude", It.IsAny<CancellationToken>())).ReturnsAsync(healthy);
+        Respond(Reading("claude", _clock.Now.UtcDateTime, cached: false, indicator: cliIndicator));
+        var result = (await service.GetUsageAsync("claude"))!;
+        result.ServiceStatus!.Indicator.Should().Be(expectedIndicator);
+        result.StatusIsStale.Should().BeFalse();
+        result.LastSuccessfulStatusFetch.Should().Be(_clock.Now.UtcDateTime);
+    }
+
+    [TestMethod]
     [DataRow(true)]
     public async Task GetUsageAsync_ReplayCliHealthy_ClearsIncidentWhenFetcherFails(bool fetcherFails)
     {

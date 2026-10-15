@@ -24,7 +24,7 @@ archive and matches its contents, and atomically replaces the CLI and shim. It l
 | Provider | Behaviour |
 |----------|-----------|
 | `gemini` | Google shut down the Gemini CLI login for individual accounts, so Gemini quota is read from Antigravity (`agy`) and shown as the Gemini provider: 5-hour and weekly windows. |
-| `claude` | Tries the OAuth usage endpoint first (about 1 second). Anthropic rate limits it, so after a rate-limit answer it is left alone for 10 minutes. Any other failure, such as an expired OAuth token (CodexBar never refreshes it), goes straight to the Claude CLI, which also refreshes the token. The CLI is slow, so it is skipped for 30 minutes after it fails. Results are cached for 10 minutes. If every route fails, the last good result is shown with its original `updatedAt`, which the app uses to label it as old data. With no cached result, the real error is shown. |
+| `claude` | Tries the OAuth usage endpoint first (about 1 second). Anthropic rate limits it, so after a rate-limit answer it is left alone for 10 minutes. Any other failure, such as an expired OAuth token (CodexBar never refreshes it), goes straight to the Claude CLI, which also refreshes the token. The CLI is slow, so it is skipped for 30 minutes after it fails. Results are cached for 10 minutes. If any cached quota window has already reset, the cache is treated as stale so scheduled reset refreshes query upstream. If every route fails, the last good result is shown with its original `updatedAt`, which the app uses to label it as old data. With no cached result, the real error is shown. |
 | `codex` | Passed straight through, unless the Windows sign-in bridge is on (below). |
 | anything else | Passed straight through. |
 

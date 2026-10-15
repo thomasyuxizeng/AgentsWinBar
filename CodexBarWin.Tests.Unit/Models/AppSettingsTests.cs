@@ -176,6 +176,21 @@ public class AppSettingsTests
         System.Text.Json.JsonSerializer.Deserialize(json, AppJsonSerializerContext.Default.AppSettings)!.ShowCostTotals.Should().BeFalse();
     }
     [TestMethod]
+    public void ShowGraphs_WhenOldSettingsOrDefaults_IsOnAndRoundTripsOffThroughNormalize()
+    {
+        ProviderConfig.GetDefaults().Should().OnlyContain(p => p.ShowGraphs);
+        var old = System.Text.Json.JsonSerializer.Deserialize(
+            "{\"providers\":[{\"id\":\"claude\",\"displayName\":\"Claude\"}]}", AppJsonSerializerContext.Default.AppSettings)!;
+        old.Providers.Single().ShowGraphs.Should().BeTrue();
+
+        old.Providers.Single().ShowGraphs = false;
+        old.Normalize();
+        var json = System.Text.Json.JsonSerializer.Serialize(old, AppJsonSerializerContext.Default.AppSettings);
+        System.Text.Json.JsonSerializer.Deserialize(json, AppJsonSerializerContext.Default.AppSettings)!
+            .Providers.Single().ShowGraphs.Should().BeFalse();
+    }
+
+    [TestMethod]
     public void GetDefaults_ReturnsValidDefaults()
     {
         // Act

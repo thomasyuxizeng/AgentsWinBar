@@ -23,6 +23,7 @@ public sealed partial class DashboardAppWindow : Window
 {
     private readonly MainViewModel _viewModel;
     private readonly IDashboardService _dashboardService;
+    private readonly ISettingsService _settings;
     private readonly ILogger<DashboardAppWindow> _logger;
     private readonly DashboardPage _page = new();
     private readonly DispatcherQueueTimer _redrawTimer;
@@ -32,6 +33,8 @@ public sealed partial class DashboardAppWindow : Window
     private readonly AppWindow _appWindow;
     private volatile bool _closed;
     private bool _redrawing;
+    /// <summary>True while the window is minimised or hidden: nothing is drawn and no timer runs.</summary>
+    private bool _hidden;
     private bool _topmost;
     private IDisposable? _costDemand;
     private IDisposable? _visibility;
@@ -43,6 +46,7 @@ public sealed partial class DashboardAppWindow : Window
 
         _viewModel = App.Services.GetRequiredService<MainViewModel>();
         _dashboardService = App.Services.GetRequiredService<IDashboardService>();
+        _settings = App.Services.GetRequiredService<ISettingsService>();
         _logger = App.Services.GetRequiredService<ILogger<DashboardAppWindow>>();
 
         ExtendsContentIntoTitleBar = true;
@@ -65,6 +69,8 @@ public sealed partial class DashboardAppWindow : Window
         _page.SettingsRequested += OnSettingsRequested;
         _page.TopmostChanged += OnTopmostChanged;
         _page.FullScreenChanged += OnFullScreenChanged;
+        _page.GraphVisibilityChanged += OnGraphVisibilityChanged;
+        _settings.SettingsChanged += OnSettingsChanged;
 
         // Redraw shortly after new data arrives (several providers can land in quick succession).
         // Every 30 seconds: take a fresh snapshot (the page skips whatever did not change and just refreshes the
@@ -131,7 +137,7 @@ public sealed partial class DashboardAppWindow : Window
 
     private void Redraw()
     {
-        if (_closed || _redrawing) return;
+        if (_closed || _redrawing || _hidden) return;
         _redrawing = true;
         try
         {
@@ -141,6 +147,7 @@ public sealed partial class DashboardAppWindow : Window
             var snapshot = _dashboardService.GetSnapshot(_viewModel.Providers.ToList(), lastRefreshUtc,
                 _viewModel.NextRefreshUtc, _viewModel.EffectiveRefreshInterval);
             var snapshotEnd = timing ? Stopwatch.GetTimestamp() : 0;
+            _page.SetHiddenGraphs(GraphVisibility.HiddenIds(_settings.Settings.Providers));
             _page.Update(snapshot);
             if (timing) _logger.LogDebug("Dashboard redraw: GetSnapshot {SnapshotMs:F2} ms, Page.Update {UpdateMs:F2} ms",
                 Stopwatch.GetElapsedTime(start, snapshotEnd).TotalMilliseconds,
@@ -179,6 +186,16 @@ public sealed partial class DashboardAppWindow : Window
         settings.Activate();
     });
 
+    /// <summary>A graphs toggle on the dashboard: kept in the provider's settings (quietly, nothing needs a data refresh).</summary>
+    private void OnGraphVisibilityChanged(object? sender, GraphVisibilityChange change) => HandleEvent(() =>
+    {
+        if (!GraphVisibility.TrySet(_settings.Settings.Providers, change.ProviderId, change.Visible)) return;
+        _settings.SaveQuietAsync().SafeFireAndForget(onError: ex => _logger.LogWarning(ex, "Saving the graphs setting failed"));
+    });
+
+    /// <summary>Settings were saved elsewhere (the Settings window): pick up the graphs choices.</summary>
+    private void OnSettingsChanged(object? sender, EventArgs e) => Post(Redraw);
+
     private void OnTopmostChanged(object? sender, bool on) => HandleEvent(() =>
     {
         _topmost = on;
@@ -215,6 +232,12 @@ public sealed partial class DashboardAppWindow : Window
         if (visible && _visibility == null)
         {
             _visibility = _viewModel.AcquireDashboardVisibility();
+            // Back from the taskbar: take up the cost demand and the 30-second clock again, and catch the display up
+            _costDemand ??= _viewModel.AcquireCostDemand();
+            var wasHidden = _hidden;
+            _hidden = false;
+            _clockTimer.Start();
+            if (wasHidden) Redraw();
             RefreshIfStale();
             return true;
         }
@@ -222,6 +245,13 @@ public sealed partial class DashboardAppWindow : Window
         {
             _visibility?.Dispose();
             _visibility = null;
+            // A minimised dashboard shows nothing: stop its clock and release its cost demand so it cannot keep
+            // the WSL VM busy with cost scans or redraw behind the user's back.
+            _hidden = true;
+            _clockTimer.Stop();
+            _redrawTimer.Stop();
+            _costDemand?.Dispose();
+            _costDemand = null;
         }
         return false;
     }
@@ -308,6 +338,8 @@ public sealed partial class DashboardAppWindow : Window
         _page.SettingsRequested -= OnSettingsRequested;
         _page.TopmostChanged -= OnTopmostChanged;
         _page.FullScreenChanged -= OnFullScreenChanged;
+        _page.GraphVisibilityChanged -= OnGraphVisibilityChanged;
+        _settings.SettingsChanged -= OnSettingsChanged;
         foreach (var accelerator in _accelerators)
         {
             accelerator.Invoked -= OnF11Invoked;

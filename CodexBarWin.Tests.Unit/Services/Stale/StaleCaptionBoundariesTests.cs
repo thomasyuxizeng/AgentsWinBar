@@ -55,7 +55,7 @@ public class StaleCaptionBoundariesTests
     [TestMethod]
     public void Precedence_DashboardFormatLogic_RefreshingTakesPrecedenceOverStaleUsage()
     {
-        // Replicating the exact logic in DashboardFormat.Freshness(provider):
+        // Replicating the precedence in DashboardFormat.FreshnessLine(provider):
         // provider == null ? string.Empty : provider.IsLoading ? "Refreshing…" : provider.UsageIsStale ? StaleCaption.Text(...) : ...
         string EvaluateFreshness(DashboardProvider? p, DateTime nowUtc) =>
             p == null ? string.Empty

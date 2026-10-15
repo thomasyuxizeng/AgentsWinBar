@@ -151,6 +151,20 @@ case " $* " in *" --provider claude "*)
     stamp=$(stat -c %Y "$1" 2>/dev/null) || { echo 2147483647; return 0; }
     echo $(( $(date +%s) - stamp ))
   }
+  has_past_reset() {
+    local raw_resets='' now=0 match='' ts='' reset_s=0
+    raw_resets=$(grep -oE '"resetsAt"[[:space:]]*:[[:space:]]*"[^"]+"' "$1" 2>/dev/null || true)
+    [ -n "$raw_resets" ] || return 1
+    now=$(date -u +%s)
+    while IFS= read -r match; do
+      [ -n "$match" ] || continue
+      ts=$(printf '%s' "$match" | cut -d'"' -f4)
+      if [ -n "$ts" ] && reset_s=$(date -d "$ts" +%s 2>/dev/null); then
+        if [ "$reset_s" -le "$now" ]; then return 0; fi
+      fi
+    done <<< "$raw_resets"
+    return 1
+  }
   cached_output() {
     # Add provenance without changing source/usage or the cache file's observation time.
     # Non-JSON output from older/custom CLIs remains byte-compatible.
@@ -179,7 +193,7 @@ print(json.dumps(data))
 PY
   }
 
-  if [ -n "$cache_read" ] && [ -s "$cache_read" ] && [ "$(age "$cache_read")" -lt 600 ]; then cached_output "$cache_read"; exit $?; fi
+  if [ -n "$cache_read" ] && [ -s "$cache_read" ] && [ "$(age "$cache_read")" -lt 600 ] && ! has_past_reset "$cache_read"; then cached_output "$cache_read"; exit $?; fi
 
   oauth=(); cli=()
   for a in "${out[@]}"; do

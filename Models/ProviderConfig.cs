@@ -8,6 +8,9 @@ public record ProviderConfig
     public string Id { get; init; } = string.Empty;
     public string DisplayName { get; init; } = string.Empty;
     public bool IsEnabled { get; set; } = true;
+
+    /// <summary>Whether the dashboard's graphs section shows this provider's charts (on by default, also for settings saved before it existed).</summary>
+    public bool ShowGraphs { get; set; } = true;
     public string? IconPath { get; init; }
     public int Order { get; set; }
 

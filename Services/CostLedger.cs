@@ -238,14 +238,22 @@ public sealed class CostLedger : ICostLedger
         }
     }
 
-    public async Task RecordScanAsync(CostData scan, DateTime? nowUtc = null, CancellationToken ct = default)
+    public Task RecordScanAsync(CostData scan, DateTime? nowUtc = null, CancellationToken ct = default) =>
+        scan == null ? Task.CompletedTask : RecordScansAsync([scan], nowUtc, ct);
+
+    public async Task RecordScansAsync(IReadOnlyList<CostData> scans, DateTime? nowUtc = null, CancellationToken ct = default)
     {
         if (DeveloperMode) return;
-        if (scan == null || !scan.HasData || scan.FetchOutcome != FetchOutcome.Success ||
-            string.IsNullOrWhiteSpace(scan.Provider) || !ProviderConstants.IsValidProvider(scan.Provider))
-        {
-            return;
-        }
+        if (scans == null || scans.Count == 0) return;
+
+        var validScans = scans.Where(scan =>
+            scan != null &&
+            scan.HasData &&
+            scan.FetchOutcome == FetchOutcome.Success &&
+            !string.IsNullOrWhiteSpace(scan.Provider) &&
+            ProviderConstants.IsValidProvider(scan.Provider)).ToList();
+
+        if (validScans.Count == 0) return;
 
         // Leave the caller thread before any file IO (the scan callback may run on the UI thread).
         await Task.Yield();
@@ -259,19 +267,64 @@ public sealed class CostLedger : ICostLedger
             await LoadCoreAsync(ct).ConfigureAwait(false);
 
             var now = nowUtc ?? _clock.GetUtcNow().UtcDateTime;
-            MergeScanUnlocked(scan, now);
 
-            await SaveCoreAsync(now, ct).ConfigureAwait(false);
+            CostLedgerFile backup;
+            lock (_stateLock)
+            {
+                backup = CloneFile(_file);
+            }
+
+            foreach (var scan in validScans)
+            {
+                MergeScanUnlocked(scan, now);
+            }
+
+            bool saved;
+            try
+            {
+                saved = await SaveCoreAsync(now, ct).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                lock (_stateLock)
+                {
+                    _file = backup;
+                }
+                throw;
+            }
+
+            if (!saved)
+            {
+                lock (_stateLock)
+                {
+                    _file = backup;
+                }
+            }
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Failed to record cost scan for {Provider}", scan.Provider);
+            _logger.LogWarning(ex, "Failed to record cost scans for {Count} providers", validScans.Count);
         }
         finally
         {
             if (acquired) _ioGate.Release();
         }
+    }
+
+    private static CostLedgerFile CloneFile(CostLedgerFile file)
+    {
+        var clone = new CostLedgerFile { SchemaVersion = file.SchemaVersion };
+        if (file.Providers != null)
+        {
+            foreach (var (provider, days) in file.Providers)
+            {
+                clone.Providers[provider] = days != null
+                    ? new Dictionary<string, CostLedgerDayEntry>(days, StringComparer.OrdinalIgnoreCase)
+                    : new Dictionary<string, CostLedgerDayEntry>(StringComparer.OrdinalIgnoreCase);
+            }
+        }
+        return clone;
     }
 
     private void MergeScanUnlocked(CostData scan, DateTime nowUtc)
@@ -435,9 +488,9 @@ public sealed class CostLedger : ICostLedger
         return map.Values.OrderByDescending(m => m.CostUSD ?? 0).ThenBy(m => m.ModelName, StringComparer.Ordinal).ToArray();
     }
 
-    private async Task SaveCoreAsync(DateTime nowUtc, CancellationToken ct)
+    private async Task<bool> SaveCoreAsync(DateTime nowUtc, CancellationToken ct)
     {
-        if (DeveloperMode) return;
+        if (DeveloperMode) return false;
         try
         {
             var dir = Path.GetDirectoryName(Path.GetFullPath(FilePath))!;
@@ -466,12 +519,14 @@ public sealed class CostLedger : ICostLedger
 
             await File.WriteAllTextAsync(_tmpPath, json, ct).ConfigureAwait(false);
             File.Move(_tmpPath, FilePath, overwrite: true);
+            return true;
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (Exception ex)
         {
             // Atomic write failure (e.g. read-only directory, permission error) must never throw
             _logger.LogWarning(ex, "Cost ledger could not be saved to {Path}", FilePath);
+            return false;
         }
     }
 

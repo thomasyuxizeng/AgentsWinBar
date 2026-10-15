@@ -70,6 +70,8 @@ public sealed partial class SettingsPage : Page
         TaskbarDisplayToggle.IsOn = ViewModel.TaskbarDisplay;
         AlertsToggle.IsOn = ViewModel.AlertsEnabled;
         CostTotalsToggle.IsOn = ViewModel.ShowCostTotals;
+        ApiCreditsMonthlyBox.Value = (double)ViewModel.ApiCreditsMonthlyUsd;
+        ApiCreditsCycleDayBox.Value = ViewModel.ApiCreditsCycleStartDay;
         DeveloperModeToggle.IsOn = ViewModel.DeveloperModeEnabled;
     }
 
@@ -116,6 +118,15 @@ public sealed partial class SettingsPage : Page
             ViewModel.TaskbarDisplay = TaskbarDisplayToggle.IsOn;
             ViewModel.AlertsEnabled = AlertsToggle.IsOn;
             ViewModel.ShowCostTotals = CostTotalsToggle.IsOn;
+            // A cleared NumberBox reports NaN: keep the previous value
+            if (double.IsFinite(ApiCreditsMonthlyBox.Value))
+            {
+                ViewModel.ApiCreditsMonthlyUsd = (decimal)ApiCreditsMonthlyBox.Value;
+            }
+            if (double.IsFinite(ApiCreditsCycleDayBox.Value))
+            {
+                ViewModel.ApiCreditsCycleStartDay = (int)Math.Round(ApiCreditsCycleDayBox.Value);
+            }
             ViewModel.DeveloperModeEnabled = DeveloperModeToggle.IsOn;
 
             var wasDeveloperMode = App.Services.GetRequiredService<Services.ISettingsService>().Settings.DeveloperModeEnabled;

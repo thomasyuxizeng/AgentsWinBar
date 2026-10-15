@@ -11,61 +11,73 @@
     HorizontalContentAlignment="Stretch">
 
     <UserControl.Resources>
-        <Style x:Key="Meta" TargetType="TextBlock">
-            <Setter Property="FontSize" Value="11"/>
+        <Style x:Key="Caption" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="12"/>
             <Setter Property="Foreground" Value="{ThemeResource TextFillColorSecondaryBrush}"/>
             <Setter Property="TextWrapping" Value="Wrap"/>
         </Style>
+        <Style x:Key="Badge" TargetType="Border">
+            <Setter Property="CornerRadius" Value="4"/>
+            <Setter Property="Padding" Value="6,1"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+        </Style>
     </UserControl.Resources>
 
-    <!-- One usage window: title, meter, reset line, pace and a compact burndown chart -->
-    <StackPanel Spacing="6">
-        <Grid>
+    <!-- One usage window: title and percent, the meter, one reset caption; pace and window facts on demand -->
+    <StackPanel Spacing="4">
+        <Grid ColumnSpacing="8">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
             <StackPanel Orientation="Horizontal" Spacing="8">
-                <TextBlock Text="{x:Bind Data.Title, Mode=OneWay}" FontWeight="SemiBold" FontSize="14"/>
-                <Border CornerRadius="3" Padding="6,1" VerticalAlignment="Center"
+                <TextBlock Text="{x:Bind Data.Title, Mode=OneWay}" FontWeight="SemiBold" FontSize="14" TextTrimming="CharacterEllipsis"/>
+                <Border Style="{StaticResource Badge}"
                         Background="{x:Bind views:DashboardFormat.LimitBrush(Data.UsedPercent), Mode=OneWay}"
                         Visibility="{x:Bind views:DashboardFormat.LimitVis(Data.UsedPercent), Mode=OneWay}">
-                    <TextBlock Text="{x:Bind views:DashboardFormat.LimitLabel(Data.UsedPercent), Mode=OneWay}"
-                               FontSize="9" FontWeight="Bold" Foreground="#CC000000"/>
+                    <TextBlock Text="{x:Bind views:DashboardFormat.LimitLabel(Data.UsedPercent), Mode=OneWay}" FontSize="11" FontWeight="SemiBold"
+                               Foreground="{x:Bind views:DashboardFormat.LimitForeground(Data.UsedPercent), Mode=OneWay}"/>
                 </Border>
-                <Border CornerRadius="3" Padding="6,1" VerticalAlignment="Center"
-                        Background="{x:Bind views:DashboardFormat.EarlyBrush()}"
+                <Border Style="{StaticResource Badge}" Background="{x:Bind views:DashboardFormat.EarlyBrush()}"
                         Visibility="{x:Bind views:DashboardFormat.EarlyVis(Data), Mode=OneWay}">
                     <TextBlock Text="{x:Bind views:DashboardFormat.EarlyChip(Data), Mode=OneWay}"
-                               FontSize="9" FontWeight="Bold" Foreground="#CC000000"/>
+                               FontSize="11" FontWeight="SemiBold" Foreground="#DD000000"/>
                 </Border>
             </StackPanel>
-            <TextBlock HorizontalAlignment="Right" FontSize="14" FontWeight="SemiBold"
+            <TextBlock Grid.Column="1" FontSize="14" FontWeight="SemiBold"
                        Text="{x:Bind views:DashboardFormat.Used(Data.UsedPercent), Mode=OneWay}"/>
         </Grid>
-        <controls:UsageMeter x:Name="Meter" Height="10"
+        <controls:UsageMeter x:Name="Meter" Height="8" Margin="0,2,0,0"
             Percent="{x:Bind Data.UsedPercent, Mode=OneWay}"
             TimePercent="{x:Bind views:DashboardFormat.Time(Data.ElapsedPercent), Mode=OneWay}"
             Accent="{x:Bind Data.Accent, Mode=OneWay}"
             PaceText="{x:Bind Data.PaceSummary, Mode=OneWay}"
             ResetFromPercent="{x:Bind Data.ResetFromUsedPercent, Mode=OneWay}"
             ResetDetectedAtUtc="{x:Bind Data.ResetDetectedAtUtc, Mode=OneWay}"/>
-        <Grid ColumnSpacing="12">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*"/>
-                <ColumnDefinition Width="Auto"/>
-            </Grid.ColumnDefinitions>
-            <TextBlock Style="{StaticResource Meta}"
-                       Text="{x:Bind views:DashboardFormat.ResetLine(Data.ResetText, Data.ResetsAtUtc), Mode=OneWay}"/>
-            <TextBlock Grid.Column="1" Style="{StaticResource Meta}" TextAlignment="Right"
-                       Text="{x:Bind views:DashboardFormat.WindowMeta(Data.WindowMinutes, Data.ElapsedPercent), Mode=OneWay}"/>
-        </Grid>
-        <TextBlock Style="{StaticResource Meta}"
+
+        <!-- One reset caption; in a group sharing a reset only the last row shows it -->
+        <TextBlock Style="{StaticResource Caption}"
+                   Text="{x:Bind views:DashboardFormat.ResetCaption(Data, GroupSize), Mode=OneWay}"
+                   Visibility="{x:Bind views:DashboardFormat.Vis(ShowReset), Mode=OneWay}"/>
+        <TextBlock Style="{StaticResource Caption}"
                    Text="{x:Bind views:DashboardFormat.EarlyDetail(Data), Mode=OneWay}"
                    Visibility="{x:Bind views:DashboardFormat.VisEarlyDetail(Data), Mode=OneWay}"/>
-        <TextBlock Style="{StaticResource Meta}" Foreground="{ThemeResource TextFillColorPrimaryBrush}"
-                   Text="{x:Bind Data.PaceSummary, Mode=OneWay}"
-                   Visibility="{x:Bind views:DashboardFormat.VisText(Data.PaceSummary), Mode=OneWay}"/>
-        <TextBlock Style="{StaticResource Meta}"
-                   Text="{x:Bind views:DashboardFormat.Changed(Data.LastChangedAtUtc), Mode=OneWay}"
-                   Visibility="{x:Bind views:DashboardFormat.VisNotNull(Data.LastChangedAtUtc), Mode=OneWay}"/>
-        <controls:BurndownChart IsCompact="True" Margin="0,2,0,0"
-                                Series="{x:Bind Data.History, Mode=OneWay}" Accent="{x:Bind Data.Accent, Mode=OneWay}"/>
+        <!-- Up front only when the window is on course to run out -->
+        <StackPanel Orientation="Horizontal" Spacing="6"
+                    Visibility="{x:Bind views:DashboardFormat.VisPaceAlert(Data), Mode=OneWay}">
+            <FontIcon FontFamily="Segoe Fluent Icons" Glyph="&#xE7BA;" FontSize="12" VerticalAlignment="Top" Margin="0,2,0,0"
+                      Foreground="{ThemeResource SystemFillColorCautionBrush}"/>
+            <TextBlock FontSize="12" TextWrapping="Wrap" Foreground="{ThemeResource SystemFillColorCautionBrush}"
+                       Text="{x:Bind Data.PaceSummary, Mode=OneWay}"/>
+        </StackPanel>
+
+        <!-- Details on demand -->
+        <StackPanel Spacing="4" Margin="0,2,0,0" Visibility="{x:Bind views:DashboardFormat.Vis(ShowDetails), Mode=OneWay}">
+            <TextBlock FontSize="12" TextWrapping="Wrap"
+                       Text="{x:Bind Data.PaceSummary, Mode=OneWay}"
+                       Visibility="{x:Bind views:DashboardFormat.VisPaceDetail(Data, ShowDetails), Mode=OneWay}"/>
+            <TextBlock Style="{StaticResource Caption}"
+                       Text="{x:Bind views:DashboardFormat.WindowDetail(Data), Mode=OneWay}"/>
+        </StackPanel>
     </StackPanel>
 </UserControl>

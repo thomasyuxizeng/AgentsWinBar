@@ -328,6 +328,42 @@ output=$(CODEXBAR_CLAUDE_CLI_COOLDOWN=2 OAUTH_OUT=$expired OAUTH_EXIT=3 CLI_OUT=
 [[ "$(cat "$CALLS")" = $'oauth\ncli' ]]
 [[ ! -e "$TMP/claude-cache/codexbar-claude-$uid-cli-broken" ]]
 
+# Claude cache must not hide an already-due window reset (finding B3).
+# A young cache whose resetsAt is in the past must fall through to the live route and refresh the cache.
+: > "$CALLS"; rm -f "$TMP"/claude-cache/*
+stale_reset='2020-01-01T00:00:00Z'
+fresh_reset='2099-01-01T00:00:00Z'
+fresh_good='[{"provider":"claude","source":"oauth","usage":{"primary":{"usedPercent":0,"resetsAt":"'"$fresh_reset"'"}}}]'
+printf '%s\n' "[{\"provider\":\"claude\",\"source\":\"oauth\",\"usage\":{\"updatedAt\":\"$observed\",\"primary\":{\"usedPercent\":100,\"resetsAt\":\"$stale_reset\"}}}]" > "$cache_file"
+output=$(OAUTH_OUT=$fresh_good OAUTH_EXIT=0 CLI_OUT='[]' CLI_EXIT=1 bash "$TMP/claude-shim" usage --provider claude --format json --source cli)
+[[ "$output" = "$fresh_good" ]]
+[[ "$(cat "$CALLS")" = oauth ]]
+check "$(cat "$cache_file")" "$fresh_reset"
+
+# Conversely, a young cache with a future resetsAt is served immediately without calling upstream.
+: > "$CALLS"
+output=$(OAUTH_OUT=$expired OAUTH_EXIT=3 CLI_OUT='[]' CLI_EXIT=1 bash "$TMP/claude-shim" usage --provider claude --format json --source cli)
+check "$output" '"cached": true'
+check "$output" "$fresh_reset"
+[[ -z "$(cat "$CALLS")" ]]
+
+# When upstream is rate limited during a reset refresh, the young (stale-window) cache is still served as fallback.
+: > "$CALLS"; rm -f "$TMP"/claude-cache/*
+printf '%s\n' "[{\"provider\":\"claude\",\"source\":\"oauth\",\"usage\":{\"updatedAt\":\"$observed\",\"primary\":{\"usedPercent\":100,\"resetsAt\":\"$stale_reset\"}}}]" > "$cache_file"
+output=$(OAUTH_OUT=$limited OAUTH_EXIT=3 CLI_OUT='[]' CLI_EXIT=1 bash "$TMP/claude-shim" usage --provider claude --format json --source cli)
+check "$output" '"cached": true'
+check "$output" "$stale_reset"
+[[ "$(cat "$CALLS")" = oauth ]]
+
+# A young cache without any resetsAt behaves as before (served immediately).
+: > "$CALLS"; rm -f "$TMP"/claude-cache/*
+no_reset_good='[{"provider":"claude","source":"oauth","usage":{"primary":{"usedPercent":42}}}]'
+printf '%s\n' "$no_reset_good" > "$cache_file"
+output=$(OAUTH_OUT=$expired OAUTH_EXIT=3 CLI_OUT='[]' CLI_EXIT=1 bash "$TMP/claude-shim" usage --provider claude --format json --source cli)
+check "$output" '"cached": true'
+check "$output" '"usedPercent": 42'
+[[ -z "$(cat "$CALLS")" ]]
+
 # Gemini must report transform failure when the real CLI succeeds, and retain CLI failures.
 mkdir "$TMP/transform-bin"
 cat > "$TMP/transform-bin/python3" <<'PYTHON'

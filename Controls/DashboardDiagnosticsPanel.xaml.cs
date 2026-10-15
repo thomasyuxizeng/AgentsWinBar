@@ -5,7 +5,7 @@ using Microsoft.UI.Xaml.Controls;
 
 namespace CodexBarWin.Controls;
 
-/// <summary>The dashboard's right-hand column: system facts, effective settings, history store, cost scans, refresh log and alerts.</summary>
+/// <summary>The dashboard's diagnostics (inside its expander): system facts, effective settings, history store, cost scans, refresh log and alerts.</summary>
 public sealed partial class DashboardDiagnosticsPanel : UserControl
 {
     public static readonly DependencyProperty DataProperty = DependencyProperty.Register(nameof(Data),
@@ -98,9 +98,10 @@ public sealed partial class DashboardDiagnosticsPanel : UserControl
         if (!HistoryFacts.SequenceEqual(historyFacts)) HistoryFacts = historyFacts;
         if (!CostCacheFacts.SequenceEqual(costCacheFacts)) CostCacheFacts = costCacheFacts;
         Bindings.Update();
+        Arrange();
     }
 
-    private int _columns = -1;
+    private string _arranged = string.Empty;
 
     private void OnSizeChanged(object sender, SizeChangedEventArgs e)
     {
@@ -108,16 +109,20 @@ public sealed partial class DashboardDiagnosticsPanel : UserControl
         catch (Exception ex) { App.LogHandled("Dashboard layout update failed", ex); }
     }
 
-    /// <summary>Flows the cards into as many columns as fit (a 380-wide side column is one; the full-width layout is up to three).</summary>
+    /// <summary>
+    /// Flows the visible cards into as many columns as fit (up to three); a collapsed card (no cost scans) leaves no hole.
+    /// </summary>
     private void Arrange()
     {
         var columns = Math.Clamp((int)Math.Floor((CardsGrid.ActualWidth + 12) / (340 + 12)), 1, 3);
-        if (columns == _columns) return;
-        _columns = columns;
+        UIElement[] all = [Card0, Card1, Card2, Card3, Card4, Card5];
+        var cards = all.Where(c => c.Visibility == Visibility.Visible).ToArray();
+        var key = $"{columns}|{cards.Length}|{Card3.Visibility}";
+        if (key == _arranged) return;
+        _arranged = key;
         CardsGrid.ColumnDefinitions.Clear();
         CardsGrid.RowDefinitions.Clear();
         for (var c = 0; c < columns; c++) CardsGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        UIElement[] cards = [Card0, Card1, Card2, Card3, Card4, Card5];
         for (var r = 0; r < (int)Math.Ceiling(cards.Length / (double)columns); r++) CardsGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         for (var i = 0; i < cards.Length; i++)
         {

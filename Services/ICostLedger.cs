@@ -15,6 +15,8 @@ public interface ICostLedger
 
     Task RecordScanAsync(CostData scan, DateTime? nowUtc = null, CancellationToken ct = default);
 
+    Task RecordScansAsync(IReadOnlyList<CostData> scans, DateTime? nowUtc = null, CancellationToken ct = default);
+
     CostLedgerLifetimeResult GetLifetime(string? provider = null);
 
     CostLedgerRangeResult GetRange(string? provider = null, DateOnly fromDay = default, DateOnly toDay = default);

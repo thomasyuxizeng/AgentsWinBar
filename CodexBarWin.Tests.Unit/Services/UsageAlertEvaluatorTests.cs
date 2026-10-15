@@ -228,4 +228,106 @@ public class UsageAlertEvaluatorTests
         alerts[0].Title.Should().Be("Codex weekly usage");
         alerts[0].Message.Should().Be("95% used, resets in 1d 6h");
     }
+
+    [TestMethod]
+    public void Evaluate_WhenStaleReplayAtLimitWithPastResetAt_YieldsNoAlertAndDoesNotConsumeDeduplication()
+    {
+        var evaluator = new UsageAlertEvaluator();
+        var staleData = Provider("claude", 100, -60) with
+        {
+            UsageIsCached = true,
+            UsageIsStale = true
+        };
+
+        var staleAlerts = evaluator.Evaluate([staleData], Now);
+        staleAlerts.Should().BeEmpty();
+
+        var freshData = Provider("claude", 100, 60);
+        var freshAlerts = evaluator.Evaluate([freshData], Now);
+
+        freshAlerts.Should().ContainSingle();
+        freshAlerts[0].Title.Should().Be("Claude session limit reached");
+    }
+
+    [TestMethod]
+    public void Evaluate_WhenWindowIsExpired_SkipsExpiredWindowWhileFreshSiblingAlerts()
+    {
+        var evaluator = new UsageAlertEvaluator();
+        var data = new UsageData
+        {
+            Provider = "claude",
+            Session = new UsageWindow
+            {
+                Used = 100,
+                Limit = 100,
+                WindowMinutes = 300,
+                ResetAt = Now.AddMinutes(-30)
+            },
+            Weekly = new UsageWindow
+            {
+                Used = 100,
+                Limit = 100,
+                WindowMinutes = 10080,
+                ResetAt = Now.AddDays(2)
+            }
+        };
+
+        var alerts = evaluator.Evaluate([data], Now);
+
+        alerts.Should().ContainSingle();
+        alerts[0].Title.Should().Be("Claude weekly limit reached");
+
+        var subsequent = new UsageData
+        {
+            Provider = "claude",
+            Session = new UsageWindow
+            {
+                Used = 100,
+                Limit = 100,
+                WindowMinutes = 300,
+                ResetAt = Now.AddHours(4)
+            },
+            Weekly = data.Weekly
+        };
+        var subsequentAlerts = evaluator.Evaluate([subsequent], Now);
+        subsequentAlerts.Should().ContainSingle();
+        subsequentAlerts[0].Title.Should().Be("Claude session limit reached");
+    }
+
+    [TestMethod]
+    public void Evaluate_WhenUsageIsFresh_AlertsNormally()
+    {
+        var evaluator = new UsageAlertEvaluator();
+        var data = Provider("claude", 100, 60) with
+        {
+            UsageIsStale = false,
+            UsageIsCached = false
+        };
+
+        var alerts = evaluator.Evaluate([data], Now);
+
+        alerts.Should().ContainSingle();
+        alerts[0].Title.Should().Be("Claude session limit reached");
+    }
+
+    [TestMethod]
+    public void Evaluate_WhenUsageIsStaleWithFutureResetAt_YieldsNoAlert()
+    {
+        var evaluator = new UsageAlertEvaluator();
+        var staleData = Provider("claude", 100, 60) with
+        {
+            UsageIsStale = true,
+            UsageIsCached = true
+        };
+
+        var alerts = evaluator.Evaluate([staleData], Now);
+
+        alerts.Should().BeEmpty();
+
+        var freshData = staleData with { UsageIsStale = false };
+        var freshAlerts = evaluator.Evaluate([freshData], Now);
+
+        freshAlerts.Should().ContainSingle();
+        freshAlerts[0].Title.Should().Be("Claude session limit reached");
+    }
 }

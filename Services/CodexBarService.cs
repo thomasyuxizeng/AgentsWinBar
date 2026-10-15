@@ -161,6 +161,7 @@ public class CodexBarService : ICodexBarService
         await _costGate.WaitAsync(ct);
         var previousAttempts = new Dictionary<string, (DateTimeOffset AttemptedAt, CostData? Data)?>();
         var completedProviders = new HashSet<string>(StringComparer.Ordinal);
+        var ledgerScans = new List<CostData>();
         try
         {
             if (!CostsEnabled) return;
@@ -209,7 +210,7 @@ public class CodexBarService : ICodexBarService
                 if (completed[index]) return;
                 completed[index] = true;
                 var costsEnabled = CostsEnabled;
-                var data = costsEnabled ? InterpretCostResult(due[index], result, now) : null;
+                var data = costsEnabled ? InterpretCostResult(due[index], result, now, ledgerScans) : null;
                 if (data == null && costsEnabled)
                     lock (_costCache) data = LastGoodCost(due[index], now);
                 if (costsEnabled)
@@ -287,6 +288,17 @@ public class CodexBarService : ICodexBarService
             // Results that completed before a cancellation (e.g. the dashboard closed mid-scan) are complete and
             // worth keeping; the snapshot only ever holds complete results.
             await SaveCostStoreAsync();
+            if (_costLedger != null)
+            {
+                List<CostData> scansToRecord;
+                lock (_costCache) scansToRecord = [.. ledgerScans];
+                if (scansToRecord.Count > 0)
+                {
+                    Helpers.AsyncHelper.SafeFireAndForget(
+                        _costLedger.RecordScansAsync(scansToRecord, _timeProvider.GetUtcNow().UtcDateTime),
+                        onError: ex => _logger.LogDebug(ex, "Cost ledger update failed"));
+                }
+            }
             _costGate.Release();
         }
     }
@@ -327,7 +339,7 @@ public class CodexBarService : ICodexBarService
         }
     }
 
-    private CostData? InterpretCostResult(string provider, WslResult result, DateTimeOffset attemptedAt)
+    private CostData? InterpretCostResult(string provider, WslResult result, DateTimeOffset attemptedAt, List<CostData>? ledgerScans = null)
     {
         try
         {
@@ -351,13 +363,8 @@ public class CodexBarService : ICodexBarService
                     _lastGoodCost[provider] = data;
                     _restoredCost.Remove(provider);
                     _costStoreDirty = true;
+                    ledgerScans?.Add(data);
                 }
-            }
-            if (data.HasData && _costLedger != null)
-            {
-                Helpers.AsyncHelper.SafeFireAndForget(
-                    _costLedger.RecordScanAsync(data, attemptedAt.UtcDateTime),
-                    onError: ex => _logger.LogDebug(ex, "Cost ledger update failed for {Provider}", provider));
             }
             return data.HasData ? data : null;
         }
@@ -759,13 +766,34 @@ public class CodexBarService : ICodexBarService
         // Case 2: CLI SUPPLIED a status (e.g. Claude, Codex, etc.)
         var cliStatus = data.ServiceStatus;
 
-        // MERGE rule 0: a replayed (cached) CLI status is older than the status page the app just fetched. When the
-        // replay says healthy but the fetched page reports an open incident, trust the fetched page.
-        if (cliStatus.Indicator == ProviderStatusIndicator.None && data.UsageIsCached && status != null &&
-            status.Indicator != ProviderStatusIndicator.None &&
-            (!string.IsNullOrWhiteSpace(status.IncidentTitle) || !string.IsNullOrWhiteSpace(status.LatestUpdateText)))
+        // MERGE rule 0: a replayed (cached) CLI status is older than the status page the app just fetched.
+        // Prefer the freshly fetched status over a replayed CLI status in both directions:
+        // 1. Outage: replay says healthy, but fetched page reports an open incident.
+        // 2. Recovery: replay says outage, but fetched page reports healthy (indicator None).
+        var observationAt = data.DataUpdatedAt ?? data.CacheUpdatedAt;
+        var isCliReplay = data.UsageIsCached || (!data.UsageIsCached && observationAt.HasValue && Helpers.DataAge.OldReadingUtc(data.FetchedAt, observationAt.Value) != null);
+        if (isCliReplay && status != null)
         {
-            return data with { ServiceStatus = status };
+            if (status.Indicator == ProviderStatusIndicator.None)
+            {
+                return data with
+                {
+                    ServiceStatus = status with
+                    {
+                        IncidentTitle = null,
+                        LatestUpdateText = null,
+                        LatestUpdateAt = null,
+                        Url = !string.IsNullOrWhiteSpace(status.Url) ? status.Url : cliStatus.Url
+                    }
+                };
+            }
+
+            if (cliStatus.Indicator == ProviderStatusIndicator.None &&
+                status.Indicator != ProviderStatusIndicator.None &&
+                (!string.IsNullOrWhiteSpace(status.IncidentTitle) || !string.IsNullOrWhiteSpace(status.LatestUpdateText)))
+            {
+                return data with { ServiceStatus = status };
+            }
         }
 
         // MERGE rule 1: If CLI returned an indicator of 'None' (healthy), clear any old incident detail

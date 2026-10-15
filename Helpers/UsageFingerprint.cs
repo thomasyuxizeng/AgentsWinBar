@@ -39,6 +39,13 @@ public sealed class UsageFingerprint
         return new UsageFingerprint(snapshots, hasError);
     }
 
+    /// <summary>
+    /// A rolling window with no usage (Gemini's 5-hour windows, an idle Codex session) reports "now plus the window length"
+    /// as its reset time, so that time drifts by the refresh interval while nothing else moves. Drift up to this much is
+    /// not a change; a real reset also moves the percentage.
+    /// </summary>
+    public static readonly TimeSpan ResetDriftTolerance = TimeSpan.FromHours(1);
+
     public bool HasChangedFrom(UsageFingerprint? previous, double tolerance = 0.05)
     {
         if (previous == null || _hasError || previous._hasError || _providers.Count != previous._providers.Count)
@@ -53,7 +60,7 @@ public sealed class UsageFingerprint
             {
                 var current = windows[i];
                 var old = oldWindows[i];
-                if (current.Key != old.Key || current.ResetAt != old.ResetAt ||
+                if (current.Key != old.Key || ResetChanged(current.ResetAt, old.ResetAt) ||
                     !double.IsFinite(current.Percent) || !double.IsFinite(old.Percent) ||
                     Math.Abs(current.Percent - old.Percent) > tolerance + 1e-9)
                     return true;
@@ -61,6 +68,10 @@ public sealed class UsageFingerprint
         }
         return false;
     }
+
+    private static bool ResetChanged(DateTime? current, DateTime? old) =>
+        current.HasValue != old.HasValue ||
+        (current.HasValue && (current.Value - old!.Value).Duration() > ResetDriftTolerance);
 
     private sealed record WindowSnapshot(string Key, double Percent, DateTime? ResetAt);
 }

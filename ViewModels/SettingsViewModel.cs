@@ -40,6 +40,12 @@ public partial class SettingsViewModel : ObservableObject
     private bool _showCostTotals;
 
     [ObservableProperty]
+    private decimal _apiCreditsMonthlyUsd = 200;
+
+    [ObservableProperty]
+    private int _apiCreditsCycleStartDay = 1;
+
+    [ObservableProperty]
     private int _selectedThemeIndex;
 
     [ObservableProperty]
@@ -83,6 +89,7 @@ public partial class SettingsViewModel : ObservableObject
                 Id = provider.Id,
                 DisplayName = provider.DisplayName,
                 IsEnabled = provider.IsEnabled,
+                ShowGraphs = provider.ShowGraphs,
                 Order = i
             });
         }
@@ -94,6 +101,8 @@ public partial class SettingsViewModel : ObservableObject
         TaskbarDisplay = settings.TaskbarDisplayEnabled;
         AlertsEnabled = settings.AlertsEnabled;
         ShowCostTotals = settings.ShowCostTotals;
+        ApiCreditsMonthlyUsd = settings.ApiCreditsMonthlyUsd;
+        ApiCreditsCycleStartDay = settings.ApiCreditsCycleStartDay;
         SelectedThemeIndex = (int)settings.Theme;
         SelectedResetAnimationMode = settings.ResetAnimationMode;
         DeveloperModeEnabled = settings.DeveloperModeEnabled;
@@ -136,7 +145,8 @@ public partial class SettingsViewModel : ObservableObject
         var previousProviders = settings.Providers.Select(p => p with { }).ToList();
         var previous = (settings.RefreshIntervalSeconds, settings.StartWithWindows, settings.StartMinimized,
             settings.AlwaysOnOverlayEnabled, settings.TaskbarDisplayEnabled, settings.AlertsEnabled,
-            settings.ShowCostTotals, settings.Theme, settings.DeveloperModeEnabled, settings.ResetAnimationMode);
+            settings.ShowCostTotals, settings.Theme, settings.DeveloperModeEnabled, settings.ResetAnimationMode,
+            settings.ApiCreditsMonthlyUsd, settings.ApiCreditsCycleStartDay);
 
         // Update providers (including order)
         foreach (var provider in Providers)
@@ -145,6 +155,7 @@ public partial class SettingsViewModel : ObservableObject
             if (existing != null)
             {
                 existing.IsEnabled = provider.IsEnabled;
+                existing.ShowGraphs = provider.ShowGraphs;
                 existing.Order = provider.Order;
             }
         }
@@ -156,6 +167,8 @@ public partial class SettingsViewModel : ObservableObject
         settings.TaskbarDisplayEnabled = TaskbarDisplay;
         settings.AlertsEnabled = AlertsEnabled;
         settings.ShowCostTotals = ShowCostTotals;
+        settings.ApiCreditsMonthlyUsd = Helpers.ApiCreditsCalculator.NormalizeMonthlyUsd(ApiCreditsMonthlyUsd);
+        settings.ApiCreditsCycleStartDay = ApiCreditsCycleStartDay is >= 1 and <= 28 ? ApiCreditsCycleStartDay : 1;
         settings.Theme = (AppTheme)SelectedThemeIndex;
         settings.ResetAnimationMode = Enum.IsDefined(SelectedResetAnimationMode)
             ? SelectedResetAnimationMode : ResetAnimationMode.WhenNotBatterySaver;
@@ -168,7 +181,8 @@ public partial class SettingsViewModel : ObservableObject
             settings.Providers = previousProviders;
             (settings.RefreshIntervalSeconds, settings.StartWithWindows, settings.StartMinimized,
                 settings.AlwaysOnOverlayEnabled, settings.TaskbarDisplayEnabled, settings.AlertsEnabled,
-                settings.ShowCostTotals, settings.Theme, settings.DeveloperModeEnabled, settings.ResetAnimationMode) = previous;
+                settings.ShowCostTotals, settings.Theme, settings.DeveloperModeEnabled, settings.ResetAnimationMode,
+                settings.ApiCreditsMonthlyUsd, settings.ApiCreditsCycleStartDay) = previous;
             throw;
         }
 
@@ -186,6 +200,7 @@ public partial class SettingsViewModel : ObservableObject
 
     private async Task UpdateStartupAsync()
     {
+#if WINDOWS
         try
         {
             var startupTask = await Windows.ApplicationModel.StartupTask.GetAsync("CodexBarWinStartup");
@@ -203,6 +218,9 @@ public partial class SettingsViewModel : ObservableObject
         {
             _logger.LogWarning(ex, "Failed to update startup setting");
         }
+#else
+        await Task.CompletedTask;
+#endif
     }
 }
 
@@ -221,6 +239,9 @@ public partial class ProviderConfigViewModel : ObservableObject
 
     [ObservableProperty]
     private bool _isEnabled;
+
+    [ObservableProperty]
+    private bool _showGraphs = true;
 
     [ObservableProperty]
     private int _order;

@@ -15,6 +15,33 @@ public class DashboardSnapshotBuilderTests
     private static DashboardInputs Inputs(params UsageData[] providers) => new() { Providers = providers, NowUtc = Now };
 
     [TestMethod]
+    [DataRow(true)]
+    [DataRow(false)]
+    public void Build_ApiCreditsInput_AttachesOnlyToClaudeRegardlessOfCostVisibility(bool showCosts)
+    {
+        var credits = ApiCreditsCalculator.BuildOk(200, 95.33m, 1, Now, Now);
+        var result = DashboardSnapshotBuilder.Build(Inputs(Provider(), Provider("codex"), Provider("gemini")) with
+        { Settings = new() { ShowCostTotals = showCosts }, ApiCredits = credits });
+        result.Providers.Single(p => p.Id == "claude").ApiCredits.Should().BeSameAs(credits);
+        result.Providers.Where(p => p.Id != "claude").Should().OnlyContain(p => p.ApiCredits == null);
+    }
+
+    [TestMethod]
+    public void Build_RetainedUsageWithCliCreditsPruned_PreservesIndependentApiCredits()
+    {
+        var retained = CodexBarWin.Services.CacheRetention.PruneExpired(Provider() with
+        {
+            FetchedAt = Now.AddDays(-8), Credits = new(),
+            ServiceStatus = new() { UpdatedAt = Now }, LastSuccessfulStatusFetch = Now
+        }, Now)!;
+        retained.Credits.Should().BeNull();
+        var credits = ApiCreditsCalculator.BuildOk(200, 95.33m, 1, Now, Now.AddMinutes(-20));
+        var result = DashboardSnapshotBuilder.Build(Inputs(retained) with { ApiCredits = credits });
+        result.Providers.Single().ApiCredits.Should().BeSameAs(credits);
+        result.Providers.Single().ApiCredits!.IsStale.Should().BeTrue();
+    }
+
+    [TestMethod]
     public void Build_ThresholdBoundaries_CountsWindowsAndSelectsCallouts()
     {
         var inputs = Inputs(Provider() with { Session = Window(90), Weekly = Window(89.99, 100),

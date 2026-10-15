@@ -882,6 +882,62 @@ public class CodexBarServiceTests
         _mockWslService.ExecutedCommands.Should().BeEmpty();
     }
 
+    private CodexBarService LedgerCostService(ICostLedger ledger, CostClock? clock = null) =>
+        new(_mockWslService, _mockCacheService, _mockSettingsService, _mockSampleDataLoader, _mockLogger.Object,
+            clock ?? new CostClock(), () => "C:\\Users\\Test", _ => true, costLedger: ledger);
+
+    [TestMethod]
+    public async Task GetCostsAsync_BatchScan_CallsRecordScansAsyncOnceWithAllSuccessfulProviders()
+    {
+        var ledger = new Mock<ICostLedger>();
+        var tcs = new TaskCompletionSource<IReadOnlyList<CostData>>(TaskCreationOptions.RunContinuationsAsynchronously);
+        ledger.Setup(l => l.RecordScansAsync(It.IsAny<IReadOnlyList<CostData>>(), It.IsAny<DateTime?>(), It.IsAny<CancellationToken>()))
+            .Callback<IReadOnlyList<CostData>, DateTime?, CancellationToken>((scans, _, _) => tcs.TrySetResult(scans))
+            .Returns(Task.CompletedTask);
+
+        _mockWslService.BatchHandler = (_, completed, _) =>
+        {
+            IReadOnlyList<WslResult> batch = [CostResult("claude", tokens: 100), CostResult("codex", tokens: 200)];
+            completed!(0, batch[0]);
+            completed(1, batch[1]);
+            return Task.FromResult(batch);
+        };
+
+        var service = LedgerCostService(ledger.Object);
+        var results = await CollectCostsAsync(service, ["claude", "codex"]);
+        results.Should().HaveCount(2);
+
+        var recordedScans = await tcs.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        recordedScans.Should().HaveCount(2);
+        recordedScans.Select(s => s.Provider).Should().BeEquivalentTo(["claude", "codex"]);
+
+        ledger.Verify(l => l.RecordScansAsync(It.IsAny<IReadOnlyList<CostData>>(), It.IsAny<DateTime?>(), It.IsAny<CancellationToken>()), Times.Once);
+        ledger.Verify(l => l.RecordScanAsync(It.IsAny<CostData>(), It.IsAny<DateTime?>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [TestMethod]
+    public async Task GetCostsAsync_BatchScan_WhenNoProviderHasData_DoesNotCallRecordScansAsync()
+    {
+        var ledger = new Mock<ICostLedger>();
+
+        _mockWslService.BatchHandler = (_, completed, _) =>
+        {
+            IReadOnlyList<WslResult> batch = [new() { Success = false, Error = "failure" }];
+            completed!(0, batch[0]);
+            return Task.FromResult(batch);
+        };
+
+        var service = LedgerCostService(ledger.Object);
+        var results = await CollectCostsAsync(service, ["claude"]);
+        results.Should().HaveCount(1);
+        results[0].Cost.Should().BeNull();
+
+        await Task.Delay(50);
+
+        ledger.Verify(l => l.RecordScansAsync(It.IsAny<IReadOnlyList<CostData>>(), It.IsAny<DateTime?>(), It.IsAny<CancellationToken>()), Times.Never);
+        ledger.Verify(l => l.RecordScanAsync(It.IsAny<CostData>(), It.IsAny<DateTime?>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
     [TestMethod]
     public async Task GetAllUsageAsync_CommandNotFoundAfterIndividualRetry_ReportsCommandNotFound()
     {

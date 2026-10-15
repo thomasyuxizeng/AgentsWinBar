@@ -59,13 +59,20 @@ public sealed partial class OverlayWindow : Window
 
     private readonly MainViewModel _viewModel;
     private readonly ISettingsService _settingsService;
+    private readonly ISessionStateSource _sessionState;
     private readonly IntPtr _hwnd;
     private readonly DispatcherTimer _topmostTimer;
     private int _tickCount;
     private bool _hiddenForFullscreen;
+    private bool _closed;
     private WindowZOrder.ForegroundWatcher? _foregroundWatcher;
     private DesktopAcrylicController? _acrylicController;
     private SystemBackdropConfiguration? _backdropConfiguration;
+    private string? _lastSignature;
+    private string? _lastApplySizeSignature;
+    private double _lastScale;
+    private SizeInt32 _lastTargetSize;
+    private bool _hasTargetSize;
 
     public ObservableCollection<OverlayRow> Rows { get; } = [];
 
@@ -85,12 +92,16 @@ public sealed partial class OverlayWindow : Window
 
         _viewModel = App.Services.GetRequiredService<MainViewModel>();
         _settingsService = App.Services.GetRequiredService<ISettingsService>();
+        _sessionState = App.Services.GetRequiredService<ISessionStateSource>();
         _hwnd = WindowNative.GetWindowHandle(this);
 
         ConfigureWindow();
         SetupAcrylicBackdrop();
 
         _viewModel.Providers.CollectionChanged += OnProvidersChanged;
+        _sessionState.Locked += OnSessionLocked;
+        _sessionState.Unlocked += OnSessionUnlocked;
+        _sessionState.Resumed += OnSessionUnlocked;
         Rebuild();
         PositionWindow();
 
@@ -98,15 +109,23 @@ public sealed partial class OverlayWindow : Window
         _topmostTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
         _topmostTimer.Tick += (_, _) =>
         {
+            if (_closed || !AppWindow.IsVisible || _sessionState.IsLocked)
+            {
+                _topmostTimer.Stop();
+                return;
+            }
+
             UpdateFullscreenVisibility();
-            WindowZOrder.AssertTopmost(_hwnd);
-            ApplySize();   // follows display scale changes (e.g. remote desktop)
+            if (_hiddenForFullscreen) return;
 
             // Time keeps passing between data refreshes, so refresh the time layer about every 30s
             if (++_tickCount % 15 == 0)
             {
                 Rebuild();
             }
+
+            ApplySize();   // follows display scale changes (e.g. remote desktop)
+            WindowZOrder.AssertTopmost(_hwnd);
         };
 
         App.Windows.Add(this);
@@ -131,9 +150,15 @@ public sealed partial class OverlayWindow : Window
         _foregroundWatcher ??= new WindowZOrder.ForegroundWatcher(() =>
         {
             UpdateFullscreenVisibility();
-            WindowZOrder.AssertTopmost(_hwnd);
+            if (!_hiddenForFullscreen && !_sessionState.IsLocked && AppWindow.IsVisible)
+            {
+                WindowZOrder.AssertTopmost(_hwnd);
+            }
         });
-        _topmostTimer.Start();
+        if (!_sessionState.IsLocked)
+        {
+            _topmostTimer.Start();
+        }
     }
 
     /// <summary>
@@ -146,12 +171,55 @@ public sealed partial class OverlayWindow : Window
         {
             _hiddenForFullscreen = true;
             AppWindow.Hide();
+            _topmostTimer.Stop();
         }
         else if (!fullscreen && _hiddenForFullscreen)
         {
             _hiddenForFullscreen = false;
             AppWindow.Show(false);
+            if (!_closed && !_sessionState.IsLocked)
+            {
+                _tickCount = 0;
+                Rebuild();
+                ApplySize();
+                WindowZOrder.AssertTopmost(_hwnd);
+                _topmostTimer.Start();
+            }
         }
+    }
+
+    private void OnSessionLocked(object? sender, EventArgs e)
+    {
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            try
+            {
+                _topmostTimer.Stop();
+            }
+            catch { }
+        });
+    }
+
+    private void OnSessionUnlocked(object? sender, EventArgs e)
+    {
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            try
+            {
+                if (_closed || !AppWindow.IsVisible || _sessionState.IsLocked) return;
+
+                UpdateFullscreenVisibility();
+                if (_hiddenForFullscreen) return;
+
+                _tickCount = 0;
+                Rebuild();
+                ApplySize();
+                WindowZOrder.AssertTopmost(_hwnd);
+
+                _topmostTimer.Start();
+            }
+            catch { }
+        });
     }
 
     private void ConfigureWindow()
@@ -206,9 +274,63 @@ public sealed partial class OverlayWindow : Window
         DispatcherQueue.TryEnqueue(Rebuild);
     }
 
+    internal static int RoundTimePercent(double? elapsed)
+    {
+        if (elapsed is not { } value || !double.IsFinite(value) || value < 0)
+        {
+            return -1;
+        }
+        return (int)Math.Clamp(Math.Round(value, MidpointRounding.AwayFromZero), 0, 100);
+    }
+
+    internal static string ComputeSignature(IEnumerable<UsageData> providers, DateTime nowUtc)
+    {
+        var sb = new System.Text.StringBuilder();
+        foreach (var data in providers)
+        {
+            var bars = WidgetBarSelector.Pick(data, nowUtc);
+            var first = bars.ElementAtOrDefault(0);
+            var second = bars.ElementAtOrDefault(1);
+
+            (double Percent, string Text) Cell(WidgetBar? bar) =>
+                bar != null ? (bar.Window.Percent, bar.Window.PercentText) : (0, data.IsLoading ? "…" : "–");
+
+            var firstCell = Cell(first);
+            var secondCell = Cell(second);
+
+            sb.Append('|').Append(data.Provider)
+              .Append(';').Append(data.IsLoading)
+              .Append(';').Append(data.ServiceStatus?.Indicator)
+              .Append(';').Append(StatusDetailCaption.Tooltip(data.ServiceStatus, nowUtc))
+              .Append(';').Append(firstCell.Percent)
+              .Append(';').Append(firstCell.Text)
+              .Append(';').Append(RoundTimePercent(first?.Window.ElapsedPercent))
+              .Append(';').Append(first?.TooltipText)
+              .Append(';').Append(first?.Accent)
+              .Append(';').Append(first?.Window.ResetFromUsedPercent)
+              .Append(';').Append(first?.Window.ResetDetectedAtUtc?.Ticks)
+              .Append(';').Append(secondCell.Percent)
+              .Append(';').Append(secondCell.Text)
+              .Append(';').Append(RoundTimePercent(second?.Window.ElapsedPercent))
+              .Append(';').Append(second?.TooltipText)
+              .Append(';').Append(second?.Accent)
+              .Append(';').Append(second?.Window.ResetFromUsedPercent)
+              .Append(';').Append(second?.Window.ResetDetectedAtUtc?.Ticks);
+        }
+        return sb.ToString();
+    }
+
     private void Rebuild()
     {
-        var rows = _viewModel.Providers.Select(ToRow).ToList();
+        var nowUtc = DateTime.UtcNow;
+        var signature = ComputeSignature(_viewModel.Providers, nowUtc);
+        if (_lastSignature != null && _lastSignature == signature)
+        {
+            return;
+        }
+        _lastSignature = signature;
+
+        var rows = _viewModel.Providers.Select(p => ToRow(p, nowUtc)).ToList();
 
         // Number columns are sized from the actual text, with two digits ("88%") as the typical minimum,
         // so 1-2 digit values sit snugly next to their bars and "%" signs line up; a rare "100%" just
@@ -239,11 +361,11 @@ public sealed partial class OverlayWindow : Window
         return block.DesiredSize.Width;
     }
 
-    private static OverlayRow ToRow(UsageData data)
+    private static OverlayRow ToRow(UsageData data, DateTime nowUtc)
     {
         // The two most relevant bars: normally session + weekly, but a more relevant window
         // (at/near its limit, ahead of schedule, or recently changed) can take a slot
-        var bars = WidgetBarSelector.Pick(data, DateTime.UtcNow);
+        var bars = WidgetBarSelector.Pick(data, nowUtc);
         var first = bars.ElementAtOrDefault(0);
         var second = bars.ElementAtOrDefault(1);
 
@@ -258,7 +380,7 @@ public sealed partial class OverlayWindow : Window
             Icon = ProviderIcons.GetGeometry(data.Provider),
             StatusBrush = Controls.ProviderStatusVisuals.Brush(data.ServiceStatus),
             IncidentVisibility = ProviderStatusPresentation.IsIncident(data.ServiceStatus) ? Visibility.Visible : Visibility.Collapsed,
-            StatusDescription = StatusDetailCaption.Tooltip(data.ServiceStatus, DateTime.UtcNow),
+            StatusDescription = StatusDetailCaption.Tooltip(data.ServiceStatus, nowUtc),
             SessionPercent = firstCell.Percent,
             SessionWindow = first?.Window,
             WeeklyWindow = second?.Window,
@@ -282,6 +404,23 @@ public sealed partial class OverlayWindow : Window
     private void ApplySize()
     {
         var scale = WindowZOrder.GetScale(_hwnd);
+        var contentChanged = _lastApplySizeSignature != _lastSignature;
+        var scaleChanged = scale != _lastScale;
+
+        if (!contentChanged && !scaleChanged && _hasTargetSize)
+        {
+            var current = AppWindow.Size;
+            if (current.Width == _lastTargetSize.Width && current.Height == _lastTargetSize.Height)
+            {
+                return;
+            }
+            AppWindow.Resize(_lastTargetSize);
+            return;
+        }
+
+        _lastScale = scale;
+        _lastApplySizeSignature = _lastSignature;
+
         var rows = Math.Max(1, Rows.Count);
 
         RootGrid.Measure(new Windows.Foundation.Size(double.PositiveInfinity, double.PositiveInfinity));
@@ -291,8 +430,11 @@ public sealed partial class OverlayWindow : Window
         var heightDip = Math.Max(rows * RowHeightDip + VerticalPaddingDip, measured.Height);
 
         var target = new SizeInt32((int)Math.Ceiling(widthDip * scale), (int)Math.Ceiling(heightDip * scale));
-        var current = AppWindow.Size;
-        if (current.Width != target.Width || current.Height != target.Height)
+        _lastTargetSize = target;
+        _hasTargetSize = true;
+
+        var currentSize = AppWindow.Size;
+        if (currentSize.Width != target.Width || currentSize.Height != target.Height)
         {
             AppWindow.Resize(target);
         }
@@ -377,7 +519,11 @@ public sealed partial class OverlayWindow : Window
 
     private void OnClosed(object sender, WindowEventArgs args)
     {
+        _closed = true;
         _topmostTimer.Stop();
+        _sessionState.Locked -= OnSessionLocked;
+        _sessionState.Unlocked -= OnSessionUnlocked;
+        _sessionState.Resumed -= OnSessionUnlocked;
         _foregroundWatcher?.Dispose();
         _foregroundWatcher = null;
         _viewModel.Providers.CollectionChanged -= OnProvidersChanged;
