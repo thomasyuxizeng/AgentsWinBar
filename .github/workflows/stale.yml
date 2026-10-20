@@ -1,9 +1,7 @@
 name: Stale Issues and PRs
 
 on:
-  schedule:
-    # Run daily at 00:00 UTC
-    - cron: '0 0 * * *'
+  # Daily schedule (cron '0 0 * * *') is paused; run manually via workflow_dispatch.
   workflow_dispatch:
 
 jobs:
