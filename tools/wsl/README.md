@@ -32,6 +32,35 @@ If Gemini's JSON transform fails, the shim returns a failure even when the CLI s
 OAuth cooldown, a failed CLI fallback with no cached result returns the CLI's own output and exit code,
 including timeout (125) and missing executable (127) errors.
 
+### Sign-out detection
+
+When Claude's routes fail and the shim falls back to a JSON cache, an authentication failure
+on either failed route adds `authRequired: true` and `authError` to every cached row.
+The explanation comes from the CLI error message, is limited to 512 characters, flattened to
+one line, and redacts credential assignments, bearer values and long opaque tokens. The cache
+file and its timestamp are unchanged. Non-JSON output remains byte-compatible.
+
+The shim recognizes missing/invalid/expired/revoked tokens or credentials, missing auth.json,
+sign-in requests, unauthorized responses and HTTP 401/403. Rate limits (429), timeouts,
+network failures, command-not-found errors and service outages do not set the annotation.
+An expired OAuth token followed by a successful CLI refresh returns the fresh success without
+auth annotations. The ten-minute cache and rate-limit short circuits keep their existing behavior;
+they have no failed authentication route to report. Without a cache, stdout, stderr and the
+failure exit code pass through as before.
+
+The app classifies final error rows and failed commands for all providers using the centralized
+patterns in `Helpers/AuthFailureDetector.cs` (`IsAuthFailure`). Extend those patterns and
+`AuthFailureDetectorTests` when new CLI messages are observed. The Claude shim has a corresponding
+local classifier for its cache annotation; keep it aligned when extending Claude patterns.
+Codex/Gemini logout wording is inferred, not captured from real logout sessions. Gemini
+quota is supplied by Antigravity, so recovery is signing in to Antigravity (`agy`) in WSL.
+Auth state lasts only for the app session, survives generic failures and cached replays, and
+clears on the next fresh successful usage reading. It is never saved in the app's cache.
+
+Run `bash tools/wsl/test-shim.sh` from the project root inside WSL for stub-only regression
+tests. Executables, homes, shim cache paths and installer destinations are redirected into
+temporary directories; the tests do not read credentials, install the real shim, or sign in.
+
 ### Windows Codex sign-in bridge (optional)
 
 If `~/.config/codexbar/shim.env` contains `CODEXBAR_CODEX_HOME=/mnt/c/Users/<you>/.codex`, Codex usage is read

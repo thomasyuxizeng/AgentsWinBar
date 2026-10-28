@@ -20,6 +20,15 @@ public static class StaleCaption
         : lastSuccessUtc is { } at ? $"Stale · last updated {Age(at, nowUtc)}"
         : "Stale · last update unknown";
 
+    /// <summary>
+    /// The header's freshness line for a signed-out provider: its numbers are the last ones read before the sign-out.
+    /// The banner says why, so this only says how old they are ("Last numbers from 3h ago").
+    /// </summary>
+    public static string SignedOutText(bool hasNumbers, DateTime? lastSuccessUtc, DateTime nowUtc) =>
+        !hasNumbers ? "No usage numbers"
+        : lastSuccessUtc is { } at ? $"Last numbers from {Age(at, nowUtc)}"
+        : "Last numbers are out of date";
+
     /// <summary>Status-specific caption; empty when fresh. "Stale · status last checked 12m ago".</summary>
     public static string StatusText(bool isStale, DateTime? lastSuccessUtc, DateTime nowUtc) =>
         !isStale ? string.Empty

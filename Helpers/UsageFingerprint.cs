@@ -20,7 +20,7 @@ public sealed class UsageFingerprint
         var hasError = false;
         foreach (var provider in providers)
         {
-            hasError |= provider.HasError || provider.IsLoading;
+            hasError |= provider.AuthRequired || provider.HasError || provider.IsLoading;
             var windows = new List<WindowSnapshot>();
             AddWindow("session", provider.Session);
             AddWindow("weekly", provider.Weekly);

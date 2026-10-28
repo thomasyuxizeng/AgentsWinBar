@@ -7,6 +7,22 @@ namespace CodexBarWin.Tests.Unit.Helpers;
 [TestClass]
 public class DashboardGlanceTests
 {
+    [TestMethod]
+    public void Attention_SignedOutWithErrorStaleAndHighUsage_ReportsSignOutFirstAndOnlyOnce()
+    {
+        var signedOut = Provider("claude", Window("Weekly", 99)) with
+        {
+            AuthRequired = true, AuthHint = "Sign in again in WSL.",
+            Error = "Token missing", UsageIsStale = true,
+            ServiceStatus = new() { Indicator = ProviderStatusIndicator.Major }
+        };
+        var items = DashboardGlance.Attention([Provider("codex") with { Error = "Network error" }, signedOut]);
+        items.Should().HaveCount(2);
+        items[0].Should().Be(new AttentionItem("Claude is signed out", "Sign in again in WSL.", AttentionSeverity.Critical, "claude"));
+        items[1].Label.Should().Be("Fetch failed");
+        items[1].Detail.Should().Be("Codex");
+    }
+
     private static readonly DateTime Reset = new(2026, 10, 15, 21, 0, 0, DateTimeKind.Utc);
 
     private static DashboardWindow Window(string title, double used, DateTime? reset = null, PaceKind pace = PaceKind.OnTrack) =>

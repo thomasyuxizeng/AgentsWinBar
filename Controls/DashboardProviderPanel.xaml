@@ -119,6 +119,16 @@
                 </StackPanel>
             </Grid>
 
+            <!-- Signed out: the provider's CLI needs a new login. Replaces the generic fetch-error banner below; the numbers further down are last-known -->
+            <InfoBar IsOpen="{x:Bind views:DashboardFormat.IsSignedOut(Data), Mode=OneWay}" IsClosable="False"
+                     Visibility="{x:Bind views:DashboardFormat.VisSignedOut(Data), Mode=OneWay}"
+                     Severity="Error" Title="Signed out" AutomationProperties.Name="Signed out">
+                <StackPanel Spacing="4" Margin="0,-8,0,12">
+                    <TextBlock Text="{x:Bind views:DashboardFormat.SignedOutHint(Data), Mode=OneWay}" TextWrapping="Wrap" FontSize="12"
+                               IsTextSelectionEnabled="True"/>
+                </StackPanel>
+            </InfoBar>
+
             <!-- Incident detail (only when the status page has more to say than the header's description) -->
             <InfoBar IsOpen="{x:Bind views:DashboardFormat.HasIncident(Data), Mode=OneWay}" IsClosable="False"
                      Visibility="{x:Bind views:DashboardFormat.VisIncident(Data), Mode=OneWay}"
@@ -141,8 +151,8 @@
             </InfoBar>
 
             <!-- Fetch error -->
-            <InfoBar IsOpen="{x:Bind views:DashboardFormat.HasText(Data.Error), Mode=OneWay}" IsClosable="False"
-                     Visibility="{x:Bind views:DashboardFormat.VisText(Data.Error), Mode=OneWay}"
+            <InfoBar IsOpen="{x:Bind views:DashboardFormat.HasFetchError(Data), Mode=OneWay}" IsClosable="False"
+                     Visibility="{x:Bind views:DashboardFormat.VisFetchError(Data), Mode=OneWay}"
                      Severity="Error" Title="Last fetch failed">
                 <StackPanel Spacing="4" Margin="0,-8,0,12">
                     <TextBlock Text="{x:Bind Data.Error, Mode=OneWay}" TextWrapping="Wrap" FontSize="12" IsTextSelectionEnabled="True"/>
@@ -153,6 +163,7 @@
 
             <!-- Usage windows: one list, or two side by side in a wide panel (Gemini models | External) -->
             <Grid x:Name="WindowsHost" ColumnSpacing="28" SizeChanged="OnWindowsHostSizeChanged"
+                  Opacity="{x:Bind views:DashboardFormat.StaleNumbersOpacity(Data), Mode=OneWay}"
                   Visibility="{x:Bind views:DashboardFormat.VisCount(WindowCount), Mode=OneWay}"/>
 
             <!-- CLI credits -->

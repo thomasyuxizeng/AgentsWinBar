@@ -43,8 +43,8 @@ public class IncidentPersistenceAndExpiryTests
     public async Task Persistence_IncidentDetail_SurvivesSaveAndLoadWithinRetention()
     {
         var cache1 = CreateCache();
-        var updateTime = new DateTime(2026, 10, 10, 8, 30, 0, DateTimeKind.Utc);
-        var fetchTime = new DateTime(2026, 10, 10, 9, 0, 0, DateTimeKind.Utc);
+        var fetchTime = DateTime.UtcNow.AddDays(-2);
+        var updateTime = fetchTime.AddMinutes(-30);
 
         var data = new UsageData
         {

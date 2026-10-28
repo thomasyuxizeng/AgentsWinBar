@@ -10,6 +10,27 @@ namespace CodexBarWin.Tests.Unit.Services;
 [TestClass]
 public class CacheServiceTests
 {
+    [TestMethod]
+    public async Task SaveAsync_AuthState_IsStrippedFromMemoryAndDisk()
+    {
+        _cacheService.Set("claude", new() { Provider = "claude", AuthRequired = true, AuthMessage = "Token missing",
+            Session = new() { ReportedPercent = 42 }, UsageFetchOutcome = FetchOutcome.Success });
+        _cacheService.GetLastKnown("claude")!.AuthRequired.Should().BeFalse();
+        _cacheService.GetLastKnown("claude")!.AuthMessage.Should().BeNull();
+        await _cacheService.SaveAsync();
+        var json = await File.ReadAllTextAsync(_cachePath);
+        json.Should().NotContain("authRequired").And.NotContain("authMessage").And.NotContain("Token missing");
+        // Even a cache written by a different version cannot resurrect transient state.
+        await File.WriteAllTextAsync(_cachePath, json.Replace("\"provider\": \"claude\"",
+            "\"provider\": \"claude\", \"authRequired\": true, \"authMessage\": \"Token missing\""));
+        _cacheService.Clear();
+        await _cacheService.LoadAsync();
+        var restored = _cacheService.GetLastKnown("claude")!;
+        restored.AuthRequired.Should().BeFalse();
+        restored.AuthMessage.Should().BeNull();
+        restored.Session!.Percent.Should().Be(42);
+    }
+
     private Mock<ILogger<CacheService>> _mockLogger = null!;
     private MockSettingsService _mockSettingsService = null!;
     private CacheService _cacheService = null!;

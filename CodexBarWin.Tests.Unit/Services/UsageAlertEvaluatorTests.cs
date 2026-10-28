@@ -7,6 +7,15 @@ namespace CodexBarWin.Tests.Unit.Services;
 [TestClass]
 public class UsageAlertEvaluatorTests
 {
+    [TestMethod]
+    public void Evaluate_SignedOutWithHighUsage_DoesNotAlertOrConsumeDedupe()
+    {
+        var evaluator = new UsageAlertEvaluator();
+        var data = Provider("claude", 100, 120);
+        evaluator.Evaluate([data with { AuthRequired = true }], Now).Should().BeEmpty();
+        evaluator.Evaluate([data], Now).Should().ContainSingle();
+    }
+
     private static readonly DateTime Now = new(2026, 10, 2, 0, 0, 0, DateTimeKind.Utc);
 
     /// <summary>A session window of <paramref name="windowMinutes"/> with the given usage and time left.</summary>

@@ -34,7 +34,7 @@ public class UsageAlertEvaluator
 
         foreach (var data in providers)
         {
-            if (data.HasError || data.IsLoading || data.UsageIsStale)
+            if (data.AuthRequired || data.HasError || data.IsLoading || data.UsageIsStale)
             {
                 continue;
             }

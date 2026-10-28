@@ -59,6 +59,14 @@
         <ScrollViewer Grid.Row="1">
             <StackPanel Spacing="12">
 
+                <!-- Signed out: the provider's CLI needs a new login; the bars below are last-known and dimmed -->
+                <InfoBar x:Name="SignedOutBanner" IsOpen="False" IsClosable="False" Visibility="Collapsed"
+                         Severity="Error" Title="Signed out" AutomationProperties.Name="Signed out">
+                    <StackPanel Spacing="4" Margin="0,-8,0,12">
+                        <TextBlock x:Name="SignedOutHint" TextWrapping="Wrap" FontSize="12" IsTextSelectionEnabled="True"/>
+                    </StackPanel>
+                </InfoBar>
+
                 <TextBlock x:Name="ServiceStatusStaleAlone" Style="{StaticResource CaptionTextBlockStyle}"
                            Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap"
                            Visibility="Collapsed"/>

@@ -172,23 +172,53 @@ case " $* " in *" --provider claude "*)
       cat "$1"
       return 0
     fi
-    python3 - "$1" "$(stat -c %Y "$1")" <<'PY'
-import datetime, json, sys
-with open(sys.argv[1]) as f:
+    python3 - "$1" "$(stat -c %Y "$1")" "${2:-}" "${3:-}" "${4:-}" "${5:-}" <<'PY'
+import datetime, json, re, sys
+with open(sys.argv[1], 'rb') as f:
     raw = f.read()
 try:
     data = json.loads(raw)
 except ValueError:
-    sys.stdout.write(raw)
+    sys.stdout.buffer.write(raw)
     sys.exit(0)
 rows = data if isinstance(data, list) else [data]
 if not all(isinstance(row, dict) for row in rows):
-    sys.stdout.write(raw)
+    sys.stdout.buffer.write(raw)
     sys.exit(0)
 stamp = datetime.datetime.fromtimestamp(int(sys.argv[2]), datetime.timezone.utc).isoformat()
+# Only final failed-route fallbacks supply these messages. The fresh-cache and 429
+# short circuits never infer a sign-out; a successful CLI refresh also bypasses this.
+auth_error = None
+for raw_error in sys.argv[3:]:
+    # Cache hits and rate-limit short circuits pass no failure text; skip before the costly regex compiles.
+    if not raw_error.strip(): continue
+    try:
+        errors = json.loads(raw_error)
+        errors = errors if isinstance(errors, list) else [errors]
+        messages = []
+        for entry in errors:
+            if not isinstance(entry, dict): continue
+            error = entry.get('error')
+            if isinstance(error, dict):
+                messages.append((str(error.get('message', '')), str(error.get('code', '')), str(error.get('kind', ''))))
+            elif isinstance(error, str): messages.append((error, '', ''))
+    except ValueError:
+        messages = [(raw_error, '', '')]
+    for message, code, kind in messages:
+        if code in ('124', '125', '127', '429') or re.fullmatch(r'5\d\d', code) or re.search(r'\b(429|5\d\d|127)\b|rate.?limit|too many requests|timed?\s*out|timeout|network|connection|dns|service unavailable|outage|command not found', message + ' ' + kind, re.I):
+            continue
+        if code not in ('401', '403') and kind.lower() not in ('auth', 'authentication', 'unauthorized', 'auth_required') and not re.search(r'\b(401|403|unauthori[sz]ed)\b|not (logged|signed) in|\b(log[ -]?in|sign[ -]?in|authentication) (is )?required\b|\b(log in|sign in)\b|run\s+[\x60\x27"]?claude\b.*(authenticate|login)|\b(access[ _-]?token|refresh[ _-]?token|oauth[ _-]?token|token|credentials?|auth\.json)\b.{0,60}\b(missing|empty|not found|expired|revoked|invalid)\b|\b(missing|empty|expired|revoked|invalid)\s+((oauth|access|refresh)\s+)?(tokens?|credentials?)\b|invalid_grant', message, re.I):
+            continue
+        message = re.sub(r'\bBearer\s+\S+|\b(access[ _-]?token|refresh[ _-]?token|api[ _-]?key|password|secret)["\x27]?\s*[=:]\s*["\x27]?[^\s,"\x27;}]+["\x27]?|\b[A-Za-z0-9_+/=-]{32,}(\.[A-Za-z0-9_+/=-]+)*\b', '[redacted]', message, flags=re.I)
+        auth_error = ' '.join(message.split())[:512]
+        break
+    if auth_error: break
 for row in rows:
     row['cached'] = True
     row['cacheUpdatedAt'] = stamp
+    if auth_error:
+        row['authRequired'] = True
+        row['authError'] = auth_error
 print(json.dumps(data))
 PY
   }
@@ -202,12 +232,19 @@ PY
 
   o='[{"provider":"claude","source":"oauth","error":{"kind":"provider","code":3,"message":"Claude usage is rate limited right now; retrying shortly."}}]'
   rc=3; oauth_tried=0; oauth_rate_limited=0
+  oauth_failure=''; oauth_stderr=''; cli_failure=''; cli_stderr=''
+  route_stderr=$(mktemp "/var/tmp/codexbar-claude-$uid.stderr.XXXXXX") || exit 1
+  trap 'rm -f "$route_stderr"' EXIT
 
   if [ -n "$cooldown_read" ] && [ "$(age "$cooldown_read")" -lt 600 ]; then
     oauth_rate_limited=1
   else
     oauth_tried=1
-    if r=$("$REAL" "${oauth[@]}"); then rc=0; else rc=$?; fi
+    if r=$("$REAL" "${oauth[@]}" 2>"$route_stderr"); then rc=0; else rc=$?; fi
+    cat "$route_stderr" >&2
+    if [ "$rc" -ne 0 ]; then
+      case "$rc" in 124|125|127|429|5[0-9][0-9]) ;; *) oauth_failure=$r; oauth_stderr=$(cat "$route_stderr");; esac
+    fi
     o=$r
     if [ $rc -eq 0 ]; then
       [ -n "$cooldown_read" ] && owned "$cooldown_read" && rm -f "$cooldown_read"
@@ -231,7 +268,11 @@ PY
     # Suppress overlapping calls briefly; an interrupted refresh is not a CLI failure.
     write_state "$CLI_ATTEMPT" '' || true
     if command -v timeout >/dev/null 2>&1; then
-      if r=$(timeout -k 3 "$cli_timeout" "$REAL" "${cli[@]}"); then rc2=0; else rc2=$?; fi
+      if r=$(timeout -k 3 "$cli_timeout" "$REAL" "${cli[@]}" 2>"$route_stderr"); then rc2=0; else rc2=$?; fi
+      cat "$route_stderr" >&2
+      if [ "$rc2" -ne 0 ]; then
+        case "$rc2" in 124|125|127|429|5[0-9][0-9]) ;; *) cli_failure=$r; cli_stderr=$(cat "$route_stderr");; esac
+      fi
     else
       # Never launch an unbounded fallback. Keep errors generic and free of credentials.
       r=''; rc2=127
@@ -249,7 +290,9 @@ PY
   fi
 
   if [ $rc -eq 0 ]; then write_state "$C" "$o" || true; printf '%s\n' "$o"; exit 0; fi
-  if [ -n "$cache_read" ] && [ -s "$cache_read" ]; then cached_output "$cache_read"; exit $?; fi
+  if [ -n "$cache_read" ] && [ -s "$cache_read" ]; then
+    cached_output "$cache_read" "$oauth_failure" "$oauth_stderr" "$cli_failure" "$cli_stderr"; exit $?
+  fi
   printf '%s\n' "$o"; exit $rc ;;
 esac
 

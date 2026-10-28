@@ -53,6 +53,9 @@ public class CodexBarService : ICodexBarService
         public long Issued;
         public long PublishedUsage;
         public long PublishedStatus;
+        public long PublishedAuth;
+        public bool AuthRequired;
+        public string? AuthMessage;
     }
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, ProviderRefreshState> _providerRefreshes = new(StringComparer.Ordinal);
 
@@ -688,21 +691,29 @@ public class CodexBarService : ICodexBarService
         if (!result.Success && (result.ExitCode == 124 ||
             (result.ExitCode == -1 && result.Error.Contains("timed out", StringComparison.OrdinalIgnoreCase))))
             return ProviderError(provider, "Request timed out", prefetchedStatus, generation);
-        if (result.Success && !string.IsNullOrWhiteSpace(result.Output))
+        if (result.ExitCode == 127)
+            return ProviderError(provider, string.IsNullOrWhiteSpace(result.Error) ? "Command not found (exit code 127)" : result.Error.Trim(),
+                prefetchedStatus, generation, result.ExitCode);
+        if (!result.Success && result.ExitCode is 125 or 429 or >= 500 and <= 599)
+            return ProviderError(provider, string.IsNullOrWhiteSpace(result.Error)
+                ? $"Command failed (exit code {result.ExitCode})" : result.Error.Trim(), prefetchedStatus, generation, result.ExitCode);
+        if (!string.IsNullOrWhiteSpace(result.Output) &&
+            (result.Success || result.Output.TrimStart().StartsWith('[') || result.Output.TrimStart().StartsWith('{')))
         {
             var data = ParseUsageJsonArray(result.Output).FirstOrDefault(d => string.Equals(d.Provider, provider, StringComparison.OrdinalIgnoreCase));
-            if (data == null) return ProviderError(provider, "No data available", prefetchedStatus, generation);
-            data = AttachProviderStatus(data, prefetchedStatus);
-            data = ResolveUsage(data with { Provider = provider }, generation, prefetchedStatus != null);
-            _logger.LogDebug("Fetched {Provider} successfully", provider);
-            return data;
+            if (data != null && (result.Success || data.HasError || data.AuthRequired))
+            {
+                if (!result.Success && !data.AuthRequired && AuthFailureDetector.IsAuthFailure(provider, result.ExitCode, null, result.Error))
+                    data = data with { AuthRequired = true, AuthMessage = AuthFailureDetector.SanitizeMessage(result.Error) };
+                data = AttachProviderStatus(data, prefetchedStatus);
+                return ResolveUsage(data with { Provider = provider }, generation, prefetchedStatus != null);
+            }
+            if (result.Success) return ProviderError(provider, "No data available", prefetchedStatus, generation);
         }
-        _logger.LogDebug("{Provider} failed: {Error}", provider, result.Error);
+        _logger.LogDebug("{Provider} failed (exit {ExitCode})", provider, result.ExitCode);
         return ProviderError(provider, string.IsNullOrWhiteSpace(result.Error)
-            ? $"Command failed (exit code {result.ExitCode})" : result.Error.Trim(), prefetchedStatus, generation) with
-        {
-            CommandNotFound = result.ExitCode == 127
-        };
+            ? string.IsNullOrWhiteSpace(result.Output) ? $"Command failed (exit code {result.ExitCode})" : result.Output.Trim()
+            : result.Error.Trim(), prefetchedStatus, generation, result.ExitCode);
     }
 
     private Dictionary<string, Task<ProviderStatus?>> StartProviderStatusPrefetches(IReadOnlyList<string> providers, CancellationToken ct)
@@ -886,9 +897,13 @@ public class CodexBarService : ICodexBarService
         }
     }
 
-    private UsageData ProviderError(string provider, string error, ProviderStatus? prefetchedStatus = null, long generation = 0) => ResolveUsage(AttachProviderStatus(new UsageData
+    private UsageData ProviderError(string provider, string error, ProviderStatus? prefetchedStatus = null, long generation = 0,
+        int? exitCode = null) => ResolveUsage(AttachProviderStatus(new UsageData
     {
-        Provider = provider, Error = error, FetchedAt = _timeProvider.GetUtcNow().UtcDateTime,
+        Provider = provider, Error = AuthFailureDetector.SanitizeMessage(error), FetchedAt = _timeProvider.GetUtcNow().UtcDateTime,
+        AuthRequired = AuthFailureDetector.IsAuthFailure(provider, exitCode, null, error),
+        AuthMessage = AuthFailureDetector.IsAuthFailure(provider, exitCode, null, error) ? AuthFailureDetector.SanitizeMessage(error) : null,
+        CommandNotFound = exitCode == 127,
         UsageFetchOutcome = FetchOutcome.Failed, StatusFetchOutcome = FetchOutcome.Failed
     }, prefetchedStatus), generation, prefetchedStatus != null);
 
@@ -936,7 +951,23 @@ public class CodexBarService : ICodexBarService
         var isCached = data.UsageIsCached || (!data.UsageIsCached && observationAt.HasValue && Helpers.DataAge.OldReadingUtc(data.FetchedAt, observationAt.Value) != null);
         var isObservationRetained = obsAtUtc.HasValue && CacheRetention.IsRetained(obsAtUtc.Value, now);
 
-        var freshSuccess = !usageSuperseded && !isCached && !data.UsageIsStale && data.UsageFetchOutcome == FetchOutcome.Success;
+        // Auth belongs to this session, not the last-good cache. Only the newest request may
+        // publish it. A generic failure or cache replay cannot prove that sign-in recovered.
+        if (generation >= state.PublishedAuth && generation >= state.Issued)
+        {
+            state.PublishedAuth = generation;
+            if (data.AuthRequired)
+            {
+                state.AuthRequired = true;
+                state.AuthMessage = data.AuthMessage;
+            }
+            else if (!isCached && !data.UsageIsStale && data.UsageFetchOutcome == FetchOutcome.Success)
+            {
+                state.AuthRequired = false;
+                state.AuthMessage = null;
+            }
+        }
+        var freshSuccess = !usageSuperseded && !state.AuthRequired && !isCached && !data.UsageIsStale && data.UsageFetchOutcome == FetchOutcome.Success;
         var isNewerCachedReading = !usageSuperseded && isCached && data.HasUsage && isObservationRetained &&
             (previous == null || prevObsAt == null || obsAtUtc!.Value > prevObsAt.Value);
         var isReplayOfHeld = !usageSuperseded && isCached && data.HasUsage && obsAtUtc.HasValue &&
@@ -976,7 +1007,9 @@ public class CodexBarService : ICodexBarService
             LastSuccessfulFetch = acceptsUsage ? (isReplayOfHeld ? previous!.LastSuccessfulFetch : usageAt) : previous?.LastSuccessfulFetch ?? previous?.FetchedAt,
             UsageFetchOutcome = acceptsUsage ? FetchOutcome.Success : (usageSuperseded || isCached ? FetchOutcome.Unavailable : data.UsageFetchOutcome),
             UsageIsCached = isCached || isReplayOfHeld || (previous?.UsageIsCached == true && !freshSuccess),
-            UsageIsStale = isUsageStale,
+            UsageIsStale = isUsageStale || state.AuthRequired,
+            AuthRequired = state.AuthRequired,
+            AuthMessage = state.AuthRequired ? state.AuthMessage : null,
             ServiceStatus = statusSuccess || cachedStatus || replayStatus ? data.ServiceStatus : cached?.ServiceStatus,
             LastSuccessfulStatusFetch = statusSuccess ? now : cachedStatus ? Helpers.DashboardValues.Utc(cachedStatusAt!.Value) : cached?.LastSuccessfulStatusFetch,
             StatusIsStale = !statusSuccess && (cachedStatus || cached?.ServiceStatus != null),
@@ -1000,6 +1033,7 @@ public class CodexBarService : ICodexBarService
             _cacheService.Set(data.Provider, freshSuccess ? resolved : resolved with
             {
                 Error = null, IsLoading = false, CommandNotFound = false,
+                AuthRequired = false, AuthMessage = null,
                 UsageFetchOutcome = resolved.HasUsage ? FetchOutcome.Success : FetchOutcome.Unknown
             });
         }

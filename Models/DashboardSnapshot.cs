@@ -13,6 +13,9 @@ public sealed record DashboardSnapshot
     public DateTime GeneratedAtUtc { get; init; }
     public DashboardSummary Summary { get; init; } = new();
     public IReadOnlyList<DashboardProvider> Providers { get; init; } = [];
+    /// <summary>Signed-out providers in dashboard order, including their recovery hints.</summary>
+    public IReadOnlyList<DashboardProvider> SignedOutProviders => Providers.Where(p => p.AuthRequired).ToArray();
+    public int SignedOutProviderCount => Providers.Count(p => p.AuthRequired);
     public DashboardDiagnostics Diagnostics { get; init; } = new();
 }
 
@@ -26,7 +29,7 @@ public sealed record DashboardSummary
 
     public int ProviderCount { get; init; }
 
-    /// <summary>Providers with data, no error and not stale.</summary>
+    /// <summary>Providers that are signed in, have no error and are not stale.</summary>
     public int HealthyProviderCount { get; init; }
     public int ErrorProviderCount { get; init; }
     public int StaleProviderCount { get; init; }
@@ -89,6 +92,8 @@ public sealed record DashboardProvider
     public DateTime? LastSuccessfulStatusFetchUtc { get; init; }
     public TimeSpan? StaleAge { get; init; }
     public string? Error { get; init; }
+    public bool AuthRequired { get; init; }
+    public string? AuthHint { get; init; }
     public DateTime FetchedAtUtc { get; init; }
     /// <summary>The reading's own time when it is much older than the fetch (a cached result); otherwise null.</summary>
     public DateTime? OldReadingUtc { get; init; }

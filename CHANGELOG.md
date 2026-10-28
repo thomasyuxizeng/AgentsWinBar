@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Signed-out providers are flagged on the dashboard with sign-in instructions, while their last known usage remains visible as stale data.
+
 ## [1.5.3] - 2026-10-16
 
 ### Fixed

@@ -79,13 +79,14 @@ cat > "$TMP/claude-real" <<'CLI'
 src=''; prev=''
 for a in "$@"; do [ "$prev" = --source ] && src=$a; prev=$a; done
 printf '%s\n' "$src" >> "$CALLS"
-if [ "$src" = oauth ]; then printf '%s\n' "$OAUTH_OUT"; exit "$OAUTH_EXIT"; fi
+if [ "$src" = oauth ]; then printf '%s' "${OAUTH_ERR:-}" >&2; printf '%s\n' "$OAUTH_OUT"; exit "$OAUTH_EXIT"; fi
 if [ -n "${CHECK_ATTEMPT_STAMP:-}" ]; then
   [[ -f "$CHECK_ATTEMPT_STAMP" && ! -e "$CHECK_FAILURE_STAMP" ]] || exit 97
   printf 'stamp-before-cli\n' >> "$STAMP_CHECK_LOG"
 fi
 [ -z "${CLI_IGNORE_TERM:-}" ] || trap '' TERM
 [ -z "${CLI_SLEEP:-}" ] || sleep "$CLI_SLEEP"
+printf '%s' "${CLI_ERR:-}" >&2
 printf '%s\n' "$CLI_OUT"; exit "$CLI_EXIT"
 CLI
 chmod +x "$TMP/claude-real"
@@ -96,6 +97,80 @@ claude_run() { : > "$CALLS"; rm -f "$TMP"/claude-cache/*; bash "$TMP/claude-shim
 expired='[{"provider":"claude","source":"oauth","error":{"kind":"provider","code":3,"message":"Claude OAuth token expired. CodexBar CLI does not launch Claude to refresh credentials. Run `claude login`, then retry."}}]'
 limited='[{"provider":"claude","source":"oauth","error":{"kind":"provider","code":3,"message":"Claude usage API rate limited (429)"}}]'
 good='[{"provider":"claude","source":"claude","usage":{"primary":{"usedPercent":30}}}]'
+
+# Final auth failures annotate every cached row, without modifying the cache or renewing its timestamp.
+auth='[{"error":{"code":3,"kind":"provider","message":"Claude OAuth access token missing. Run \u0060claude\u0060 to authenticate."},"provider":"claude","source":"oauth"}]'
+auth_cache="$TMP/claude-cache/codexbar-claude-$uid-$(printf '%s' 'usage --provider claude --format json --source cli' | md5sum | cut -c1-8).json"
+: > "$CALLS"; rm -f "$TMP"/claude-cache/*
+printf '%s\n' '[{"provider":"claude","usage":{"primary":{"usedPercent":30}}},{"provider":"claude","usage":{"secondary":{"usedPercent":40}}}]' > "$auth_cache"
+touch -d '15 minutes ago' "$auth_cache"
+auth_stamp=$(stat -c %Y "$auth_cache")
+output=$(OAUTH_OUT=$auth OAUTH_EXIT=3 CLI_OUT='[]' CLI_EXIT=1 bash "$TMP/claude-shim" usage --provider claude --format json --source cli)
+printf '%s' "$output" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert len(d)==2 and all(r["authRequired"] and r["cached"] and "access token missing" in r["authError"] and "\n" not in r["authError"] for r in d)'
+[[ "$(cat "$CALLS")" = $'oauth\ncli' && "$(stat -c %Y "$auth_cache")" = "$auth_stamp" ]]
+[[ "$(cat "$auth_cache")" != *authRequired* ]]
+
+# A later fresh success has no authRequired field, and the cached success has none either.
+: > "$CALLS"
+output=$(OAUTH_OUT=$good OAUTH_EXIT=0 CLI_OUT='[]' CLI_EXIT=1 bash "$TMP/claude-shim" usage --provider claude --format json --source cli)
+[[ "$output" = "$good" && "$output" != *authRequired* && "$(cat "$auth_cache")" = "$good" ]]
+
+# No cache: preserve the original error output and exit code.
+set +e
+output=$(OAUTH_OUT=$auth OAUTH_EXIT=3 CLI_OUT='[]' CLI_EXIT=1 claude_run); rc=$?
+set -e
+[[ "$rc" -eq 3 && "$output" = "$auth" ]]
+
+# A rate limit with cache is never inferred to be a sign-out.
+rm -f "$TMP"/claude-cache/*
+printf '%s\n' "$good" > "$auth_cache"; touch -d '15 minutes ago' "$auth_cache"
+output=$(OAUTH_OUT=$limited OAUTH_EXIT=3 CLI_OUT='[]' CLI_EXIT=1 bash "$TMP/claude-shim" usage --provider claude --format json --source cli)
+check "$output" '"cached": true'
+[[ "$output" != *authRequired* && "$output" != *authError* ]]
+
+# An auth error on only the CLI route is still detected, and credentials are not exposed.
+rm -f "$TMP"/claude-cache/*
+printf '%s\n' "$good" > "$auth_cache"; touch -d '15 minutes ago' "$auth_cache"
+output=$(OAUTH_OUT='[{"provider":"claude","error":{"message":"Provider failed"}}]' OAUTH_EXIT=3 CLI_OUT='[{"provider":"claude","error":{"message":"Refresh token invalid.\naccess_token=fixture-secret"}}]' CLI_EXIT=1 bash "$TMP/claude-shim" usage --provider claude --format json --source cli)
+check "$output" '"authRequired": true'
+[[ "$output" != *fixture-secret* ]]
+
+# Recovery through CLI after an expired OAuth token must not be marked signed out.
+rm -f "$TMP"/claude-cache/*
+printf '%s\n' "$good" > "$auth_cache"; touch -d '15 minutes ago' "$auth_cache"
+output=$(OAUTH_OUT=$expired OAUTH_EXIT=3 CLI_OUT=$good CLI_EXIT=0 bash "$TMP/claude-shim" usage --provider claude --format json --source cli)
+[[ "$output" = "$good" && "$output" != *authRequired* ]]
+
+# Structured HTTP code alone also identifies an auth error, preserving the CLI's explanation.
+rm -f "$TMP"/claude-cache/*
+printf '%s\n' "$good" > "$auth_cache"; touch -d '15 minutes ago' "$auth_cache"
+output=$(OAUTH_OUT='[{"provider":"claude","error":{"code":401,"message":"Denied"}}]' OAUTH_EXIT=3 CLI_OUT='[]' CLI_EXIT=1 bash "$TMP/claude-shim" usage --provider claude --format json --source cli)
+check "$output" '"authRequired": true'
+check "$output" '"authError": "Denied"'
+
+# Stderr-only auth errors annotate a fallback, while original stderr still passes through.
+rm -f "$TMP"/claude-cache/*
+printf '%s\n' "$good" > "$auth_cache"; touch -d '15 minutes ago' "$auth_cache"
+output=$(OAUTH_OUT='[]' OAUTH_ERR='OAuth access token missing' OAUTH_EXIT=3 CLI_OUT='[]' CLI_EXIT=1 bash "$TMP/claude-shim" usage --provider claude --format json --source cli 2>"$TMP/auth-stderr")
+check "$output" '"authRequired": true'
+[[ "$(cat "$TMP/auth-stderr")" = 'OAuth access token missing' ]]
+rm -f "$TMP"/claude-cache/*
+set +e
+output=$(OAUTH_OUT='[]' OAUTH_ERR='OAuth access token missing' OAUTH_EXIT=3 CLI_OUT='[]' CLI_EXIT=1 bash "$TMP/claude-shim" usage --provider claude --format json --source cli 2>"$TMP/auth-stderr"); rc=$?
+set -e
+[[ "$rc" -eq 3 && "$output" = '[]' && "$(cat "$TMP/auth-stderr")" = 'OAuth access token missing' ]]
+
+# A missing CLI cannot itself imply sign-out, even when its stderr mentions login.
+rm -f "$TMP"/claude-cache/*
+printf '%s\n' "$good" > "$auth_cache"; touch -d '15 minutes ago' "$auth_cache"
+output=$(OAUTH_OUT='[]' OAUTH_EXIT=3 CLI_OUT='[]' CLI_ERR='Run claude to authenticate' CLI_EXIT=127 bash "$TMP/claude-shim" usage --provider claude --format json --source cli 2>/dev/null)
+[[ "$output" != *authRequired* ]]
+
+# Non-JSON fallback bytes remain unchanged even when a failed route reports missing credentials.
+rm -f "$TMP"/claude-cache/*
+printf 'legacy quota\r\nsecond line\n' > "$auth_cache"; touch -d '15 minutes ago' "$auth_cache"
+OAUTH_OUT=$auth OAUTH_EXIT=3 CLI_OUT='[]' CLI_EXIT=1 bash "$TMP/claude-shim" usage --provider claude --format json --source cli > "$TMP/non-json-auth-result"
+cmp "$auth_cache" "$TMP/non-json-auth-result"
 
 # Expired token: no cooldown, straight to the CLI, which answers (and in real life refreshes the token).
 output=$(OAUTH_OUT=$expired OAUTH_EXIT=3 CLI_OUT=$good CLI_EXIT=0 claude_run)

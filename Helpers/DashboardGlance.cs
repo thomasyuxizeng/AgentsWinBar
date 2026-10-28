@@ -48,6 +48,10 @@ public static class DashboardGlance
             items.Add(new(label, string.Join(", ", entries.Select(e => e.Name)), severity, entries[0].ProviderId));
         }
 
+        foreach (var p in providers.Where(p => p.AuthRequired))
+            items.Add(new($"{p.DisplayName} is signed out", p.AuthHint ?? string.Empty, AttentionSeverity.Critical, p.Id));
+        // A signed-out provider gets one explicit entry; its held windows are not live warnings.
+        providers = providers.Where(p => !p.AuthRequired).ToArray();
         var failed = providers.Where(p => !string.IsNullOrWhiteSpace(p.Error)).Select(p => (p.Id, p.DisplayName)).ToList();
         var incidents = providers.Where(p => ProviderStatusPresentation.IsIncident(p.ServiceStatus)).ToList();
         var windows = providers.SelectMany(p => p.Windows.Select(w => (Provider: p, Window: w))).ToList();

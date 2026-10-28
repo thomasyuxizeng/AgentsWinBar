@@ -14,6 +14,43 @@ namespace CodexBarWin.Tests.Unit.ViewModels;
 [TestClass]
 public class MainViewModelTests
 {
+    [TestMethod]
+    public async Task StartAsync_ShimAuthAnnotation_RecordsFailedRefreshWithAuthMessage()
+    {
+        _usage.Setup(s => s.GetAllUsageStreamAsync(It.IsAny<CancellationToken>()))
+            .Returns(Stream(Task.CompletedTask, Data(42) with { AuthRequired = true, AuthMessage = "Token missing", UsageIsStale = true }));
+        await _viewModel.StartAsync();
+        var entry = _activity.RecentRefreshes.Single();
+        entry.Success.Should().BeFalse();
+        entry.Message.Should().Be("Token missing");
+    }
+
+    [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task StartAsync_CacheContainsTransientAuthState_DoesNotRestoreSignOut(bool fresh)
+    {
+        var restored = Data(42) with
+        {
+            FetchedAt = DateTime.UtcNow.AddMinutes(fresh ? -1 : -10),
+            AuthRequired = true, AuthMessage = "Token missing"
+        };
+        _cache.Setup(c => c.GetLastKnown("claude")).Returns(restored);
+        if (fresh) _cache.Setup(c => c.Get("claude")).Returns(restored);
+        var gate = Signal();
+        _usage.Setup(s => s.GetAllUsageStreamAsync(It.IsAny<CancellationToken>()))
+            .Returns((CancellationToken ct) => Stream(gate.Task, Data(50), ct));
+        var starting = _viewModel.StartAsync();
+        try
+        {
+            var current = _viewModel.Providers.Single();
+            current.Session!.Percent.Should().Be(42);
+            current.AuthRequired.Should().BeFalse();
+            current.AuthMessage.Should().BeNull();
+        }
+        finally { gate.TrySetResult(); await starting; }
+    }
+
     private readonly Mock<ICodexBarService> _usage = new();
     private readonly Mock<ISettingsService> _settings = new();
     private readonly UsageHistoryStore _history = new();

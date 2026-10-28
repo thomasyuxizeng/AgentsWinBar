@@ -57,7 +57,8 @@ public class CacheService : ICacheService
         if (!string.Equals(provider, data.Provider, StringComparison.OrdinalIgnoreCase) ||
             string.Equals(data.Status, "offline", StringComparison.OrdinalIgnoreCase) || data.HasError || data.CommandNotFound || data.IsLoading ||
             data.UsageFetchOutcome is FetchOutcome.Failed or FetchOutcome.Unavailable) return;
-        _cache[provider] = data;
+        _cache[provider] = data.AuthRequired || data.AuthMessage != null
+            ? data with { AuthRequired = false, AuthMessage = null } : data;
         _logger.LogDebug("Cached data for {Provider}", provider);
     }
 
@@ -158,7 +159,7 @@ public class CacheService : ICacheService
                 }
                 catch (JsonException) { continue; }
                 // An entry that omits extraWindows deserializes it as null; treat that as none rather than as corruption.
-                data = data with { ExtraWindows = data.ExtraWindows ?? [] };
+                data = data with { ExtraWindows = data.ExtraWindows ?? [], AuthRequired = false, AuthMessage = null };
                 var fetchedAtUtc = Utc(data.FetchedAt);
                 if (fetchedAtUtc - now > CacheRetention.ClockSkewTolerance) continue;
                 if (fetchedAtUtc > now) data = data with { FetchedAt = now };

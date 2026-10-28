@@ -10,6 +10,22 @@ namespace CodexBarWin.Tests.Unit.Helpers;
 public class DashboardSnapshotBuilderTests
 {
     [TestMethod]
+    public void Build_SignedOutProviders_ExposesRecoveryContractAndExcludesGenericHealthCounts()
+    {
+        var snapshot = DashboardSnapshotBuilder.Build(Inputs(
+            Provider() with { AuthRequired = true, Error = "Token missing", UsageIsStale = true },
+            Provider("codex") with { AuthRequired = true },
+            Provider("gemini")));
+        snapshot.SignedOutProviderCount.Should().Be(2);
+        snapshot.SignedOutProviders.Select(p => p.Id).Should().Equal("claude", "codex");
+        snapshot.SignedOutProviders.Should().OnlyContain(p => p.AuthRequired && !string.IsNullOrEmpty(p.AuthHint));
+        snapshot.Providers.Last().AuthHint.Should().BeNull();
+        snapshot.Summary.HealthyProviderCount.Should().Be(1);
+        snapshot.Summary.ErrorProviderCount.Should().Be(0);
+        snapshot.Summary.StaleProviderCount.Should().Be(0);
+    }
+
+    [TestMethod]
     public void Build_OlderAggregateReading_DoesNotCountItAgainAsToday()
     {
         var ledger = new Mock<ICostLedger>();

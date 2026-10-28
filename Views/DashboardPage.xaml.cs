@@ -329,7 +329,7 @@ public sealed partial class DashboardPage : Page
     private static double EstimateHeight(DashboardProvider? provider) =>
         provider == null ? 0
             : 90 + provider.Windows.Count * 64
-              + (string.IsNullOrWhiteSpace(provider.Error) ? 0 : 110)
+              + (provider.AuthRequired ? 90 : string.IsNullOrWhiteSpace(provider.Error) ? 0 : 110)
               + (DashboardFormat.HasIncident(provider) ? 130 : 0)
               + (provider.Credits != null ? 30 : 0)
               + (provider.Cost != null ? 250 : 0)

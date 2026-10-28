@@ -174,7 +174,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             if (Providers[i].HasUsage) continue;
             var restored = restoredByProvider[Providers[i].Provider];
             if (restored == null) continue;
-            Providers[i] = restored with { IsLoading = false, UsageIsStale = restored.HasUsage,
+            Providers[i] = restored with { IsLoading = false, AuthRequired = false, AuthMessage = null, UsageIsStale = restored.HasUsage,
                 StatusIsStale = restored.ServiceStatus != null,
                 LastSuccessfulFetch = restored.HasUsage ? restored.LastSuccessfulFetch ?? restored.FetchedAt : null,
                 Cost = _settingsService.Settings.ShowCostTotals ? restored.Cost : null };
@@ -197,6 +197,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         Providers = new(cached.Select(data => data! with
         {
             IsLoading = false,
+            AuthRequired = false, AuthMessage = null,
             Cost = _settingsService.Settings.ShowCostTotals ? data!.Cost : null
         }));
         ErrorMessage = null;
@@ -632,9 +633,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 {
                     _activityLog.RecordRefresh(new DashboardRefreshEntry
                     {
-                        TimestampUtc = resultAtUtc, ProviderId = data.Provider, Success = !data.HasError,
+                        TimestampUtc = resultAtUtc, ProviderId = data.Provider, Success = !data.AuthRequired && !data.HasError,
                         DurationMs = (int)Math.Min(int.MaxValue, Stopwatch.GetElapsedTime(refreshStarted).TotalMilliseconds),
-                        Message = resetOutcome == null ? data.Error : $"Reset refresh: {resetOutcome}"
+                        Message = resetOutcome == null ? data.AuthMessage ?? data.Error : $"Reset refresh: {resetOutcome}"
                     });
                 }
                 catch (Exception ex) { _logger.LogDebug(ex, "Refresh activity could not be recorded"); }

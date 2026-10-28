@@ -7,6 +7,16 @@ namespace CodexBarWin.Tests.Unit.Helpers;
 [TestClass]
 public class UsageFingerprintTests
 {
+    [TestMethod]
+    public void HasChangedFrom_SignedOutEvenWithUnchangedNumbers_PreventsRefreshBackoff()
+    {
+        var good = UsageFingerprint.Create([Data()]);
+        var signedOut = UsageFingerprint.Create([Data() with { AuthRequired = true }]);
+        signedOut.HasChangedFrom(good).Should().BeTrue();
+        signedOut.HasChangedFrom(signedOut).Should().BeTrue();
+        good.HasChangedFrom(signedOut).Should().BeTrue();
+    }
+
     private static readonly DateTime Reset = new(2026, 10, 5, 12, 0, 0, DateTimeKind.Utc);
 
     private static UsageData Data(double percent = 20) => new()

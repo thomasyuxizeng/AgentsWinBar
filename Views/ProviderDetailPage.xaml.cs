@@ -257,8 +257,16 @@ public sealed partial class ProviderDetailPage : Page
                 true, _data.LastSuccessfulFetch, now)
             : Helpers.TimestampFormatter.FormatLocal(_data.FetchedAt);
 
+        // Signed out: one banner on top, last-known bars dimmed, and no second "error log" for the same problem
+        var signedOut = _data.AuthRequired;
+        SignedOutBanner.IsOpen = signedOut;
+        SignedOutBanner.Visibility = signedOut ? Visibility.Visible : Visibility.Collapsed;
+        if (signedOut) SignedOutHint.Text = SignedOutHintFor(_data.Provider);
+        var numbersOpacity = signedOut ? 0.55 : 1;
+        SessionSection.Opacity = WeeklySection.Opacity = TertiarySection.Opacity = ExtraWindowsList.Opacity = numbersOpacity;
+
         // Error
-        if (_data.HasError)
+        if (_data.HasError && !signedOut)
         {
             ErrorSection.Visibility = Visibility.Visible;
             ErrorTextBox.Text = _data.Error ?? string.Empty;
@@ -272,6 +280,12 @@ public sealed partial class ProviderDetailPage : Page
             ErrorSection.Visibility = Visibility.Collapsed;
             SetLine(LastKnownDataText, string.Empty);
         }
+    }
+
+    private static string SignedOutHintFor(string provider)
+    {
+        var hint = ProviderConstants.IsValidProvider(provider) ? Helpers.AuthFailureDetector.GetSignInHint(provider) : string.Empty;
+        return string.IsNullOrWhiteSpace(hint) ? "Sign in again to keep usage up to date." : hint;
     }
 
     private static void SetLine(TextBlock block, string text)

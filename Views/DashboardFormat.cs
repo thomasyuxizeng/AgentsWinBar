@@ -142,6 +142,7 @@ internal static class DashboardFormat
     {
         if (provider == null) return string.Empty;
         var text = provider.IsLoading ? "Refreshing…"
+            : provider.AuthRequired ? StaleCaption.SignedOutText(provider.Windows.Count > 0, provider.LastSuccessfulUsageFetchUtc, DateTime.UtcNow)
             : provider.UsageIsStale ? StaleCaption.Text(true, provider.LastSuccessfulUsageFetchUtc, DateTime.UtcNow)
             : provider.OldReadingUtc is { } reading ? $"Reading is {Ago(reading).Replace(" ago", " old")} · fetched {Ago(provider.FetchedAtUtc)}"
             : !string.IsNullOrWhiteSpace(provider.Error) ? $"Checked {Ago(provider.FetchedAtUtc)}"   // the error banner says what failed
@@ -160,8 +161,17 @@ internal static class DashboardFormat
         }.Where(line => !string.IsNullOrWhiteSpace(line)));
 
     /// <summary>Normal freshness text, or collapsed when the stale (amber) variant shows instead.</summary>
-    public static Visibility VisFresh(DashboardProvider? provider) => Vis(provider != null && !DashboardGlance.IsStale(provider));
-    public static Visibility VisStale(DashboardProvider? provider) => Vis(DashboardGlance.IsStale(provider));
+    public static Visibility VisFresh(DashboardProvider? provider) => Vis(provider != null && !provider.AuthRequired && !DashboardGlance.IsStale(provider));
+    public static Visibility VisStale(DashboardProvider? provider) => Vis(provider is { AuthRequired: true } || DashboardGlance.IsStale(provider));
+
+    // Signed out: the banner replaces the generic fetch-error banner, and the last-known numbers are dimmed so they read as old.
+    public static bool IsSignedOut(DashboardProvider? provider) => provider is { AuthRequired: true };
+    public static Visibility VisSignedOut(DashboardProvider? provider) => Vis(IsSignedOut(provider));
+    public static string SignedOutHint(DashboardProvider? provider) =>
+        string.IsNullOrWhiteSpace(provider?.AuthHint) ? "Sign in again to keep usage up to date." : provider!.AuthHint!;
+    public static bool HasFetchError(DashboardProvider? provider) => provider is { AuthRequired: false } && HasText(provider.Error);
+    public static Visibility VisFetchError(DashboardProvider? provider) => Vis(HasFetchError(provider));
+    public static double StaleNumbersOpacity(DashboardProvider? provider) => provider is { AuthRequired: true } ? 0.55 : 1;
 
     /// <summary>The header's service status: shown only when the provider reported a known status.</summary>
     public static Visibility VisStatus(ProviderStatus? status) => Vis(status is { Indicator: not ProviderStatusIndicator.Unknown });

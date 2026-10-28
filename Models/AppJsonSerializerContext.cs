@@ -72,11 +72,30 @@ public record UsageDataDto
     public DateTime? CacheUpdatedAt { get; init; }
     public ProviderStatusDto? Status { get; init; }
     public UsageDto? Usage { get; init; }
-    public string? Error { get; init; }
+    public System.Text.Json.JsonElement Error { get; init; }
+    public bool AuthRequired { get; init; }
+    public string? AuthError { get; init; }
 
     public UsageData ToUsageData(DateTime? fetchedAt = null)
     {
         var fetched = fetchedAt ?? DateTime.UtcNow;
+        var message = Error.ValueKind == System.Text.Json.JsonValueKind.String ? Error.GetString() : null;
+        int? code = null;
+        string? kind = null;
+        var hasError = Error.ValueKind == System.Text.Json.JsonValueKind.String ? !string.IsNullOrWhiteSpace(message) :
+            Error.ValueKind is not (System.Text.Json.JsonValueKind.Undefined or System.Text.Json.JsonValueKind.Null);
+        if (Error.ValueKind == System.Text.Json.JsonValueKind.Object)
+        {
+            if (Error.TryGetProperty("message", out var m) && m.ValueKind == System.Text.Json.JsonValueKind.String) message = m.GetString();
+            if (Error.TryGetProperty("kind", out var k) && k.ValueKind == System.Text.Json.JsonValueKind.String) kind = k.GetString();
+            if (Error.TryGetProperty("code", out var c))
+            {
+                if (c.ValueKind == System.Text.Json.JsonValueKind.Number && c.TryGetInt32(out var n)) code = n;
+                else if (c.ValueKind == System.Text.Json.JsonValueKind.String && int.TryParse(c.GetString(), out n)) code = n;
+            }
+        }
+        var authRequired = AuthRequired || Helpers.AuthFailureDetector.IsAuthFailure(Provider, code, kind, message);
+        var safeMessage = Helpers.AuthFailureDetector.SanitizeMessage(message);
         return new()
         {
             Provider = Provider,
@@ -93,8 +112,10 @@ public record UsageDataDto
                 (!Cached && Helpers.DataAge.OldReadingUtc(fetched, Usage?.UpdatedAt ?? CacheUpdatedAt) != null),
             CacheUpdatedAt = CacheUpdatedAt,
             ServiceStatus = Status?.ToProviderStatus(),
-            Error = Error,
-            UsageFetchOutcome = !string.IsNullOrWhiteSpace(Error) || string.Equals(Source, "offline", StringComparison.OrdinalIgnoreCase)
+            Error = hasError ? safeMessage ?? "Provider returned an error" : null,
+            AuthRequired = authRequired,
+            AuthMessage = authRequired ? Helpers.AuthFailureDetector.SanitizeMessage(AuthError ?? message) : null,
+            UsageFetchOutcome = hasError || string.Equals(Source, "offline", StringComparison.OrdinalIgnoreCase)
                 ? FetchOutcome.Failed
                 : Usage?.Primary?.HasReading == true || Usage?.Secondary?.HasReading == true || Usage?.Tertiary?.HasReading == true ||
                     Usage?.ExtraRateWindows?.Any(x => x.Window?.HasReading == true && !string.IsNullOrWhiteSpace(x.Title)) == true

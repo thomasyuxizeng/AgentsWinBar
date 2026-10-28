@@ -69,4 +69,20 @@ public class StaleCaptionTests
     public void StatusLine_Stale_ReplacesExistingText() =>
         StaleCaption.StatusLine(true, Now.AddMinutes(-12), Now, "Status page updated 3m ago")
             .Should().Be("Stale · status last checked 12m ago");
+
+    [TestMethod]
+    [DataRow(10, "Last numbers from just now")]
+    [DataRow(12 * 60, "Last numbers from 12m ago")]
+    [DataRow(3 * 3600, "Last numbers from 3h ago")]
+    [DataRow(2 * 86400, "Last numbers from 2d ago")]
+    public void SignedOutText_WithNumbers_SaysHowOldTheyAre(int secondsAgo, string expected) =>
+        StaleCaption.SignedOutText(true, Now.AddSeconds(-secondsAgo), Now).Should().Be(expected);
+
+    [TestMethod]
+    public void SignedOutText_WithNumbersButUnknownAge_SaysOutOfDate() =>
+        StaleCaption.SignedOutText(true, null, Now).Should().Be("Last numbers are out of date");
+
+    [TestMethod]
+    public void SignedOutText_WithoutNumbers_SaysNoNumbers() =>
+        StaleCaption.SignedOutText(false, Now.AddHours(-1), Now).Should().Be("No usage numbers");
 }

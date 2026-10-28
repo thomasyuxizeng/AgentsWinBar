@@ -39,6 +39,11 @@ public record UsageData
     public ProviderStatus? ServiceStatus { get; init; }
     public CostData? Cost { get; init; }
     public string? Error { get; init; }
+    /// <summary>Session-only sign-out state, recomputed on refresh and never restored from disk.</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public bool AuthRequired { get; init; }
+    [System.Text.Json.Serialization.JsonIgnore]
+    public string? AuthMessage { get; init; }
     /// <summary>Indicates the final provider command failed with shell exit code 127.</summary>
     public bool CommandNotFound { get; init; }
     public bool IsLoading { get; init; }
