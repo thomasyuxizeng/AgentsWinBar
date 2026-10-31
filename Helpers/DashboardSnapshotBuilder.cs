@@ -212,7 +212,7 @@ public static class DashboardSnapshotBuilder
             d.ModelBreakdowns.Any(m => m.TotalTokens > 0 || m.Cost > 0)).ToArray();
         return new DashboardCost
         {
-            IsStale = cost.IsStale, LastSuccessfulFetchUtc = Utc(cost.LastSuccessfulFetch ?? cost.FetchedAt),
+            IsStale = cost.IsStale, StaleReason = cost.StaleReason, LastSuccessfulFetchUtc = Utc(cost.LastSuccessfulFetch ?? cost.FetchedAt),
             StaleAge = Age(now, Utc(cost.LastSuccessfulFetch ?? cost.FetchedAt)),
             Currency = cost.CurrencyCode, TodayCost = Math.Max(0, cost.TodayCostUSD), TodayTokens = Math.Max(0, cost.TodayTokens),
             Last30DaysCost = Math.Max(0, cost.Last30DaysCostUSD), Last30DaysTokens = Math.Max(0, cost.Last30DaysTokens),

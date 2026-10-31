@@ -25,6 +25,13 @@ public class CodexBarService : ICodexBarService
     // Cost scans run in the background and can read hundreds of MB of logs over /mnt/c (Codex took ~90 s on
     // a real machine), so they get their own deadline instead of the interactive usage timeout.
     internal static readonly TimeSpan CostScanTimeout = TimeSpan.FromMinutes(5);
+    internal static readonly TimeSpan CostScanTimeoutCap = TimeSpan.FromMinutes(30);
+    private static readonly TimeSpan CostTimeoutBackoff = TimeSpan.FromMinutes(5);
+    // Guarded by _costCache, like the last-good readings.
+    private readonly Dictionary<string, int> _costTimeouts = [];
+    private readonly Dictionary<string, string> _costFailures = [];
+    private readonly HashSet<string> _costTimedOut = [];
+    private DateOnly? _costStoreDay;
     private readonly ICostCacheStore? _costStore;
     private readonly ICostLedger? _costLedger;
     private readonly IEarlyResetStore? _earlyResetStore;
@@ -185,7 +192,8 @@ public class CodexBarService : ICodexBarService
                 CostData? published;
                 lock (_costCache)
                 {
-                    if (!forceRefresh && _costCache.TryGetValue(provider, out var cached) && now - cached.AttemptedAt < CostCacheTtl)
+                    if (!forceRefresh && _costCache.TryGetValue(provider, out var cached) &&
+                        now - cached.AttemptedAt < (_costTimedOut.Contains(provider) ? CostTimeoutBackoff : CostCacheTtl))
                         published = cached.Data != null ? CachedCost(cached.Data, now) : LastGoodCost(provider, now);
                     else
                     {
@@ -200,10 +208,8 @@ public class CodexBarService : ICodexBarService
                 onCompleted(provider, published);
             }
             if (due.Count == 0) return;
-            var scanTimeout = TimeSpan.FromSeconds(Math.Max(CostScanTimeout.TotalSeconds,
-                _settingsService.Settings.Timeouts.CliProviderFirstFetchTimeoutSeconds));
             var commands = due.Select(provider => new WslBatchCommand(
-                Helpers.CostCommandBuilder.Build(provider, _userProfile(), _directoryExists), scanTimeout)).ToArray();
+                Helpers.CostCommandBuilder.Build(provider, _userProfile(), _directoryExists), CostTimeout(provider, now))).ToArray();
             var completed = new bool[due.Count];
             var retry = new bool[due.Count];
             var batchFailed = false;
@@ -215,8 +221,32 @@ public class CodexBarService : ICodexBarService
                 completed[index] = true;
                 var costsEnabled = CostsEnabled;
                 var data = costsEnabled ? InterpretCostResult(due[index], result, now, ledgerScans) : null;
-                if (data == null && costsEnabled)
-                    lock (_costCache) data = LastGoodCost(due[index], now);
+                if (costsEnabled)
+                {
+                    lock (_costCache)
+                    {
+                        var provider = due[index];
+                        if (data == null)
+                        {
+                            var timedOut = result.ExitCode == 124 ||
+                                result.Error.Contains("timed out", StringComparison.OrdinalIgnoreCase);
+                            _costTimeouts[provider] = timedOut ? Math.Min(_costTimeouts.GetValueOrDefault(provider) + 1, 3) : 0;
+                            if (timedOut) _costTimedOut.Add(provider);
+                            else _costTimedOut.Remove(provider);
+                            _costFailures[provider] = timedOut
+                                ? FormattableString.Invariant($"Scan timed out after {commands[index].Timeout.TotalMinutes:0.##} min")
+                                : "Scan failed";
+                            _costStoreDirty = true;
+                            data = LastGoodCost(provider, now);
+                        }
+                        else
+                        {
+                            _costTimeouts.Remove(provider);
+                            _costTimedOut.Remove(provider);
+                            _costFailures.Remove(provider);
+                        }
+                    }
+                }
                 if (costsEnabled)
                     lock (_costCache) completedProviders.Add(due[index]);
                 onCompleted(due[index], data);
@@ -233,6 +263,10 @@ public class CodexBarService : ICodexBarService
                     Complete(index, result);
                 }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+                catch (OperationCanceledException) when (deadline.IsCancellationRequested)
+                {
+                    Complete(index, new WslResult { ExitCode = -1, Error = "Command timed out" });
+                }
                 catch (Exception ex)
                 {
                     _logger.LogDebug(ex, "Cost scan unavailable for {Provider}", due[index]);
@@ -309,11 +343,29 @@ public class CodexBarService : ICodexBarService
         }
     }
 
+    private TimeSpan CostTimeout(string provider, DateTimeOffset now)
+    {
+        lock (_costCache)
+        {
+            var minutes = Math.Max(CostScanTimeout.TotalMinutes,
+                _settingsService.Settings.Timeouts.CliProviderFirstFetchTimeoutSeconds / 60.0) *
+                Math.Pow(2, _costTimeouts.GetValueOrDefault(provider));
+            if (_lastGoodCost.TryGetValue(provider, out var data) &&
+                now.UtcDateTime - DashboardValues.Utc(data.LastSuccessfulFetch ?? data.FetchedAt) > TimeSpan.FromHours(24))
+                minutes = Math.Max(minutes, 20);
+            return TimeSpan.FromMinutes(Math.Min(minutes, CostScanTimeoutCap.TotalMinutes));
+        }
+    }
+
     /// <summary>The last complete result, with its original totals and timestamp preserved.</summary>
     private CostData? LastGoodCost(string provider, DateTimeOffset now)
     {
         if (!_lastGoodCost.TryGetValue(provider, out var data)) return null;
-        var staleCost = data with { IsStale = true, LastSuccessfulFetch = data.LastSuccessfulFetch ?? data.FetchedAt };
+        var staleCost = data with
+        {
+            IsStale = true, StaleReason = _costFailures.GetValueOrDefault(provider) ?? data.StaleReason,
+            LastSuccessfulFetch = data.LastSuccessfulFetch ?? data.FetchedAt
+        };
         if (_costLedger != null)
         {
             var today = DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(now.UtcDateTime, _timeProvider.LocalTimeZone));
@@ -335,13 +387,19 @@ public class CodexBarService : ICodexBarService
 
     private async Task SaveCostStoreAsync()
     {
-        if (_costStore == null) return;
+        if (_costStore == null || !_costStoreLoaded) return;
         Dictionary<string, CostData>? snapshot = null;
         lock (_costCache)
         {
-            if (!_costStoreDirty) return;
-            snapshot = new Dictionary<string, CostData>(_lastGoodCost, StringComparer.Ordinal);
+            var now = _timeProvider.GetUtcNow();
+            var day = DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(now, _timeProvider.LocalTimeZone).DateTime);
+            if (!_costStoreDirty && (_lastGoodCost.Count == 0 || _costStoreDay == day)) return;
+            snapshot = _lastGoodCost.ToDictionary(pair => pair.Key,
+                pair => _costFailures.TryGetValue(pair.Key, out var reason)
+                    ? pair.Value with { IsStale = true, StaleReason = reason }
+                    : CachedCost(pair.Value, now), StringComparer.Ordinal);
             _costStoreDirty = false;
+            _costStoreDay = day;
         }
         try
         {

@@ -83,6 +83,12 @@ public sealed partial class ProviderCard : UserControl
         CostSummary.Text = Data.Cost != null ? Helpers.CostFormatter.CardSummary(Data.Cost) : string.Empty;
         ToolTipService.SetToolTip(CostSummary, Data.Cost != null
             ? Helpers.CostFormatter.Summary(Data.Cost) + "\nList-price estimates, not billing." : null);
+        var costStale = Data.Cost?.HasData == true
+            ? Helpers.StaleCaption.Text(Data.Cost.IsStale, Data.Cost.LastSuccessfulFetch ?? Data.Cost.FetchedAt, DateTime.UtcNow)
+            : string.Empty;
+        CostStaleText.Text = costStale;
+        CostStaleRow.Visibility = costStale.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+        ToolTipService.SetToolTip(CostStaleRow, costStale.Length > 0 ? Data.Cost?.StaleReason : null);
 
         // Check state
         var isLoading = Data.IsLoading;

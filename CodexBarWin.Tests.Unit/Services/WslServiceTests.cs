@@ -564,7 +564,8 @@ public class WslServiceTests
 
     private static void RequireWslExecution()
     {
-        if (Environment.GetEnvironmentVariable("CODEXBARWIN_SKIP_BASH_INTEGRATION") == "1")
+        if (Environment.GetEnvironmentVariable("CODEXBARWIN_SKIP_BASH_INTEGRATION") == "1" ||
+            Environment.GetEnvironmentVariable("CODEXBARWIN_SKIP_WSL_INTEGRATION") == "1")
             Assert.Inconclusive("Bash/WSL execution disabled for this test run");
     }
 

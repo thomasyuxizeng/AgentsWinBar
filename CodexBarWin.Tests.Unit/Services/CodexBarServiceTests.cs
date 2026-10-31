@@ -480,6 +480,157 @@ public class CodexBarServiceTests
             clock, () => "C:\\Users\\Test", _ => true, costStore: store);
 
     [TestMethod]
+    public async Task GetCostAsync_StoreLoadFails_DoesNotOverwriteUnreadCache()
+    {
+        var store = new Mock<ICostCacheStore>();
+        store.Setup(s => s.LoadAsync(It.IsAny<CancellationToken>())).ThrowsAsync(new IOException("Cannot read cache"));
+        var service = new CodexBarService(_mockWslService, _mockCacheService, _mockSettingsService, _mockSampleDataLoader,
+            _mockLogger.Object, costStore: store.Object);
+        await service.GetCostAsync("claude");
+        store.Verify(s => s.SaveAsync(It.IsAny<IReadOnlyDictionary<string, CostData>>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [TestMethod]
+    [DataRow(124, "")]
+    [DataRow(-1, "Command timed out")]
+    [DataRow(3, "Command TIMED OUT")]
+    public async Task GetCostAsync_ConsecutiveTimeouts_EscalatesToCapAndResetsAfterSuccess(int exitCode, string error)
+    {
+        var service = CostService(new CostClock { Zone = TimeZoneInfo.Utc });
+        _mockWslService.CommandHandler = (_, _) => Task.FromResult(new WslResult { ExitCode = exitCode, Error = error });
+        for (var i = 0; i < 5; i++) await service.GetCostAsync("claude", forceRefresh: true);
+        _mockWslService.ExecutedCommandTimeouts.Should().Equal(new[] { 5, 10, 20, 30, 30 }.Select(minutes => TimeSpan.FromMinutes(minutes)));
+        _mockWslService.CommandHandler = (_, _) => Task.FromResult(CostResult("claude"));
+        await service.GetCostAsync("claude", forceRefresh: true);
+        await service.GetCostAsync("claude", forceRefresh: true);
+        _mockWslService.ExecutedCommandTimeouts.TakeLast(2).Should().Equal(CodexBarService.CostScanTimeoutCap, CodexBarService.CostScanTimeout);
+        await service.GetCostAsync("codex", forceRefresh: true);
+        _mockWslService.ExecutedCommandTimeouts.Last().Should().Be(CodexBarService.CostScanTimeout);
+    }
+
+    [TestMethod]
+    [DataRow(true)]
+    [DataRow(false)]
+    public async Task GetCostAsync_OldLastGood_UsesColdDeadlineForRestoredAndInMemoryReadings(bool restored)
+    {
+        var clock = new CostClock { Zone = TimeZoneInfo.Utc };
+        var store = new MemoryCostStore();
+        var old = clock.Now.AddHours(-25).UtcDateTime;
+        if (restored) store.Items["claude"] = new CostData { Provider = "claude", TodayTokens = 10, FetchedAt = old, LastSuccessfulFetch = old };
+        var service = StoredCostService(store, clock);
+        SetCostResponse();
+        if (!restored)
+        {
+            await service.GetCostAsync("claude");
+            clock.Now += TimeSpan.FromHours(25);
+        }
+        await service.GetCostAsync("claude", forceRefresh: true);
+        _mockWslService.ExecutedCommandTimeouts.Last().Should().Be(TimeSpan.FromMinutes(20));
+        SetCostResponse("codex");
+        await service.GetCostAsync("codex");
+        _mockWslService.ExecutedCommandTimeouts.Last().Should().Be(CodexBarService.CostScanTimeout);
+    }
+
+    [TestMethod]
+    [DataRow(124, "", 5)]
+    [DataRow(-1, "Command timed out", 5)]
+    [DataRow(-1, "Process failed", 30)]
+    [DataRow(3, "Scan failed", 30)]
+    public async Task GetCostAsync_FailedAttempt_RetriesAfterOutcomeSpecificBackoff(int exitCode, string error, int minutes)
+    {
+        var clock = new CostClock();
+        var service = CostService(clock);
+        _mockWslService.CommandHandler = (_, _) => Task.FromResult(new WslResult { ExitCode = exitCode, Error = error });
+        await service.GetCostAsync("claude");
+        clock.Now += TimeSpan.FromMinutes(minutes) - TimeSpan.FromSeconds(1);
+        await service.GetCostAsync("claude");
+        _mockWslService.ExecutedCommands.Should().ContainSingle();
+        clock.Now += TimeSpan.FromSeconds(1);
+        await service.GetCostAsync("claude");
+        _mockWslService.ExecutedCommands.Should().HaveCount(2);
+    }
+
+    [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task GetCostAsync_FailureThenRecovery_PersistsStaleReasonAndOriginalTimestampsThenClearsIt(bool timedOut)
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "cbw-scan-stale-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var clock = new CostClock { Zone = TimeZoneInfo.Utc };
+            var store = new CostCacheStore(_mockSettingsService,
+                Microsoft.Extensions.Logging.Abstractions.NullLogger<CostCacheStore>.Instance, clock, Path.Combine(directory, "cost-cache.json"));
+            var service = new CodexBarService(_mockWslService, _mockCacheService, _mockSettingsService, _mockSampleDataLoader,
+                _mockLogger.Object, clock, () => "C:\\Users\\Test", _ => true, costStore: store);
+            SetCostResponse();
+            var good = (await service.GetCostAsync("claude"))!;
+            clock.Now += TimeSpan.FromMinutes(1);
+            _mockWslService.CommandHandler = (_, _) => Task.FromResult(new WslResult { ExitCode = timedOut ? 124 : 3 });
+            var failed = (await service.GetCostAsync("claude", forceRefresh: true))!;
+            var reason = timedOut ? "Scan timed out after 5 min" : "Scan failed";
+            failed.Should().BeEquivalentTo(good with { IsStale = true, StaleReason = reason });
+            (await store.LoadAsync())["claude"].Should().BeEquivalentTo(good with { IsStale = true, StaleReason = reason });
+            var json = await File.ReadAllTextAsync(store.FilePath);
+            using var document = System.Text.Json.JsonDocument.Parse(json);
+            var entry = document.RootElement.GetProperty("items").GetProperty("claude");
+            entry.GetProperty("isStale").GetBoolean().Should().BeTrue();
+            entry.GetProperty("staleReason").GetString().Should().Be(reason);
+            entry.GetProperty("fetchedAt").GetDateTime().Should().Be(good.FetchedAt);
+            entry.GetProperty("lastSuccessfulFetch").GetDateTime().Should().Be(good.LastSuccessfulFetch!.Value);
+            _mockWslService.CommandHandler = null;
+            var fresh = (await service.GetCostAsync("claude", forceRefresh: true))!;
+            fresh.IsStale.Should().BeFalse();
+            fresh.StaleReason.Should().BeNull();
+            fresh.FetchedAt.Should().Be(clock.Now.UtcDateTime);
+            (await store.LoadAsync())["claude"].Should().BeEquivalentTo(fresh);
+        }
+        finally { if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true); }
+    }
+
+    [TestMethod]
+    public async Task GetCostAsync_LocalDayBoundary_StampsAllEntriesOnSaveEvenDuringBackoff()
+    {
+        var clock = new CostClock
+        {
+            Zone = TimeZoneInfo.CreateCustomTimeZone("Test +9", TimeSpan.FromHours(9), "Test +9", "Test +9"),
+            Now = new DateTimeOffset(2026, 10, 4, 14, 59, 0, TimeSpan.Zero)
+        };
+        var store = new MemoryCostStore();
+        var service = StoredCostService(store, clock);
+        SetCostResponse();
+        var original = (await service.GetCostAsync("claude"))!;
+        clock.Now += TimeSpan.FromMinutes(2);
+        await service.GetCostAsync("claude");
+        _mockWslService.ExecutedCommands.Should().ContainSingle();
+        store.Saves.Should().HaveCount(2);
+        store.Saves.Last()["claude"].Should().BeEquivalentTo(original with { IsStale = true });
+        SetCostResponse("codex");
+        await service.GetCostAsync("codex");
+        store.Saves.Last()["claude"].IsStale.Should().BeTrue();
+        store.Saves.Last()["codex"].IsStale.Should().BeFalse();
+    }
+
+    [TestMethod]
+    public async Task GetCostsAsync_TimeoutsInBatch_AssignsIndependentProviderDeadlines()
+    {
+        var service = CostService();
+        var pass = 0;
+        _mockWslService.BatchHandler = (commands, completed, _) =>
+        {
+            commands[0].Timeout.Should().Be(TimeSpan.FromMinutes(pass == 0 ? 5 : 10));
+            commands[1].Timeout.Should().Be(CodexBarService.CostScanTimeout);
+            WslResult[] results = [new() { ExitCode = 124 }, CostResult("codex")];
+            for (var i = 0; i < results.Length; i++) completed!(i, results[i]);
+            pass++;
+            return Task.FromResult<IReadOnlyList<WslResult>>(results);
+        };
+        await CollectCostsAsync(service, ["claude", "codex"], forceRefresh: true);
+        await CollectCostsAsync(service, ["claude", "codex"], forceRefresh: true);
+        pass.Should().Be(2);
+    }
+
+    [TestMethod]
     [DataRow(false)]
     [DataRow(true)]
     public async Task GetCostAsync_StoreSaveFails_RetriesCachedSnapshotUntilSaveSucceeds(bool throws)
@@ -543,10 +694,10 @@ public class CodexBarServiceTests
         var good = await service.GetCostAsync("claude");
         good!.Last30DaysCostUSD.Should().Be(5m);
         SetCostResponse(success: false, json: "Command timed out");
-        (await service.GetCostAsync("claude", forceRefresh: true)).Should().BeEquivalentTo(good! with { IsStale = true });
+        (await service.GetCostAsync("claude", forceRefresh: true)).Should().BeEquivalentTo(good! with { IsStale = true, StaleReason = "Scan failed" });
         // The failure still backs off; the cached answer during backoff is the last good result, not nothing.
         clock.Now += TimeSpan.FromMinutes(10);
-        (await service.GetCostAsync("claude")).Should().BeEquivalentTo(good! with { IsStale = true });
+        (await service.GetCostAsync("claude")).Should().BeEquivalentTo(good! with { IsStale = true, StaleReason = "Scan failed" });
         _mockWslService.ExecutedCommands.Should().HaveCount(2);
         service.GetCostCacheInfo().Single().HasData.Should().BeFalse();
     }
@@ -593,7 +744,7 @@ public class CodexBarServiceTests
     }
 
     [TestMethod]
-    public async Task GetCostsAsync_StoredResultAndTimedOutScan_KeepsStoredResultWithoutSaving()
+    public async Task GetCostsAsync_StoredResultAndTimedOutScan_KeepsStoredResultAndSavesStaleReason()
     {
         var clock = new CostClock();
         var store = new MemoryCostStore();
@@ -609,9 +760,15 @@ public class CodexBarServiceTests
         var results = await CollectCostsAsync(StoredCostService(store, clock), ["codex"]);
 
         results.Should().HaveCount(2);
-        foreach (var result in results)
-            result.Cost.Should().BeEquivalentTo(stored with { IsStale = true, LastSuccessfulFetch = stored.FetchedAt });
-        store.Saves.Should().BeEmpty();
+        results[0].Cost.Should().BeEquivalentTo(stored with { IsStale = true, LastSuccessfulFetch = stored.FetchedAt });
+        results[1].Cost.Should().BeEquivalentTo(stored with
+        {
+            IsStale = true, StaleReason = "Scan timed out after 5 min", LastSuccessfulFetch = stored.FetchedAt
+        });
+        store.Saves.Should().ContainSingle().Which["codex"].Should().BeEquivalentTo(stored with
+        {
+            IsStale = true, StaleReason = "Scan timed out after 5 min"
+        });
     }
 
     [TestMethod]

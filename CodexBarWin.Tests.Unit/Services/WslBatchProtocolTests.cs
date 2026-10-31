@@ -214,14 +214,15 @@ public class WslBatchProtocolTests
         var candidates = new List<(string File, string[] Prefix)>();
         var system32 = Environment.GetFolderPath(Environment.SpecialFolder.System);
         var wsl = Path.Combine(system32, "wsl.exe");
-        if (OperatingSystem.IsWindows() && File.Exists(wsl)) candidates.Add((wsl, ["--exec", "bash", "-ic"]));
+        if (Environment.GetEnvironmentVariable("CODEXBARWIN_SKIP_WSL_INTEGRATION") != "1" &&
+            OperatingSystem.IsWindows() && File.Exists(wsl)) candidates.Add((wsl, ["--exec", "bash", "-ic"]));
         foreach (var path in (Environment.GetEnvironmentVariable("PATH") ?? "").Split(Path.PathSeparator))
         {
             var bash = Path.Combine(path.Trim('"'), OperatingSystem.IsWindows() ? "bash.exe" : "bash");
             if (File.Exists(bash) && !bash.StartsWith(system32, StringComparison.OrdinalIgnoreCase))
                 candidates.Add((bash, ["--noprofile", "--norc", "-ic"]));
         }
-        candidates.Add((@"C:\Program Files\Gitinash.exe", ["--noprofile", "--norc", "-ic"]));
+        candidates.Add((@"C:\Program Files\Git\bin\bash.exe", ["--noprofile", "--norc", "-ic"]));
 
         ProcessStartInfo StartInfo((string File, string[] Prefix) shell, string script)
         {
@@ -284,7 +285,8 @@ public class WslBatchProtocolTests
     {
         var script = WslBatchProtocol.BuildScript([new("true", TimeSpan.FromSeconds(10))], WslBatchProtocol.CreateMarker());
 
-        script.Should().Contain("(\n cbw_start=$SECONDS\n timeout --kill-after=2s 10s bash -c");
+        script.Should().Contain("(\n cbw_start=$SECONDS\n");
+        script.Should().Contain("timeout --kill-after=2s 10s bash -c");
         script.Should().Contain("'true' &\n cbw_job=$!\n printf '%s\\n' \"$cbw_job\" >\"$cbw_dir/0.pid\"");
         script.Should().Contain("wait \"$cbw_job\"\n cbw_exit=$?\n kill -KILL -- \"-$cbw_job\" 2>/dev/null || :\n rm -f -- \"$cbw_dir/0.pid\"");
     }
@@ -374,11 +376,49 @@ public class WslBatchProtocolTests
     public void BuildScript_OutputBounds_LimitsTemporaryFilesBeforeBase64AndBoundsBatchSize()
     {
         var script = WslBatchProtocol.BuildScript([new("true", TimeSpan.FromSeconds(5))], WslBatchProtocol.CreateMarker());
-        script.Should().Contain("ulimit -f 4096 || exit 125");
+        script.Should().NotContain("ulimit -f");
+        script.Should().Contain("head -c 4194304 >\"$cbw_dir/0.out\"; cat >/dev/null");
+        script.Should().Contain("head -c 4194304 >\"$cbw_dir/0.err\"; cat >/dev/null");
+        script.IndexOf("kill -KILL -- \"-$cbw_job\"").Should().BeLessThan(script.IndexOf("cbw_grace=0"));
+        script.IndexOf("cbw_grace=0").Should().BeLessThan(script.IndexOf("cbw_size="));
         script.IndexOf("cbw_size=").Should().BeLessThan(script.IndexOf("cbw_out=$(base64"));
         script.Should().Contain("cbw_exit=122").And.Contain("output limit exceeded");
         Action oversized = () => WslBatchProtocol.BuildScript(Enumerable.Repeat(new WslBatchCommand("true", TimeSpan.FromSeconds(5)),
             WslBatchProtocol.MaxCommands + 1).ToArray(), WslBatchProtocol.CreateMarker());
         oversized.Should().Throw<ArgumentOutOfRangeException>();
+    }
+
+    [TestMethod]
+    [TestCategory("BashIntegration")]
+    public async Task BuildScript_RealBashLargeSideFile_AllowsCacheWritesButRejectsOversizedCapture()
+    {
+        const string sideFile = "side=$(mktemp); trap 'rm -f -- \"$side\"' EXIT; head -c 5242880 /dev/zero >\"$side\"; [ $(wc -c <\"$side\") -eq 5242880 ] || exit 7; ";
+        var results = await RunInBashAsync([
+            new(sideFile + "printf cached", TimeSpan.FromSeconds(5)),
+            new(sideFile + "head -c 5242880 /dev/zero", TimeSpan.FromSeconds(5)),
+            new("head -c 2200000 /dev/zero; head -c 2200000 /dev/zero >&2", TimeSpan.FromSeconds(5)),
+            new("yes runaway", TimeSpan.FromSeconds(1))], WslBatchProtocol.CreateMarker());
+        results[0]!.Success.Should().BeTrue();
+        results[0]!.Output.Should().Be("cached");
+        foreach (var result in results.Skip(1))
+        {
+            result!.ExitCode.Should().Be(122);
+            result.Output.Should().BeEmpty();
+            result.Error.Should().Contain("output limit exceeded");
+        }
+    }
+
+    [TestMethod]
+    [TestCategory("BashIntegration")]
+    public async Task BuildScript_RealBashDescendantKeepsPipeOpen_ReturnsOutputAfterShortGrace()
+    {
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        var results = await RunInBashAsync([
+            new("setsid sleep 25 >&1 2>&2 </dev/null & printf finished", TimeSpan.FromSeconds(5)),
+            new("printf sibling", TimeSpan.FromSeconds(5))], WslBatchProtocol.CreateMarker());
+        watch.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(15));
+        results[0]!.Success.Should().BeTrue();
+        results[0]!.Output.Should().Be("finished");
+        results[1]!.Output.Should().Be("sibling");
     }
 }

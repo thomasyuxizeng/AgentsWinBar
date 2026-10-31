@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- Fix: Claude cost scans no longer stall on large logs; capture limits preserve CLI memo writes, scan deadlines adapt, scans finish after windows close, and cached failures are marked stale.
 - Signed-out providers are flagged on the dashboard with sign-in instructions, while their last known usage remains visible as stale data.
 
 ## [1.5.3] - 2026-10-16

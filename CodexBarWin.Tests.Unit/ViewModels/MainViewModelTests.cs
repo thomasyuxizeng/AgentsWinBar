@@ -1267,7 +1267,7 @@ public class MainViewModelTests
     [TestMethod]
     [DataRow(true)]
     [DataRow(false)]
-    public async Task RefreshCoreAsync_DemandReleasedDuringCostScan_CompletesUsageAndPreservesCosts(bool honorsCancellation)
+    public async Task RefreshCoreAsync_DemandReleasedDuringCostScan_CompletesUsageAndPublishesCosts(bool honorsCancellation)
     {
         var historyNow = DateTimeOffset.UtcNow;
         _clock.Setup(c => c.GetUtcNow()).Returns(() => historyNow);
@@ -1299,13 +1299,13 @@ public class MainViewModelTests
         var costCompletion = CostScanCompletion();
 
         demand.Dispose();
-        scanToken.IsCancellationRequested.Should().BeTrue();
+        scanToken.IsCancellationRequested.Should().BeFalse();
         usageToken.IsCancellationRequested.Should().BeFalse();
         scan.TrySetResult(new CostData { Provider = "claude", Last30DaysCostUSD = 100 });
         await refresh.WaitAsync(TimeSpan.FromSeconds(5));
         await costCompletion.WaitAsync(TimeSpan.FromSeconds(5));
 
-        _viewModel.Providers.Single().Cost.Should().Be(previous);
+        _viewModel.Providers.Single().Cost!.Last30DaysCostUSD.Should().Be(100);
         _viewModel.Providers.Single().Session!.Percent.Should().Be(30);
         _viewModel.Providers.Single().IsLoading.Should().BeFalse();
         _viewModel.IsLoading.Should().BeFalse();
@@ -1316,7 +1316,7 @@ public class MainViewModelTests
             AppJsonSerializerContext.Default.ListUsageHistorySample);
         savedSamples.Should().Contain(s => s.UsedPercent == 30);
         _viewModel.NextRefreshUtc.Should().BeCloseTo(DateTime.UtcNow.AddMinutes(5), TimeSpan.FromSeconds(2));
-        // Canceled costs must still publish the usage fingerprint for subsequent adaptive refreshes.
+        // Completing costs must still publish the usage fingerprint for subsequent adaptive refreshes.
         await PeriodicRefreshAsync();
         await PeriodicRefreshAsync();
         _viewModel.EffectiveRefreshInterval.Should().Be(TimeSpan.FromMinutes(10));
@@ -1372,7 +1372,7 @@ public class MainViewModelTests
     }
 
     [TestMethod]
-    public async Task RefreshCommand_DemandReleasedDuringSeparateScan_OnlyCancelsDemandedCosts()
+    public async Task RefreshCommand_DemandReleasedDuringSeparateScan_KeepsForcedScanAndDiscardsSupersededCosts()
     {
         var demandedScan = new TaskCompletionSource<CostData?>(TaskCreationOptions.RunContinuationsAsynchronously);
         var forcedScan = new TaskCompletionSource<CostData?>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -1549,10 +1549,35 @@ public class MainViewModelTests
     }
 
     [TestMethod]
-    public async Task AcquireCostDemand_ReopenedDuringCanceledScan_RetriesWithoutPublishingCanceledTotals()
+    public async Task AcquireCostDemand_LastConsumerCloses_FinishesScanAndPublishesWithoutStartingAnother()
+    {
+        var scan = new TaskCompletionSource<CostData?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var current = new CostData { Provider = "claude", Last30DaysCostUSD = 42 };
+        CancellationToken scanToken = default;
+        _usage.Setup(s => s.GetAllUsageStreamAsync(It.IsAny<CancellationToken>()))
+            .Returns((CancellationToken ct) => Stream(Task.CompletedTask, Data(20), ct));
+        _usage.Setup(s => s.GetCostAsync("claude", false, It.IsAny<CancellationToken>()))
+            .Returns((string provider, bool force, CancellationToken ct) =>
+            {
+                scanToken = ct;
+                return scan.Task.WaitAsync(ct);
+            });
+        await _viewModel.StartAsync();
+        var demand = _viewModel.AcquireCostDemand();
+        var completion = CostScanCompletion(background: false);
+        demand.Dispose();
+        scanToken.IsCancellationRequested.Should().BeFalse();
+        scan.SetResult(current);
+        await completion.WaitAsync(TimeSpan.FromSeconds(5));
+        _viewModel.Providers.Single().Cost.Should().Be(current);
+        await PeriodicRefreshAsync();
+        _usage.Verify(s => s.GetCostAsync("claude", false, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [TestMethod]
+    public async Task AcquireCostDemand_ReopenedDuringScan_ReusesScanAndPublishesItsResult()
     {
         var firstScan = new TaskCompletionSource<CostData?>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var retry = Signal();
         var calls = 0;
         var current = new CostData { Provider = "claude", Last30DaysCostUSD = 10 };
         CancellationToken firstToken = default;
@@ -1561,22 +1586,22 @@ public class MainViewModelTests
         _usage.Setup(s => s.GetCostAsync("claude", false, It.IsAny<CancellationToken>()))
             .Returns((string provider, bool force, CancellationToken ct) =>
             {
-                if (++calls == 1) { firstToken = ct; return firstScan.Task; }
-                _viewModel.Providers.Single().Cost.Should().BeNull();
-                retry.TrySetResult();
-                return Task.FromResult<CostData?>(current);
+                calls++;
+                firstToken = ct;
+                return firstScan.Task;
             });
         await _viewModel.StartAsync();
         var firstDemand = _viewModel.AcquireCostDemand();
         firstDemand.Dispose();
         firstDemand.Dispose();
-        firstToken.IsCancellationRequested.Should().BeTrue();
+        firstToken.IsCancellationRequested.Should().BeFalse();
         using var reopened = _viewModel.AcquireCostDemand();
-        firstScan.SetResult(new CostData { Provider = "claude", Last30DaysCostUSD = 100 });
-        await retry.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var completion = CostScanCompletion(background: false);
+        firstScan.SetResult(current);
+        await completion.WaitAsync(TimeSpan.FromSeconds(5));
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
         while (_viewModel.Providers.Single().Cost != current) await Task.Delay(10, timeout.Token);
-        calls.Should().Be(2);
+        calls.Should().Be(1);
     }
 
     [TestMethod]

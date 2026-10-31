@@ -26,7 +26,7 @@ internal static class WslBatchProtocol
 
         var script = new StringBuilder("""
             set +e +u +m
-            command -v timeout >/dev/null && command -v flock >/dev/null && command -v base64 >/dev/null && command -v wc >/dev/null || exit 125
+            command -v timeout >/dev/null && command -v flock >/dev/null && command -v base64 >/dev/null && command -v wc >/dev/null && command -v head >/dev/null && command -v cat >/dev/null || exit 125
             umask 077
             cbw_dir=$(mktemp -d) || exit 125
             cbw_pids=()
@@ -57,12 +57,18 @@ internal static class WslBatchProtocol
             // GNU timeout supervises a separate process group, so shell children
             // are terminated too. Its background PID is also the process group ID.
             // Kill remaining descendants even if their immediate parent exits early.
-            script.Append("(\n cbw_start=$SECONDS\n timeout --kill-after=2s ").Append(seconds)
-                .Append("s bash -c 'ulimit -f 4096 || exit 125; exec >\"$1\" 2>\"$2\"; exec bash -c \"$3\"' cbw \"$cbw_dir/")
-                .Append(i).Append(".out\" \"$cbw_dir/").Append(i).Append(".err\" ")
+            // Capture outside the command's process group. Drain excess bytes without storing them,
+            // then wait for capture EOF after killing descendants, before inspecting the bounded files.
+            script.Append("(\n cbw_start=$SECONDS\n exec 3> >(head -c ").Append(WslOutputReader.CommandLimitBytes)
+                .Append(" >\"$cbw_dir/").Append(i).Append(".out\"; cat >/dev/null)\n cbw_out_pid=$!\n exec 4> >(head -c ")
+                .Append(WslOutputReader.CommandLimitBytes).Append(" >\"$cbw_dir/").Append(i)
+                .Append(".err\"; cat >/dev/null)\n cbw_err_pid=$!\n timeout --kill-after=2s ").Append(seconds)
+                .Append("s bash -c 'exec >&3 2>&4; exec 3>&- 4>&-; exec bash -c \"$1\"' cbw ")
                 .Append(Quote(command.Command)).Append(" &\n cbw_job=$!\n printf '%s\\n' \"$cbw_job\" >\"$cbw_dir/")
                 .Append(i).Append(".pid\"\n wait \"$cbw_job\"\n cbw_exit=$?\n kill -KILL -- \"-$cbw_job\" 2>/dev/null || :\n rm -f -- \"$cbw_dir/")
-                .Append(i).Append(".pid\"\n cbw_elapsed=$((SECONDS - cbw_start))\n")
+                // A descendant that escaped the process group can keep the capture pipes open; give the drain 5 s, then keep what was written.
+                .Append(i).Append(".pid\"\n exec 3>&- 4>&-\n cbw_grace=0\n while [ \"$cbw_grace\" -lt 50 ] && { kill -0 \"$cbw_out_pid\" 2>/dev/null || kill -0 \"$cbw_err_pid\" 2>/dev/null; }; do sleep 0.1; cbw_grace=$((cbw_grace + 1)); done\n")
+                .Append(" kill \"$cbw_out_pid\" \"$cbw_err_pid\" 2>/dev/null || :\n cbw_elapsed=$((SECONDS - cbw_start))\n")
                 .Append(" case \"$cbw_exit\" in 137|124|143) if [ \"$cbw_elapsed\" -ge ")
                 .Append(timeoutThreshold).Append(" ]; then cbw_exit=124; fi ;; esac\n")
                 .Append(" cbw_size=$(( $(wc -c <\"$cbw_dir/").Append(i).Append(".out\") + $(wc -c <\"$cbw_dir/")

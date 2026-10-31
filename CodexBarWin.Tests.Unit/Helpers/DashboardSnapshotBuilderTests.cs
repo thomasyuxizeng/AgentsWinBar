@@ -10,6 +10,17 @@ namespace CodexBarWin.Tests.Unit.Helpers;
 public class DashboardSnapshotBuilderTests
 {
     [TestMethod]
+    public void Build_StaleCost_ExposesScanFailureReason()
+    {
+        var snapshot = DashboardSnapshotBuilder.Build(Inputs(Provider() with
+        {
+            Cost = new CostData { Provider = "claude", IsStale = true, StaleReason = "Scan timed out after 20 min",
+                TodayTokens = 10, FetchedAt = Now.AddHours(-1) }
+        }) with { Settings = new() { ShowCostTotals = true } });
+        snapshot.Providers.Single().Cost!.StaleReason.Should().Be("Scan timed out after 20 min");
+    }
+
+    [TestMethod]
     public void Build_SignedOutProviders_ExposesRecoveryContractAndExcludesGenericHealthCounts()
     {
         var snapshot = DashboardSnapshotBuilder.Build(Inputs(

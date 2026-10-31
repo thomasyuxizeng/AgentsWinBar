@@ -43,7 +43,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private DateTime? _carryOverSinceUtc;
     private CancellationTokenSource? _costRefreshCts;
     private CancellationTokenSource? _backgroundCostRefreshCts;
-    private bool _backgroundCostRefreshForced;
     private CancellationTokenSource? _trimCts;
     private readonly SynchronizationContext? _uiContext = SynchronizationContext.Current;
     private UsageFingerprint? _usageFingerprint;
@@ -265,11 +264,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
             if (Interlocked.Decrement(ref _costDemand) == 0)
                 OnUiThread(() =>
                 {
-                    if (Volatile.Read(ref _costDemand) == 0)
-                    {
-                        _costRefreshCts?.Cancel();
-                        if (!_backgroundCostRefreshForced) _backgroundCostRefreshCts?.Cancel();
-                    }
                     ScheduleWorkingSetTrim();
                 });
         });
@@ -447,7 +441,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
         // awaiting cleanup so superseded scans cannot publish or clear the newer scan's state.
         using var scanCts = new CancellationTokenSource();
         _backgroundCostRefreshCts = scanCts;
-        _backgroundCostRefreshForced = forceRefresh;
         var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         _backgroundCostRefreshCompletion = completion;
         if (previousBackground != null)
@@ -473,7 +466,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
             if (ReferenceEquals(_backgroundCostRefreshCts, scanCts))
             {
                 _backgroundCostRefreshCts = null;
-                _backgroundCostRefreshForced = false;
             }
             if (ReferenceEquals(_backgroundCostRefreshCompletion, completion)) _backgroundCostRefreshCompletion = null;
             completion.TrySetResult();
@@ -491,7 +483,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
         await foreach (var (provider, cost) in _codexBarService.GetCostsAsync(providers, forceRefresh, ct))
         {
             ct.ThrowIfCancellationRequested();
-            if (!forceRefresh && Volatile.Read(ref _costDemand) == 0) return;
             var published = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             OnUiThread(() =>
             {
@@ -500,8 +491,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     // Recheck on the dispatcher: cancellation, replacement or disposal may happen while queued.
                     if (_disposed || _stopped || _exiting || ct.IsCancellationRequested ||
                         !ReferenceEquals(backgroundScan ? _backgroundCostRefreshCts : _costRefreshCts, scanCts) ||
-                        !_settingsService.Settings.ShowCostTotals || _settingsService.Settings.DeveloperModeEnabled ||
-                        (!forceRefresh && Volatile.Read(ref _costDemand) == 0)) return;
+                        !_settingsService.Settings.ShowCostTotals || _settingsService.Settings.DeveloperModeEnabled) return;
                     var index = Providers.ToList().FindIndex(p => p.Provider.Equals(provider, StringComparison.OrdinalIgnoreCase));
                     if (index >= 0) Providers[index] = Providers[index] with { Cost = cost };
                 }

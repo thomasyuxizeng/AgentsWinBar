@@ -41,6 +41,24 @@ public class CostCacheStoreTests
     };
 
     [TestMethod]
+    public async Task LoadAsync_OldJsonWithoutStaleReason_PreservesPersistedStaleness()
+    {
+        var store = Store();
+        await File.WriteAllTextAsync(store.FilePath, """
+            {"version":1,"items":{"claude":{"provider":"claude","todayTokens":42,
+            "fetchedAt":"2026-10-01T10:00:00Z","lastSuccessfulFetch":"2026-10-01T10:00:00Z","isStale":true}}}
+            """);
+        var data = (await store.LoadAsync())["claude"];
+        data.IsStale.Should().BeTrue();
+        data.StaleReason.Should().BeNull();
+        data.TodayTokens.Should().Be(42);
+        data.FetchedAt.Should().Be(new DateTime(2026, 10, 1, 10, 0, 0, DateTimeKind.Utc));
+        data.LastSuccessfulFetch.Should().Be(data.FetchedAt);
+        await store.SaveAsync(new Dictionary<string, CostData> { ["claude"] = data });
+        (await Store().LoadAsync())["claude"].Should().BeEquivalentTo(data);
+    }
+
+    [TestMethod]
     public async Task SaveAsync_ThenLoadAsync_RoundTripsFullResult()
     {
         var store = Store();

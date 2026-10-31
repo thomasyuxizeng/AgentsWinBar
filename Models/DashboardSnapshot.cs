@@ -161,6 +161,7 @@ public sealed record DashboardWindow
 /// <summary>Local-log cost and token totals for one provider, plus derived figures.</summary>
 public sealed record DashboardCost
 {
+    public string? StaleReason { get; init; }
     public bool IsStale { get; init; }
     public DateTime? LastSuccessfulFetchUtc { get; init; }
     public TimeSpan? StaleAge { get; init; }

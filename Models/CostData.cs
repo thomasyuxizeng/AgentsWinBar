@@ -17,6 +17,7 @@ public record CostData
     /// <summary>Outcome of the scan that produced these values. IsStale marks a later failed or pending scan.</summary>
     public FetchOutcome FetchOutcome { get; init; }
     public bool IsStale { get; init; }
+    public string? StaleReason { get; init; }
     public DateTime? LastSuccessfulFetch { get; init; }
     public bool HasData => FetchOutcome == FetchOutcome.Success || TodayTokens > 0 || TodayCostUSD > 0 || Last30DaysTokens > 0 || Last30DaysCostUSD > 0 ||
         (Daily ?? []).OfType<DailyCost>().Any(d => d.TotalTokens > 0 || d.TotalCost > 0 ||

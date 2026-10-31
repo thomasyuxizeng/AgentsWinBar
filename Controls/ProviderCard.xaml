@@ -244,9 +244,18 @@
             </ItemsControl.ItemTemplate>
         </ItemsControl>
 
-        <TextBlock Grid.Row="4" x:Name="CostSummary" Visibility="Collapsed" Margin="0,8,0,0"
-                   FontSize="10" TextWrapping="Wrap"
-                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+        <StackPanel Grid.Row="4" Margin="0,8,0,0" Spacing="2">
+            <!-- Last-known-good cost totals: say so instead of looking fresh -->
+            <StackPanel x:Name="CostStaleRow" Orientation="Horizontal" Spacing="4" Visibility="Collapsed">
+                <FontIcon FontFamily="Segoe Fluent Icons" Glyph="&#xE7BA;" FontSize="10" VerticalAlignment="Center"
+                          Foreground="{ThemeResource SystemFillColorCautionBrush}"/>
+                <TextBlock x:Name="CostStaleText" FontSize="10" TextWrapping="Wrap"
+                           Foreground="{ThemeResource SystemFillColorCautionBrush}"/>
+            </StackPanel>
+            <TextBlock x:Name="CostSummary" Visibility="Collapsed"
+                       FontSize="10" TextWrapping="Wrap"
+                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+        </StackPanel>
 
         <!-- Error message overlay (shown when error and no data) -->
         <Grid Grid.Row="1" Grid.RowSpan="2" x:Name="ErrorPanel" Visibility="Collapsed" MinHeight="40">
