@@ -197,4 +197,39 @@ public class WidgetBarSelectorTests
 
         atLimitChanging.Should().BeGreaterThan(quiet);
     }
+
+    [TestMethod]
+    public void Pick_WhenAnExtraWeeklyIsAtItsLimit_ItReplacesTheUnusableExtraSession()
+    {
+        var data = Claude(Win(0, 300), Win(93),
+            Extra("External 5h", Win(0, 300)), Extra("External 7d", Win(100)));
+
+        var bars = WidgetBarSelector.Pick(data, Now);
+
+        bars.Should().HaveCount(2);
+        bars[0].Window.Should().BeSameAs(data.Session);
+        bars[1].Title.Should().Be("External 7d");
+    }
+
+    [TestMethod]
+    public void Pick_WhenTheWeeklyIsAtItsLimit_ItReplacesTheUnusableSession()
+    {
+        var data = Claude(Win(0, 300), Win(100), Extra("Fable only", Win(0)));
+
+        var bars = WidgetBarSelector.Pick(data, Now);
+
+        bars.Should().HaveCount(2);
+        bars[0].Window.Should().BeSameAs(data.Weekly);
+        bars[1].Title.Should().Be("Fable only");
+    }
+
+    [TestMethod]
+    public void Pick_WhenTheSessionIsAlsoUsedUp_NothingIsReplaced()
+    {
+        var data = Claude(Win(100, 300), Win(100), Extra("Fable only", Win(0)));
+
+        var bars = WidgetBarSelector.Pick(data, Now);
+
+        bars.Select(b => b.Window).Should().Contain(data.Session!);
+    }
 }

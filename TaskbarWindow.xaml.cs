@@ -112,6 +112,11 @@ public sealed partial class TaskbarWindow : Window
     public event EventHandler? OpenDetailsRequested;
 
     /// <summary>
+    /// Raised when the user picks "Open dashboard".
+    /// </summary>
+    public event EventHandler? OpenDashboardRequested;
+
+    /// <summary>
     /// Raised when the user picks "Hide taskbar display".
     /// </summary>
     public event EventHandler? HideRequested;
@@ -677,6 +682,11 @@ public sealed partial class TaskbarWindow : Window
     private void OnOpenDetailsClick(object sender, RoutedEventArgs e)
     {
         OpenDetailsRequested?.Invoke(this, EventArgs.Empty);
+    }
+
+    private void OnOpenDashboardClick(object sender, RoutedEventArgs e)
+    {
+        OpenDashboardRequested?.Invoke(this, EventArgs.Empty);
     }
 
     private void OnHideClick(object sender, RoutedEventArgs e)

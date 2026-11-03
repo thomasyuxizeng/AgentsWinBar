@@ -88,8 +88,38 @@ public static class WidgetBarSelector
             if (!chosen.Contains(candidate)) chosen.Add(candidate);
         }
 
+        // A short window whose longer sibling is used up can't be used either: show the sibling in its place
+        for (var i = 0; i < chosen.Count; i++)
+        {
+            var shorter = chosen[i];
+            var blocker = ranked.FirstOrDefault(r => IsBlocking(r, shorter) && !chosen.Contains(r));
+            if (blocker.Bar != null) chosen[i] = blocker;
+        }
+
         // Show them in their natural order so positions stay stable
         return chosen.OrderBy(c => c.Order).Select(c => c.Bar).ToList();
+    }
+
+    /// <summary>
+    /// Whether <paramref name="longer"/> is the at-its-limit longer window of the same pool as <paramref name="shorter"/>
+    /// (weekly over session, "External 7d" over "External 5h"), which makes the shorter one unusable while it lasts.
+    /// </summary>
+    private static bool IsBlocking(
+        (WidgetBar Bar, bool IsExtra, int Order, double Score) longer,
+        (WidgetBar Bar, bool IsExtra, int Order, double Score) shorter)
+    {
+        if (longer.IsExtra != shorter.IsExtra) return false;
+        if (longer.Bar.Window.Percent < 100 || shorter.Bar.Window.Percent >= 100) return false;
+        if (shorter.Bar.Window.WindowMinutes <= 0 || longer.Bar.Window.WindowMinutes <= shorter.Bar.Window.WindowMinutes) return false;
+        // The main windows are one pool; extras pool by title
+        return !longer.IsExtra || (PoolKey(longer.Bar.Title) is { } pool && pool == PoolKey(shorter.Bar.Title));
+    }
+
+    /// <summary>The title without its trailing window length ("External 5h" and "External 7d" share "External"); null when it has none.</summary>
+    private static string? PoolKey(string? title)
+    {
+        var space = title?.LastIndexOf(' ') ?? -1;
+        return space > 0 ? title![..space] : null;
     }
 
     /// <summary>

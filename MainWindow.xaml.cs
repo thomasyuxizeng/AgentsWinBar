@@ -381,6 +381,7 @@ public sealed partial class MainWindow : Window
         {
             _taskbarWindow = new TaskbarWindow();
             _taskbarWindow.OpenDetailsRequested += (_, _) => ToggleWindow();
+            _taskbarWindow.OpenDashboardRequested += OnDashboardRequested;
             _taskbarWindow.HideRequested += (_, _) =>
             {
                 _settingsService.Settings.TaskbarDisplayEnabled = false;
