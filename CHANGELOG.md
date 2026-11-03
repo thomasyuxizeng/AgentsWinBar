@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.4] - 2026-11-03
+
+### Added
+- The taskbar strip's right-click menu has an "Open dashboard" item, next to "Open details".
+
+### Changed
+- When a window's longer partner is used up (the weekly at 100% while the session is not, or "External 7d" at 100% while "External 5h" is not), the strip and the overlay now show the longer one in place of the short window that cannot be used. An Antigravity row that was showing two empty bars now shows its red limit bar.
+
 ### Fixed
 - Fix: Claude cost scans no longer stall on large logs; capture limits preserve CLI memo writes, scan deadlines adapt, scans finish after windows close, and cached failures are marked stale.
 - Signed-out providers are flagged on the dashboard with sign-in instructions, while their last known usage remains visible as stale data.
