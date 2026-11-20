@@ -301,6 +301,42 @@ internal static class DashboardFormat
     /// <summary>The API meter's time-elapsed layer, in the 0-100 / -1 form <c>UsageMeter.TimePercent</c> takes.</summary>
     public static double ApiTime(ApiCreditsInfo? info) => Time(ApiElapsedPercent(info, DateTime.UtcNow));
 
+    // Gemini API spend (Data.GeminiApi, set only on the gemini provider); every helper tolerates null so x:Bind can pass the property directly.
+    /// <summary>Route lines and per-model rows under this amount are not shown.</summary>
+    internal const decimal GeminiMinShown = 0.005m;
+    public static Visibility VisGeminiSection(GeminiApiSpendInfo? info) =>
+        Vis(info is { State: GeminiApiSpendState.Ok or GeminiApiSpendState.Unavailable });
+    public static Visibility VisGeminiOk(GeminiApiSpendInfo? info) => Vis(info is { State: GeminiApiSpendState.Ok });
+    public static Visibility VisGeminiUnavailable(GeminiApiSpendInfo? info) => Vis(info is { State: GeminiApiSpendState.Unavailable });
+    public static string GeminiMessage(GeminiApiSpendInfo? info) =>
+        string.IsNullOrWhiteSpace(info?.Message) ? "The Gemini spend log could not be read." : info.Message!;
+    public static string GeminiTotal(GeminiApiSpendInfo? info) => info == null ? string.Empty : Money(info.TotalUsd, "USD");
+    public static string GeminiCalls(GeminiApiSpendInfo? info) => info == null ? string.Empty : Plural(info.Calls, "call");
+    public static string GeminiAutomationName(GeminiApiSpendInfo? info) => info is { State: GeminiApiSpendState.Ok }
+        ? $"Gemini API spend this month: {GeminiTotal(info)}, {GeminiCalls(info)}" : "Gemini API spend this month";
+    public static Visibility VisGeminiAiStudio(GeminiApiSpendInfo? info) => Vis(info is { AiStudioUsd: >= GeminiMinShown });
+    public static Visibility VisGeminiVertex(GeminiApiSpendInfo? info) => Vis(info is { VertexUsd: >= GeminiMinShown });
+    public static Visibility VisGeminiUnrecorded(GeminiApiSpendInfo? info) => Vis(info is { UnrecordedRouteUsd: >= GeminiMinShown });
+    public static string GeminiAiStudio(GeminiApiSpendInfo? info) => info == null ? string.Empty : Money(info.AiStudioUsd, "USD");
+    public static string GeminiVertex(GeminiApiSpendInfo? info) => info == null ? string.Empty : Money(info.VertexUsd, "USD");
+    public static string GeminiUnrecorded(GeminiApiSpendInfo? info) => info == null ? string.Empty : Money(info.UnrecordedRouteUsd, "USD");
+    /// <summary>"List-price estimate from a local log, before credits · last call 3h 5m ago".</summary>
+    public static string GeminiCaption(GeminiApiSpendInfo? info)
+    {
+        const string estimate = "List-price estimate from a local log, before credits";
+        return info?.LastCallUtc is { } last ? $"{estimate} · last call {Ago(last)}" : estimate;
+    }
+    /// <summary>"gemini-4-neon" becomes "Gemini 4 Neon" (hyphenated parts become capitalised words); any other name is returned unchanged.</summary>
+    public static string GeminiModelLabel(string? model)
+    {
+        const string prefix = "gemini-4-";
+        if (model == null || !model.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) || model.Length == prefix.Length) return model ?? string.Empty;
+        var words = model[prefix.Length..].Split('-', StringSplitOptions.RemoveEmptyEntries)
+            .Select(w => char.ToUpperInvariant(w[0]) + w[1..]);
+        var rest = string.Join(' ', words);
+        return rest.Length == 0 ? model : $"Gemini 4 {rest}";
+    }
+
     // Summary "Needs attention" entries
     public static string AttentionText(string? label, string? detail) => $"{label}: {detail}";
     public static Visibility VisCritical(AttentionSeverity severity) => Vis(severity == AttentionSeverity.Critical);

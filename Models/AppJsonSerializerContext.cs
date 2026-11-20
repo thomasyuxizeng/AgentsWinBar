@@ -22,6 +22,7 @@ namespace CodexBarWin.Models;
 [JsonSerializable(typeof(ApiKeyCreator))]
 [JsonSerializable(typeof(ApiUsersReport))]
 [JsonSerializable(typeof(ApiOrganizationUser))]
+[JsonSerializable(typeof(GeminiSpendLogRowDto))]
 [JsonSerializable(typeof(ResetAnimationMode))]
 [JsonSerializable(typeof(CacheData))]
 [JsonSerializable(typeof(UsageDataDto))]

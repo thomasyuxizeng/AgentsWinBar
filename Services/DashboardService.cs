@@ -25,7 +25,9 @@ public sealed class DashboardService : IDashboardService
     private bool? _cliAvailable;
     private readonly IEarlyResetStore? _earlyResetStore;
     private readonly IApiBillingService? _apiBilling;
+    private readonly IGeminiSpendService? _geminiSpend;
     private ApiCreditsInfo? _apiCredits;
+    private GeminiApiSpendInfo? _geminiApi;
     private int _billingGeneration;
     private BillingScope? _billingScope;
     private readonly record struct BillingScope(decimal Monthly, int Day, bool Developer);
@@ -37,13 +39,14 @@ public sealed class DashboardService : IDashboardService
 
     public DashboardService(ISettingsService settings, UsageHistoryStore history, UsageHistoryPersistence persistence,
         IActivityLog activity, ICodexBarService cli, ILogger<DashboardService> logger, TimeProvider? timeProvider = null,
-        ICostLedger? costLedger = null, IEarlyResetStore? earlyResetStore = null, IApiBillingService? apiBilling = null)
+        ICostLedger? costLedger = null, IEarlyResetStore? earlyResetStore = null, IApiBillingService? apiBilling = null, IGeminiSpendService? geminiSpend = null)
     {
         _settings = settings; _history = history; _persistence = persistence;
         _activity = activity; _cli = cli; _logger = logger; _clock = timeProvider ?? TimeProvider.System;
         _costLedger = costLedger;
         _earlyResetStore = earlyResetStore;
         _apiBilling = apiBilling;
+        _geminiSpend = geminiSpend;
     }
 
     public DashboardSnapshot GetSnapshot(IReadOnlyList<UsageData> providers, DateTime? lastRefreshUtc,
@@ -65,8 +68,27 @@ public sealed class DashboardService : IDashboardService
             RecentAlerts = _activity.RecentAlerts, CostCache = _cli.GetCostCacheInfo(),
             CostLedger = _costLedger,
             EarlyResetStore = _earlyResetStore,
-            ApiCredits = CurrentApiCredits()
+            ApiCredits = CurrentApiCredits(),
+            GeminiApi = CurrentGeminiSpend()
         });
+    }
+
+    private GeminiApiSpendInfo? CurrentGeminiSpend()
+    {
+        lock (_gate)
+        {
+            var spend = _geminiApi;
+            if (spend == null) return null;
+            var zone = _geminiSpend?.Zone ?? TimeZoneInfo.Local;
+            var nowUtc = _clock.GetUtcNow().UtcDateTime;
+            var localNow = TimeZoneInfo.ConvertTimeFromUtc(nowUtc, zone);
+            var currentMonthStart = new DateOnly(localNow.Year, localNow.Month, 1);
+            if (spend.MonthStart != currentMonthStart) return null;
+            var monthEnd = currentMonthStart.AddMonths(1);
+            var localDate = DateOnly.FromDateTime(localNow);
+            var daysLeft = Math.Max(1, monthEnd.DayNumber - localDate.DayNumber);
+            return spend with { DaysLeft = daysLeft };
+        }
     }
 
     private ApiCreditsInfo? CurrentApiCredits()
@@ -92,23 +114,43 @@ public sealed class DashboardService : IDashboardService
     /// <summary>Independent of usage/CLI cost scans; all billing work runs away from the UI context.</summary>
     public async Task RefreshApiCreditsAsync(bool force, CancellationToken ct = default)
     {
-        if (_apiBilling == null) return;
+        if (_apiBilling == null && _geminiSpend == null) return;
         int generation;
         BillingScope scope;
         lock (_gate) { generation = ++_billingGeneration; scope = CurrentBillingScope(); }
-        try
+        if (_apiBilling != null)
         {
-            var result = await Task.Run(() => _apiBilling.GetAsync(force, ct), ct).ConfigureAwait(false);
-            lock (_gate)
+            try
             {
-                if (!ct.IsCancellationRequested && generation == _billingGeneration && scope == CurrentBillingScope())
-                { _apiCredits = result; _billingScope = scope; }
+                var result = await Task.Run(() => _apiBilling.GetAsync(force, ct), ct).ConfigureAwait(false);
+                lock (_gate)
+                {
+                    if (!ct.IsCancellationRequested && generation == _billingGeneration && scope == CurrentBillingScope())
+                    { _apiCredits = result; _billingScope = scope; }
+                }
+            }
+            catch (Exception)
+            {
+                // A replacement billing implementation must not expose transport exception details either.
+                _logger.LogDebug("Background API billing refresh did not complete");
             }
         }
-        catch (Exception)
+
+        if (_geminiSpend != null)
         {
-            // A replacement billing implementation must not expose transport exception details either.
-            _logger.LogDebug("Background API billing refresh did not complete");
+            try
+            {
+                var geminiResult = await Task.Run(() => _geminiSpend.GetAsync(ct), ct).ConfigureAwait(false);
+                lock (_gate)
+                {
+                    if (!ct.IsCancellationRequested && generation == _billingGeneration)
+                    { _geminiApi = geminiResult; }
+                }
+            }
+            catch (Exception)
+            {
+                _logger.LogDebug("Background Gemini spend refresh did not complete");
+            }
         }
     }
 

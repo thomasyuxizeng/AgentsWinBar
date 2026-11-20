@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- The Gemini provider card on the dashboard shows this month's Gemini API spend, estimated at list prices from token counts in a local spend log, with cached input at the cache rate when the log records it (hidden when no log exists). The spend log path can be overridden through the `CODEXBAR_GEMINI_SPEND_LOG` environment variable.
+
 ## [1.5.4] - 2026-11-03
 
 ### Added

@@ -101,6 +101,36 @@ public class DashboardServiceTests
     }
 
     [TestMethod]
+    public async Task GetSnapshot_MonthRollsOver_WithholdsPreviousMonthGeminiSpend()
+    {
+        _clock.Now = new(2026, 10, 31, 23, 59, 0, TimeSpan.Zero);
+        var geminiSpend = new Mock<IGeminiSpendService>();
+        geminiSpend.SetupGet(s => s.Zone).Returns(TimeZoneInfo.Utc);
+        var octoberSpend = new GeminiApiSpendInfo
+        {
+            State = GeminiApiSpendState.Ok,
+            MonthStart = new DateOnly(2026, 10, 1),
+            MonthEnd = new DateOnly(2026, 11, 1),
+            DaysLeft = 1,
+            TotalUsd = 150m,
+            Calls = 25
+        };
+        geminiSpend.Setup(s => s.GetAsync(It.IsAny<CancellationToken>())).ReturnsAsync(octoberSpend);
+
+        _service = new(_settings.Object, _history, _persistence, _activity, _cli.Object,
+            NullLogger<DashboardService>.Instance, _clock, geminiSpend: geminiSpend.Object);
+
+        await _service.RefreshApiCreditsAsync(false);
+        var snapshotBefore = _service.GetSnapshot([new() { Provider = "gemini" }], null);
+        snapshotBefore.Providers.Single().GeminiApi.Should().NotBeNull();
+        snapshotBefore.Providers.Single().GeminiApi!.TotalUsd.Should().Be(150m);
+
+        _clock.Now = _clock.Now.AddMinutes(2);
+        var snapshotAfter = _service.GetSnapshot([new() { Provider = "gemini" }], null);
+        snapshotAfter.Providers.Single().GeminiApi.Should().BeNull();
+    }
+
+    [TestMethod]
     public async Task GetSnapshot_UtcMidnightWithinCycle_RecomputesDaysAndPace()
     {
         _clock.Now = new(2026, 10, 15, 23, 59, 0, TimeSpan.Zero);

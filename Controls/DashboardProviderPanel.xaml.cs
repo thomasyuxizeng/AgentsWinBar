@@ -11,9 +11,9 @@ namespace CodexBarWin.Controls;
 public sealed record DashboardBarRow(string Label, string Value, double Percent);
 
 /// <summary>One team member's use of the API credits pool: name, amount, share text and the share as a 0-100 bar. <paramref name="IsOthers"/> marks the folded "N others" row.</summary>
-public sealed record DashboardApiUseRow(string Label, string Amount, string Share, double Percent, bool IsYou, bool IsOthers = false)
+public sealed record DashboardApiUseRow(string Label, string Amount, string Share, double Percent, bool IsYou, bool IsOthers = false, string OfWhat = "of the pool")
 {
-    public string AutomationName => $"{Label}, {Amount}, {Share} of the pool";
+    public string AutomationName => $"{Label}, {Amount}, {Share} {OfWhat}";
 }
 
 /// <summary>A label and a value line (cost facts, diagnostics).</summary>
@@ -38,6 +38,8 @@ public sealed partial class DashboardProviderPanel : UserControl
     public IReadOnlyList<DashboardBarRow> ModelRows { get; private set; } = [];
     public IReadOnlyList<DashboardFact> CostFacts { get; private set; } = [];
     public IReadOnlyList<DashboardApiUseRow> ApiUseRows { get; private set; } = [];
+    public IReadOnlyList<DashboardApiUseRow> GeminiUseRows { get; private set; } = [];
+    public int GeminiUseRowTotal => GeminiUseRows.Count;
     public int WindowCount => Data?.Windows.Count ?? 0;
 
     /// <summary>Pace projections, window facts, cost breakdowns and the history footer.</summary>
@@ -123,6 +125,7 @@ public sealed partial class DashboardProviderPanel : UserControl
         BuildWindows(data);
         BuildCostRows(data?.Cost);
         BuildApiUseRows(data?.ApiCredits);
+        BuildGeminiUseRows(data?.GeminiApi);
 
         CreditsText.Text = data?.Credits is { } credits
             ? $"Credits: {credits.Used:0.##} of {credits.Limit:0.##} used · {credits.Remaining:0.##} remaining"
@@ -261,6 +264,38 @@ public sealed partial class DashboardProviderPanel : UserControl
         var rows = shown.Take(MaxApiUseRows).Select(c => Row(c.IsYou ? "You" : c.Name, c.SpentUsd, c.IsYou)).ToList();
         var rest = shown.Skip(MaxApiUseRows).ToList();
         if (rest.Count > 0) rows.Add(Row(rest.Count == 1 ? "1 other" : $"{rest.Count} others", rest.Sum(c => c.SpentUsd), false, isOthers: true));
+        return rows;
+    }
+
+    /// <summary>"By model" rows for the Gemini API section; reassigned only when the sequence changed so the list does not flicker.</summary>
+    private void BuildGeminiUseRows(GeminiApiSpendInfo? gemini)
+    {
+        var rows = GeminiUseRowsFor(gemini);
+        if (!GeminiUseRows.SequenceEqual(rows)) GeminiUseRows = rows;
+    }
+
+    /// <summary>How many "By model" rows <paramref name="gemini"/> renders (for height estimates).</summary>
+    internal static int GeminiUseRowCount(GeminiApiSpendInfo? gemini) => GeminiUseRowsFor(gemini).Count;
+
+    /// <summary>How many route lines (AI Studio key, Vertex, Route not recorded) <paramref name="gemini"/> shows.</summary>
+    internal static int GeminiRouteLineCount(GeminiApiSpendInfo? gemini) => gemini is not { State: GeminiApiSpendState.Ok } ? 0
+        : new[] { gemini.AiStudioUsd, gemini.VertexUsd, gemini.UnrecordedRouteUsd }.Count(usd => usd >= DashboardFormat.GeminiMinShown);
+
+    /// <summary>
+    /// One row per model, largest first as given; bars are each model's share of the month's total. Zero-dollar models are
+    /// dropped, at most <see cref="MaxApiUseRows"/> rows show and the rest fold into one "N others" row.
+    /// </summary>
+    private static List<DashboardApiUseRow> GeminiUseRowsFor(GeminiApiSpendInfo? gemini)
+    {
+        if (gemini is not { State: GeminiApiSpendState.Ok } || gemini.TotalUsd <= 0) return [];
+        DashboardApiUseRow Row(string label, decimal usd, bool isOthers = false) => new(label,
+            DashboardFormat.Money(usd, "USD"), DashboardFormat.ApiShare(usd, gemini.TotalUsd),
+            Math.Clamp((double)(usd / gemini.TotalUsd) * 100, 0, 100), false, isOthers, "of this month's spend");
+
+        var shown = gemini.Models.Where(m => m.Usd >= DashboardFormat.GeminiMinShown).ToList();
+        var rows = shown.Take(MaxApiUseRows).Select(m => Row(DashboardFormat.GeminiModelLabel(m.Model), m.Usd)).ToList();
+        var rest = shown.Skip(MaxApiUseRows).ToList();
+        if (rest.Count > 0) rows.Add(Row(rest.Count == 1 ? "1 other" : $"{rest.Count} others", rest.Sum(m => m.Usd), isOthers: true));
         return rows;
     }
 

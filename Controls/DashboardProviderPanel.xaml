@@ -291,6 +291,106 @@
                                  Visibility="{x:Bind views:DashboardFormat.VisApiKeyLink(Data.ApiCredits), Mode=OneWay}"/>
             </StackPanel>
 
+            <!-- Gemini API spend this month (estimated from the local spend log; gemini provider only, hidden without a log) -->
+            <StackPanel Spacing="8" x:Name="GeminiApiSection"
+                        Visibility="{x:Bind views:DashboardFormat.VisGeminiSection(Data.GeminiApi), Mode=OneWay}">
+                <Border Style="{StaticResource Divider}" Margin="0,0,0,8"/>
+                <TextBlock Text="GEMINI API · THIS MONTH" Style="{StaticResource SectionCaption}"/>
+
+                <!-- Ok: the month's total and call count, the routes it went through, then the models; no budget, so no bar for the total -->
+                <StackPanel Spacing="8" Visibility="{x:Bind views:DashboardFormat.VisGeminiOk(Data.GeminiApi), Mode=OneWay}">
+                    <StackPanel Orientation="Horizontal" Spacing="8" Background="Transparent"
+                                AutomationProperties.Name="{x:Bind views:DashboardFormat.GeminiAutomationName(Data.GeminiApi), Mode=OneWay}"
+                                ToolTipService.ToolTip="List prices applied to the token counts in the local spend log, with cached input at the cache rate. Credits and prepaid balances are not subtracted.">
+                        <TextBlock Style="{StaticResource Hero}"
+                                   Text="{x:Bind views:DashboardFormat.GeminiTotal(Data.GeminiApi), Mode=OneWay}"/>
+                        <TextBlock FontSize="13" VerticalAlignment="Bottom" Margin="0,0,0,5"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                   Text="{x:Bind views:DashboardFormat.GeminiCalls(Data.GeminiApi), Mode=OneWay}"/>
+                    </StackPanel>
+
+                    <!-- Routes, named by route rather than by who pays; each only when it has spend -->
+                    <StackPanel Spacing="6">
+                        <Grid ColumnSpacing="12" Visibility="{x:Bind views:DashboardFormat.VisGeminiAiStudio(Data.GeminiApi), Mode=OneWay}">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto" MinWidth="56"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="AI Studio key" FontSize="13" TextTrimming="CharacterEllipsis"
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                            <TextBlock Grid.Column="1" FontSize="13" TextAlignment="Right" Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                       Text="{x:Bind views:DashboardFormat.GeminiAiStudio(Data.GeminiApi), Mode=OneWay}"/>
+                        </Grid>
+                        <Grid ColumnSpacing="12" Visibility="{x:Bind views:DashboardFormat.VisGeminiVertex(Data.GeminiApi), Mode=OneWay}">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto" MinWidth="56"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="Vertex" FontSize="13" TextTrimming="CharacterEllipsis"
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                            <TextBlock Grid.Column="1" FontSize="13" TextAlignment="Right" Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                       Text="{x:Bind views:DashboardFormat.GeminiVertex(Data.GeminiApi), Mode=OneWay}"/>
+                        </Grid>
+                        <Grid ColumnSpacing="12" Background="Transparent"
+                              Visibility="{x:Bind views:DashboardFormat.VisGeminiUnrecorded(Data.GeminiApi), Mode=OneWay}"
+                              ToolTipService.ToolTip="Gemini CLI jobs do not record which route they used">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto" MinWidth="56"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="Route not recorded" FontSize="13" TextTrimming="CharacterEllipsis"
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                            <TextBlock Grid.Column="1" FontSize="13" TextAlignment="Right" Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                       Text="{x:Bind views:DashboardFormat.GeminiUnrecorded(Data.GeminiApi), Mode=OneWay}"/>
+                        </Grid>
+                    </StackPanel>
+
+                    <!-- By model: bars are shares of the month's total -->
+                    <StackPanel Spacing="6" Margin="0,4,0,0"
+                                Visibility="{x:Bind views:DashboardFormat.VisCount(GeminiUseRowTotal), Mode=OneWay}">
+                        <TextBlock Text="By model" Style="{StaticResource SubHeading}"/>
+                        <ItemsControl ItemsSource="{x:Bind GeminiUseRows, Mode=OneWay}" IsTabStop="False">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate><StackPanel Spacing="6"/></ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="controls:DashboardApiUseRow">
+                                    <Grid ColumnSpacing="12" AutomationProperties.Name="{x:Bind AutomationName}">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="2*" MinWidth="64"/>
+                                            <ColumnDefinition Width="3*"/>
+                                            <ColumnDefinition Width="Auto" MinWidth="56"/>
+                                            <ColumnDefinition Width="36"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Text="{x:Bind Label}" FontSize="13" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"
+                                                   ToolTipService.ToolTip="{x:Bind Label}"
+                                                   Visibility="{x:Bind views:DashboardFormat.VisNot(IsOthers)}"/>
+                                        <TextBlock Text="{x:Bind Label}" FontSize="13" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"
+                                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                                   Visibility="{x:Bind views:DashboardFormat.Vis(IsOthers)}"/>
+                                        <!-- A neutral fill that differs from the track (ControlStrong... is the track's own colour) -->
+                                        <ProgressBar Grid.Column="1" Minimum="0" Maximum="100" Value="{x:Bind Percent}" VerticalAlignment="Center"
+                                                     AutomationProperties.Name="{x:Bind AutomationName}"
+                                                     Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                                        <TextBlock Grid.Column="2" Text="{x:Bind Amount}" FontSize="13" TextAlignment="Right" VerticalAlignment="Center"/>
+                                        <TextBlock Grid.Column="3" Text="{x:Bind Share}" FontSize="12" TextAlignment="Right" VerticalAlignment="Center"
+                                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                                    </Grid>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+
+                    <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap"
+                               Text="{x:Bind views:DashboardFormat.GeminiCaption(Data.GeminiApi), Mode=OneWay}"/>
+                </StackPanel>
+
+                <!-- Unavailable: the reason -->
+                <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap"
+                           Text="{x:Bind views:DashboardFormat.GeminiMessage(Data.GeminiApi), Mode=OneWay}"
+                           Visibility="{x:Bind views:DashboardFormat.VisGeminiUnavailable(Data.GeminiApi), Mode=OneWay}"/>
+            </StackPanel>
+
             <!-- Cost and tokens: totals and the daily chart; breakdowns in the details -->
             <StackPanel Spacing="8" x:Name="CostSection"
                         Visibility="{x:Bind views:DashboardFormat.VisNotNull(Data.Cost), Mode=OneWay}">

@@ -333,13 +333,20 @@ public sealed partial class DashboardPage : Page
               + (DashboardFormat.HasIncident(provider) ? 130 : 0)
               + (provider.Credits != null ? 30 : 0)
               + (provider.Cost != null ? 250 : 0)
-              + ApiSectionHeight(provider.ApiCredits);
+              + ApiSectionHeight(provider.ApiCredits)
+              + GeminiApiSectionHeight(provider.GeminiApi);
 
     /// <summary>The Claude API credits section: about 150 plus a row per rendered contributor when Ok, a line otherwise, nothing without a key.</summary>
     private static double ApiSectionHeight(ApiCreditsInfo? api) => api == null ? 0
         : api.State == ApiCreditsState.NoKey ? 0
         : api.State != ApiCreditsState.Ok ? 70
         : 150 + 28 * DashboardProviderPanel.ApiUseRowCount(api);
+
+    /// <summary>The Gemini API spend section: nothing without a log, a line when unreadable, else about 130 plus a row per model and a line per route.</summary>
+    private static double GeminiApiSectionHeight(GeminiApiSpendInfo? gemini) => gemini == null ? 0
+        : gemini.State == GeminiApiSpendState.NoLog ? 0
+        : gemini.State != GeminiApiSpendState.Ok ? 70
+        : 130 + 28 * DashboardProviderPanel.GeminiUseRowCount(gemini) + 22 * DashboardProviderPanel.GeminiRouteLineCount(gemini);
 
     private void OnRefreshClicked(object sender, RoutedEventArgs e) => RefreshRequested?.Invoke(this, EventArgs.Empty);
     private void OnSettingsClicked(object sender, RoutedEventArgs e) => SettingsRequested?.Invoke(this, EventArgs.Empty);

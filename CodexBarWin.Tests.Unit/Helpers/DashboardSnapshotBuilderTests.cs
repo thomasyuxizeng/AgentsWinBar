@@ -100,6 +100,18 @@ public class DashboardSnapshotBuilderTests
     }
 
     [TestMethod]
+    [DataRow(true)]
+    [DataRow(false)]
+    public void Build_GeminiApiInput_AttachesOnlyToGeminiRegardlessOfCostVisibility(bool showCosts)
+    {
+        var spend = GeminiSpendCalculator.Build(string.Empty, Now, TimeZoneInfo.Utc, Now);
+        var result = DashboardSnapshotBuilder.Build(Inputs(Provider(), Provider("codex"), Provider("gemini")) with
+        { Settings = new() { ShowCostTotals = showCosts }, GeminiApi = spend });
+        result.Providers.Single(p => p.Id == "gemini").GeminiApi.Should().BeSameAs(spend);
+        result.Providers.Where(p => p.Id != "gemini").Should().OnlyContain(p => p.GeminiApi == null);
+    }
+
+    [TestMethod]
     public void Build_RetainedUsageWithCliCreditsPruned_PreservesIndependentApiCredits()
     {
         var retained = CodexBarWin.Services.CacheRetention.PruneExpired(Provider() with

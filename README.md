@@ -53,6 +53,7 @@ When a limit resets, its bar plays a short animation (see [Reset animation](#res
 | **Cost and tokens** | Today's and last-30-days totals from local logs, each on its own wrapping card line. Detail pages show daily costs and top models. Amounts are list-price estimates, not bills. |
 | **Usage history** | Detail pages plot each limit window's usage against an even-use guide readable in light and dark themes, with a projection from the observed rate and local capture times. History builds as the app runs and is kept for 14 days. The dashboard's [GRAPHS](#the-dashboard) section shows compact versions of these charts. |
 | **API credits** | The dashboard's Claude panel can show your Anthropic organization's API spend against a monthly budget. Needs an Anthropic Admin key. See [API credits](#api-credits). |
+| **Gemini API spend** | The dashboard's Gemini panel can show this month's Gemini API spend from a local spend log, by route and by model. See [Gemini API spend](#gemini-api-spend). |
 
 Supported providers: **Claude**, **Codex** (OpenAI) and **Gemini** (read through Google's Antigravity).
 
@@ -221,7 +222,7 @@ From top to bottom:
 | Section | What it shows |
 |---------|---------------|
 | **Summary** | Only what the provider panels don't already say. **NEEDS ATTENTION** lists failed fetches, service incidents, windows at their limit, windows that will run out before they reset, windows near a limit, API credits that are running low or over budget, and providers showing old or last-known data (marked stale). Providers with the same kind of problem share one entry, and clicking an entry jumps to that provider. When nothing is wrong the toolbar says **All clear**. When two or more providers report cost, the summary also shows the estimated spend for all providers. |
-| **Provider panels** | One panel per provider, side by side as far as the window is wide: plan, freshness, service status with incident details, every usage window with its reset time (windows that reset together share one reset line), pace warnings, and cost and tokens for today and the last 30 days. Claude's panel also holds the [API credits](#api-credits) tracker. **Show details** adds pace and window facts, the 30-day token mix, top models and how many history samples exist. Gemini's External (Claude and GPT) windows sit beside its own models in a wide panel and stack under them in a narrow one. |
+| **Provider panels** | One panel per provider, side by side as far as the window is wide: plan, freshness, service status with incident details, every usage window with its reset time (windows that reset together share one reset line), pace warnings, and cost and tokens for today and the last 30 days. Claude's panel also holds the [API credits](#api-credits) tracker, and Gemini's the [Gemini API spend](#gemini-api-spend) section. **Show details** adds pace and window facts, the 30-day token mix, top models and how many history samples exist. Gemini's External (Claude and GPT) windows sit beside its own models in a wide panel and stack under them in a narrow one. |
 | **GRAPHS** | Below the panels: one card per provider with a compact burndown chart for each usage window (usage against an even-use guide, with a projection) and a 30-day daily cost chart. The toggle buttons in the section header hide or show a provider's charts; the choice is the same **Show graphs** option as in Settings. |
 | **Diagnostics** | A collapsible section at the bottom (collapsed by default, with a one-line summary in its header), also in full screen: CLI and app versions, the effective settings, the history store, cost scans, and this session's refresh log and alerts. |
 
@@ -252,6 +253,20 @@ How it behaves:
 - No key: nothing shows until you open **Show details** on the Claude panel, which then explains how to add one.
 - Key rejected: "Admin key rejected (HTTP 401)" or "(HTTP 403)", with the link to create a key.
 - Anthropic unreachable: "Anthropic API spend is unavailable right now". If an earlier reading exists it stays on screen, marked stale. Any reading older than 15 minutes is marked stale.
+
+### Gemini API spend
+
+The Gemini panel can show this calendar month's Gemini API spend (local time). Google offers no API that reads billing with a Gemini API key, so the amounts come from a local log that your own scripts write, one JSON object per call:
+
+```json
+{"time": "2026-11-20T09:28:36", "model": "gemini-4-neon", "backend": "aistudio", "usd": 0.4583, "usd_cache_aware": 0.2104}
+```
+
+- `time` is local time without a zone. `backend` is `aistudio`, `vertex` or missing. `usd_cache_aware` is used when present, otherwise `usd`. Rows that can't be read are skipped.
+- The default path is `%USERPROFILE%\.claude\gemini-api\spend.jsonl`. Set the user environment variable `CODEXBAR_GEMINI_SPEND_LOG` to use another file.
+- Without the file, nothing shows.
+
+What it shows: the month's total and number of calls, the spend per route (**AI Studio key**, **Vertex**, **Route not recorded**), a **By model** list with each model's share, and when the last call was. The amounts are list-price estimates before any credits or prepaid balance, not your bill. The log is read only while a dashboard window is visible, and only again when the file changes.
 
 ## What this fork adds
 

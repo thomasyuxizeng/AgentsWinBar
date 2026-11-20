@@ -99,6 +99,8 @@ public sealed record DashboardProvider
     public DateTime? OldReadingUtc { get; init; }
     public CreditsInfo? Credits { get; init; }
     public ApiCreditsInfo? ApiCredits { get; init; }
+    /// <summary>This month's Gemini API spend from the local delegate log; set only on the gemini provider, null when no log exists.</summary>
+    public GeminiApiSpendInfo? GeminiApi { get; init; }
 
     /// <summary>Session, weekly, tertiary, then every extra window, in that order.</summary>
     public IReadOnlyList<DashboardWindow> Windows { get; init; } = [];

@@ -266,6 +266,7 @@ public partial class App : Application
         services.AddSingleton<ICodexBarService, CodexBarService>();
         services.AddSingleton<ISettingsService, SettingsService>();
         services.AddSingleton<IApiBillingService, ApiBillingService>();
+        services.AddSingleton<IGeminiSpendService, GeminiSpendService>();
         services.AddSingleton<ISetupChecker, SetupChecker>();
         services.AddSingleton<ISetupMemoService, SetupMemoService>();
         services.AddSingleton<ISessionStateSource, SessionStateSource>();

@@ -49,9 +49,13 @@
     <Compile Include="..\Models\ApiCreditsContributor.cs" Link="Linked\ApiCreditsContributor.cs" />
     <Compile Include="..\Helpers\ApiCreditsAttribution.cs" Link="Linked\ApiCreditsAttribution.cs" />
     <Compile Include="..\Models\ApiCostReport.cs" Link="Linked\ApiCostReport.cs" />
+    <Compile Include="..\Models\GeminiApiSpend.cs" Link="Linked\GeminiApiSpend.cs" />
     <Compile Include="..\Helpers\ApiCreditsCalculator.cs" Link="Linked\ApiCreditsCalculator.cs" />
+    <Compile Include="..\Helpers\GeminiSpendCalculator.cs" Link="Linked\GeminiSpendCalculator.cs" />
     <Compile Include="..\Services\IApiBillingService.cs" Link="Linked\IApiBillingService.cs" />
     <Compile Include="..\Services\ApiBillingService.cs" Link="Linked\ApiBillingService.cs" />
+    <Compile Include="..\Services\IGeminiSpendService.cs" Link="Linked\IGeminiSpendService.cs" />
+    <Compile Include="..\Services\GeminiSpendService.cs" Link="Linked\GeminiSpendService.cs" />
     <Compile Include="..\ViewModels\SettingsViewModel.cs" Link="Linked\SettingsViewModel.cs" />
     <Compile Include="..\Models\DashboardSnapshot.cs" Link="Linked\DashboardSnapshot.cs" />
     <Compile Include="..\Helpers\DashboardValues.cs" Link="Linked\DashboardValues.cs" />

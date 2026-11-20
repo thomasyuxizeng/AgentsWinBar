@@ -7,8 +7,14 @@ public static class DashboardContent
 {
     public static bool ProviderEquals(DashboardProvider? a, DashboardProvider? b) =>
         ReferenceEquals(a, b) || a != null && b != null &&
-        a with { Windows = b.Windows, Cost = b.Cost } == b &&
-        SequenceEquals(a.Windows, b.Windows, WindowEquals) && CostEquals(a.Cost, b.Cost);
+        a with { Windows = b.Windows, Cost = b.Cost, GeminiApi = b.GeminiApi } == b &&
+        SequenceEquals(a.Windows, b.Windows, WindowEquals) && CostEquals(a.Cost, b.Cost) &&
+        GeminiApiEquals(a.GeminiApi, b.GeminiApi);
+
+    public static bool GeminiApiEquals(GeminiApiSpendInfo? a, GeminiApiSpendInfo? b) =>
+        ReferenceEquals(a, b) || a != null && b != null &&
+        a with { Models = b.Models } == b &&
+        a.Models.SequenceEqual(b.Models);
 
     public static bool WindowEquals(DashboardWindow? a, DashboardWindow? b) =>
         ReferenceEquals(a, b) || a != null && b != null &&

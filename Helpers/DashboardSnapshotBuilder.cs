@@ -9,6 +9,7 @@ public sealed record DashboardInputs
     public IReadOnlyList<UsageData> Providers { get; init; } = [];
     public AppSettings Settings { get; init; } = new();
     public ApiCreditsInfo? ApiCredits { get; init; }
+    public GeminiApiSpendInfo? GeminiApi { get; init; }
     public IReadOnlyList<UsageHistorySample> HistorySamples { get; init; } = [];
     public long HistoryFileBytes { get; init; }
     public DateTime NowUtc { get; init; }
@@ -140,6 +141,7 @@ public static class DashboardSnapshotBuilder
                 StaleAge = lastSuccess.HasValue ? Age(now, lastSuccess.Value) : null,
                 Error = data.Error, FetchedAtUtc = Utc(data.FetchedAt), OldReadingUtc = oldReading, Credits = data.Credits,
                 ApiCredits = string.Equals(id, "claude", StringComparison.OrdinalIgnoreCase) ? inputs.ApiCredits : null,
+                GeminiApi = string.Equals(id, "gemini", StringComparison.OrdinalIgnoreCase) ? inputs.GeminiApi : null,
                 Windows = windows, Cost = settings.ShowCostTotals && cost?.HasData == true ? BuildCost(cost, today, now) : null,
                 HistorySampleCount = history.Length, HistoryOldestUtc = Oldest(history),
                 EarlyResetAtUtc = mostRecentProviderReset != null ? Utc(mostRecentProviderReset.DetectedAtUtc) : null,
