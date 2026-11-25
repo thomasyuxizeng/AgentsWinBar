@@ -25,6 +25,8 @@ public sealed record CodexNativeOptions
     public TimeSpan RequestTimeout { get; init; } = TimeSpan.FromSeconds(30);
     /// <summary>Upstream identifies itself as "CodexBar"; kept for parity with the working WSL route.</summary>
     public string UserAgent { get; init; } = "CodexBar";
+    /// <summary>The usage endpoint (a Debug build's test hooks point it at the fake provider server).</summary>
+    public Uri UsageUri { get; init; } = CodexNativeClient.UsageUri;
 
     public string ResolveAuthPath()
     {
@@ -88,7 +90,7 @@ public sealed class CodexNativeClient : INativeUsageClient
                 $"Codex sign-in expired {NativeParse.Ago(ago)} ago. Run Codex on Windows to renew it.") with { ExpiredFor = ago };
         }
 
-        using var request = new HttpRequestMessage(HttpMethod.Get, UsageUri);
+        using var request = new HttpRequestMessage(HttpMethod.Get, _options.UsageUri);
         NativeHttp.SetBearer(request, credentials.AccessToken);
         request.Headers.Accept.ParseAdd("application/json");
         NativeHttp.SetUserAgent(request, _options.UserAgent);
@@ -100,9 +102,7 @@ public sealed class CodexNativeClient : INativeUsageClient
             var status = (int)response.StatusCode;
             if (response.StatusCode == HttpStatusCode.OK)
             {
-                CodexUsageResponse? body;
-                await using (var stream = await response.Content.ReadAsStreamAsync(deadline.Token).ConfigureAwait(false))
-                    body = await JsonSerializer.DeserializeAsync(stream, NativeJsonContext.Default.CodexUsageResponse, deadline.Token).ConfigureAwait(false);
+                var body = await NativeHttp.ReadJsonAsync(response, NativeJsonContext.Default.CodexUsageResponse, deadline.Token).ConfigureAwait(false);
                 var result = body == null ? null : Map(body, _clock.GetUtcNow());
                 return result == null
                     ? Fail(NativeUsageStatus.Failed, status, "Codex usage response had no usage windows.") with { NetworkCalls = 1 }
@@ -158,15 +158,17 @@ public sealed class CodexNativeClient : INativeUsageClient
                     if (reader.ValueTextEquals("access_token"u8) || reader.ValueTextEquals("accessToken"u8)) { reader.Read(); access = String(ref reader); }
                     else if (reader.ValueTextEquals("account_id"u8) || reader.ValueTextEquals("accountId"u8)) { reader.Read(); accountId = String(ref reader); }
                     else if (reader.ValueTextEquals("id_token"u8) || reader.ValueTextEquals("idToken"u8)) { reader.Read(); idToken = String(ref reader); }
-                    else { reader.Read(); reader.Skip(); }
+                    else reader.Read();
+                    reader.Skip(); // steps over an object or array value whole
                 }
             }
-            else if (reader.ValueTextEquals("last_refresh"u8)) { reader.Read(); lastRefresh = NativeParse.ParseTimestamp(String(ref reader)); }
+            else if (reader.ValueTextEquals("last_refresh"u8)) { reader.Read(); lastRefresh = NativeParse.ParseTimestamp(String(ref reader)); reader.Skip(); }
             else if (reader.ValueTextEquals("OPENAI_API_KEY"u8))
             {
                 reader.Read();
                 // Only note presence; the key itself is never materialized.
                 hasApiKey = reader.TokenType == JsonTokenType.String && reader.ValueSpan.Length > 0;
+                reader.Skip();
             }
             else { reader.Read(); reader.Skip(); }
         }
@@ -220,7 +222,7 @@ public sealed class CodexNativeClient : INativeUsageClient
     private static NativeUsageWindow? Window(CodexWindow? window)
     {
         if (window?.UsedPercent is not { } used || !double.IsFinite(used)) return null;
-        var minutes = window.LimitWindowSeconds is long seconds and > 0 ? (int)(seconds / 60) : 0;
+        var minutes = window.LimitWindowSeconds is long seconds and > 0 ? (int)Math.Min(seconds / 60, int.MaxValue) : 0;
         DateTimeOffset? resets = window.ResetAt is > 0 and < 253402300799 ? DateTimeOffset.FromUnixTimeSeconds(window.ResetAt.Value) : null;
         return new(used, minutes, resets, null);
     }

@@ -123,6 +123,14 @@ public class AppSettings
     public bool UsesNativeCost() => UsageSource.Normalize(CostSource) == UsageSource.Native;
 
     /// <summary>
+    /// When Claude's Windows sign-in has expired, ask Claude Code for its sign-in status (<c>claude auth status
+    /// --json</c>, at most every 30 minutes), which makes Claude Code renew its own sign-in. It uses no model quota and
+    /// the app never writes the sign-in itself. Set in settings.json; files written before this setting existed load
+    /// as on.
+    /// </summary>
+    public bool RenewClaudeSignIn { get; set; } = true;
+
+    /// <summary>
     /// Repairs malformed persisted values before they reach timers, animations or shell commands.
     /// An explicitly empty provider list remains empty.
     /// </summary>

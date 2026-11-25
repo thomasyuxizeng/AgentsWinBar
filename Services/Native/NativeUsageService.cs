@@ -35,17 +35,33 @@ public sealed class NativeUsageService : INativeUsageService, IDisposable
     private readonly IReadOnlyDictionary<string, INativeUsageClient> _clients;
     private readonly ILogger<NativeUsageService> _logger;
 
-    /// <summary>Production constructor: one pooled HttpClient and the three Windows-sign-in readers.</summary>
-    public NativeUsageService(ILoggerFactory loggerFactory)
+    /// <summary>
+    /// Production constructor: one pooled HttpClient and the three Windows-sign-in readers.
+    /// <paramref name="renewClaudeSignIn"/> is asked whenever Claude's sign-in is found expired (the RenewClaudeSignIn
+    /// setting); null never renews. <paramref name="testOverrides"/> (<see cref="NativeTestOverrides.Current"/>, always
+    /// null in a Release build) points the readers at a fake profile, credential and server.
+    /// </summary>
+    public NativeUsageService(ILoggerFactory loggerFactory, Func<bool>? renewClaudeSignIn = null,
+        NativeTestOverrides? testOverrides = null)
     {
         _logger = loggerFactory.CreateLogger<NativeUsageService>();
-        _ownedHttp = NativeHttp.CreateClient();
+        _ownedHttp = testOverrides?.CreateHttpClient() ?? NativeHttp.CreateClient();
+        var claude = CreateClaudeOptions() with { RenewExpiredSignIn = renewClaudeSignIn };
+        var codex = new CodexNativeOptions();
+        var antigravity = new AntigravityNativeOptions();
+        if (testOverrides is not null)
+            (claude, codex, antigravity) = (testOverrides.Apply(claude), testOverrides.Apply(codex), testOverrides.Apply(antigravity));
         _clients = Index([
-            new ClaudeNativeClient(_ownedHttp, loggerFactory.CreateLogger<ClaudeNativeClient>(), CreateClaudeOptions(),
-                cooldownStore: new ClaudeCooldownFile(loggerFactory.CreateLogger<ClaudeCooldownFile>())),
-            new CodexNativeClient(_ownedHttp, loggerFactory.CreateLogger<CodexNativeClient>()),
-            new AntigravityNativeClient(_ownedHttp, loggerFactory.CreateLogger<AntigravityNativeClient>())
+            new ClaudeNativeClient(_ownedHttp, loggerFactory.CreateLogger<ClaudeNativeClient>(), claude,
+                cooldownStore: new ClaudeCooldownFile(loggerFactory.CreateLogger<ClaudeCooldownFile>(), testOverrides?.CooldownFilePath),
+                // A fake profile never starts the real Claude Code, which would renew the real sign-in.
+                renewer: testOverrides?.ProfileRoot is null ? new ClaudeAuthStatusRunner() : null),
+            new CodexNativeClient(_ownedHttp, loggerFactory.CreateLogger<CodexNativeClient>(), codex),
+            new AntigravityNativeClient(_ownedHttp, loggerFactory.CreateLogger<AntigravityNativeClient>(),
+                testOverrides?.CreateAntigravitySource(), antigravity)
         ]);
+        if (testOverrides is not null)
+            _logger.LogWarning("Native usage readers are using the Debug test overrides (fake profile, credential or server)");
     }
 
     /// <summary>Test constructor: the given readers, keyed by their provider id.</summary>

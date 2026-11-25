@@ -31,6 +31,17 @@ public sealed record ClaudeNativeOptions
     public bool UseFreshCache { get; init; } = true;
     /// <summary>Time zone for the upstream-style reset description ("Nov 25 at 3:00PM").</summary>
     public TimeZoneInfo? DisplayTimeZone { get; init; }
+    /// <summary>
+    /// Asked each time the sign-in is found expired: true lets the client have Claude Code renew it with
+    /// <c>claude auth status --json</c> (the app's RenewClaudeSignIn setting). Null never renews.
+    /// </summary>
+    public Func<bool>? RenewExpiredSignIn { get; init; }
+    /// <summary>At most one renewal attempt this often.</summary>
+    public TimeSpan RenewalInterval { get; init; } = TimeSpan.FromMinutes(30);
+    /// <summary>A renewal that has not finished by then is stopped (its whole process tree).</summary>
+    public TimeSpan RenewalTimeout { get; init; } = TimeSpan.FromSeconds(30);
+    /// <summary>The usage endpoint (a Debug build's test hooks point it at the fake provider server).</summary>
+    public Uri UsageUri { get; init; } = ClaudeNativeClient.UsageUri;
 
     public string ResolveCredentialsPath()
     {
@@ -42,7 +53,9 @@ public sealed record ClaudeNativeOptions
 /// <summary>
 /// Reads Claude plan usage from Anthropic's OAuth usage endpoint with the Windows Claude Code sign-in, read-only.
 /// Port of upstream CodexBar's ClaudeOAuthUsageFetcher plus the WSL shim's 429 cooldown and 10-minute cache.
-/// Never refreshes or writes the token: an expired token yields <see cref="NativeUsageStatus.SignInExpired"/>.
+/// Never refreshes or writes the token itself. An expired token yields <see cref="NativeUsageStatus.SignInExpired"/>
+/// unless renewal is on: then Claude Code is asked for its status (<c>claude auth status --json</c>), which makes it
+/// renew and rewrite its own sign-in, and the read goes ahead with the renewed token.
 /// </summary>
 public sealed class ClaudeNativeClient : INativeUsageClient
 {
@@ -57,26 +70,35 @@ public sealed class ClaudeNativeClient : INativeUsageClient
     private readonly TimeProvider _clock;
     private readonly Lock _gate = new();
     private readonly IClaudeCooldownStore? _cooldownStore;
+    // One live call at a time: overlapping refreshes share its answer instead of spending the rate limit twice.
+    private readonly SemaphoreSlim _fetchGate = new(1, 1);
     private NativeUsageResult? _lastGood;
     private DateTimeOffset _blockedUntil;
+    // When the current cooldown began, so a clock that steps backward cannot stretch it.
+    private DateTimeOffset _blockedSince;
+    private readonly IClaudeSignInRenewer? _renewer;
+    private Task<ClaudeAuthStatusRun?>? _renewal;
+    private DateTimeOffset? _lastRenewalStart;
 
     /// <summary>A saved cooldown further ahead than this (a damaged or hand-edited file) is shortened to it.</summary>
     public static readonly TimeSpan MaxPersistedCooldown = TimeSpan.FromHours(24);
 
     public ClaudeNativeClient(HttpClient http, ILogger<ClaudeNativeClient> logger, ClaudeNativeOptions? options = null,
-        TimeProvider? clock = null, IClaudeCooldownStore? cooldownStore = null)
+        TimeProvider? clock = null, IClaudeCooldownStore? cooldownStore = null, IClaudeSignInRenewer? renewer = null)
     {
         _http = http;
         _logger = logger;
         _options = options ?? new ClaudeNativeOptions();
         _clock = clock ?? TimeProvider.System;
         _cooldownStore = cooldownStore;
+        _renewer = renewer;
         ProviderId = ProviderConstants.ValidateAndNormalize("claude");
         // A cooldown saved before a restart still applies.
         if (_cooldownStore?.Load() is { } saved)
         {
             var cap = _clock.GetUtcNow() + MaxPersistedCooldown;
             _blockedUntil = saved > cap ? cap : saved;
+            _blockedSince = _clock.GetUtcNow();
             if (_blockedUntil > _clock.GetUtcNow())
                 _logger.LogInformation("Claude usage cooldown restored; not calling until {Until:o}", _blockedUntil);
         }
@@ -89,13 +111,38 @@ public sealed class ClaudeNativeClient : INativeUsageClient
 
     public async Task<NativeUsageResult> FetchAsync(CancellationToken ct = default)
     {
+        if (TryAnswerWithoutCalling() is { } quick) return quick;
+        await _fetchGate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            // A caller that held the gate may have refreshed the cache or hit a 429 while this one waited.
+            return TryAnswerWithoutCalling() ?? await FetchLiveAsync(ct).ConfigureAwait(false);
+        }
+        finally { _fetchGate.Release(); }
+    }
+
+    /// <summary>The fresh cache or the 429 cooldown answer, when either applies; null when a live read is needed.</summary>
+    private NativeUsageResult? TryAnswerWithoutCalling()
+    {
         var now = _clock.GetUtcNow();
         NativeUsageResult? lastGood;
         DateTimeOffset blockedUntil;
-        lock (_gate) { lastGood = _lastGood; blockedUntil = _blockedUntil; }
+        lock (_gate)
+        {
+            // The clock stepped back since the cooldown began: keep its length, not its end time.
+            if (now < _blockedSince && _blockedUntil > now)
+            {
+                var length = _blockedUntil - _blockedSince;
+                _blockedUntil = now + (length > MaxPersistedCooldown ? MaxPersistedCooldown : length);
+                _blockedSince = now;
+            }
+            lastGood = _lastGood;
+            blockedUntil = _blockedUntil;
+        }
 
-        // 1. Fresh cache: answer immediately (the shim's 10-minute cache), unless a window has reset since.
-        if (_options.UseFreshCache && lastGood?.UpdatedAt is { } updated && now - updated < _options.CacheLifetime &&
+        // 1. Fresh cache: answer immediately (the shim's 10-minute cache), unless a window has reset since or the
+        // clock has stepped back past the reading.
+        if (_options.UseFreshCache && lastGood?.UpdatedAt is { } updated && now >= updated && now - updated < _options.CacheLifetime &&
             !NativeLastGood.HasPastReset(lastGood, now))
             return lastGood with { Cached = true, CacheUpdatedAt = updated, NetworkCalls = 0 };
 
@@ -103,6 +150,14 @@ public sealed class ClaudeNativeClient : INativeUsageClient
         if (blockedUntil > now)
             return FromCacheOr(lastGood, Fail(NativeUsageStatus.RateLimited, 429,
                 "Claude usage is rate limited right now; retrying shortly.") with { RetryAfter = blockedUntil });
+        return null;
+    }
+
+    private async Task<NativeUsageResult> FetchLiveAsync(CancellationToken ct)
+    {
+        var now = _clock.GetUtcNow();
+        NativeUsageResult? lastGood;
+        lock (_gate) lastGood = _lastGood;
 
         // 3. Sign-in (read-only).
         ClaudeCredentials? credentials;
@@ -120,14 +175,22 @@ public sealed class ClaudeNativeClient : INativeUsageClient
                 "Not signed in to Claude on Windows. Sign in to Claude Code on Windows."));
         if (credentials.ExpiresAt is { } expiresAt && expiresAt <= now)
         {
-            var ago = now - expiresAt;
-            _logger.LogInformation("Claude access token expired {Ago} ago; not refreshing (read-only)", NativeParse.Ago(ago));
-            return FromCacheOr(lastGood, Fail(NativeUsageStatus.SignInExpired, null,
-                $"Claude sign-in expired {NativeParse.Ago(ago)} ago. Open Claude Code on Windows to renew it.") with { ExpiredFor = ago });
+            // Claude Code renews its own sign-in when asked for its status; the app never writes the file itself.
+            if (await TryRenewSignInAsync(expiresAt, ct).ConfigureAwait(false) is { } renewed)
+            {
+                credentials = renewed;
+            }
+            else
+            {
+                var ago = now - expiresAt;
+                _logger.LogInformation("Claude access token expired {Ago} ago; not renewed", NativeParse.Ago(ago));
+                return FromCacheOr(lastGood, Fail(NativeUsageStatus.SignInExpired, null,
+                    $"Claude sign-in expired {NativeParse.Ago(ago)} ago. Open Claude Code on Windows to renew it.") with { ExpiredFor = ago });
+            }
         }
 
         // 4. One GET.
-        using var request = new HttpRequestMessage(HttpMethod.Get, UsageUri);
+        using var request = new HttpRequestMessage(HttpMethod.Get, _options.UsageUri);
         NativeHttp.SetBearer(request, credentials.AccessToken);
         request.Headers.Accept.ParseAdd("application/json");
         request.Headers.TryAddWithoutValidation("anthropic-beta", BetaHeader);
@@ -139,14 +202,12 @@ public sealed class ClaudeNativeClient : INativeUsageClient
             var status = (int)response.StatusCode;
             if (response.StatusCode == HttpStatusCode.OK)
             {
-                ClaudeUsageResponse? body;
-                await using (var stream = await response.Content.ReadAsStreamAsync(deadline.Token).ConfigureAwait(false))
-                    body = await JsonSerializer.DeserializeAsync(stream, NativeJsonContext.Default.ClaudeUsageResponse, deadline.Token).ConfigureAwait(false);
+                var body = await NativeHttp.ReadJsonAsync(response, NativeJsonContext.Default.ClaudeUsageResponse, deadline.Token).ConfigureAwait(false);
                 var result = body == null ? null : Map(body, credentials, _clock.GetUtcNow(), _options.DisplayTimeZone ?? TimeZoneInfo.Local);
                 if (result == null)
                     return FromCacheOr(lastGood, Fail(NativeUsageStatus.Failed, status, "Claude usage response had no usage windows.") with { NetworkCalls = 1 });
                 result = result with { NetworkCalls = 1 };
-                lock (_gate) { _lastGood = result; _blockedUntil = DateTimeOffset.MinValue; }
+                lock (_gate) { _lastGood = result; _blockedUntil = DateTimeOffset.MinValue; _blockedSince = DateTimeOffset.MinValue; }
                 return result;
             }
             if (response.StatusCode == HttpStatusCode.TooManyRequests)
@@ -155,7 +216,14 @@ public sealed class ClaudeNativeClient : INativeUsageClient
                 var candidate = callNow + _options.RateLimitCooldown;
                 var retryAfter = NativeHttp.RetryAfter(response, callNow);
                 if (retryAfter > candidate) candidate = retryAfter.Value;
-                lock (_gate) { if (candidate > _blockedUntil) _blockedUntil = candidate; blockedUntil = _blockedUntil; }
+                // A cooldown never runs longer than a day, whatever the header asked for.
+                if (candidate > callNow + MaxPersistedCooldown) candidate = callNow + MaxPersistedCooldown;
+                DateTimeOffset blockedUntil;
+                lock (_gate)
+                {
+                    if (candidate > _blockedUntil) { _blockedUntil = candidate; _blockedSince = callNow; }
+                    blockedUntil = _blockedUntil;
+                }
                 _logger.LogWarning("Claude usage endpoint answered 429; cooling down until {Until:o}", blockedUntil);
                 if (_cooldownStore != null) await _cooldownStore.SaveAsync(blockedUntil, CancellationToken.None).ConfigureAwait(false);
                 return FromCacheOr(lastGood, Fail(NativeUsageStatus.RateLimited, status,
@@ -179,6 +247,66 @@ public sealed class ClaudeNativeClient : INativeUsageClient
         {
             _logger.LogWarning("Claude usage request failed ({Type})", ex.GetType().Name);
             return FromCacheOr(lastGood, Fail(NativeUsageStatus.Failed, null, "Claude usage request failed (network or response error).") with { NetworkCalls = 1 });
+        }
+    }
+
+    /// <summary>
+    /// When renewal is on and allowed now (at most one attempt per <see cref="ClaudeNativeOptions.RenewalInterval"/>,
+    /// never two at once), has Claude Code renew its sign-in, then reads the credential file once more. Returns the
+    /// renewed sign-in when its expiry moved past <paramref name="expiredAt"/> and now; otherwise null.
+    /// </summary>
+    private async Task<ClaudeCredentials?> TryRenewSignInAsync(DateTimeOffset expiredAt, CancellationToken ct)
+    {
+        if (_renewer == null || _options.RenewExpiredSignIn?.Invoke() != true) return null;
+        Task<ClaudeAuthStatusRun?> renewal;
+        lock (_gate)
+        {
+            var now = _clock.GetUtcNow();
+            if (_renewal is { IsCompleted: false } running) renewal = running; // join the attempt in flight
+            else if (_lastRenewalStart is { } last && now >= last && now - last < _options.RenewalInterval) return null;
+            else
+            {
+                _lastRenewalStart = now;
+                // Not tied to this caller's deadline: an attempt that outlives it still finishes (or is stopped at its
+                // own timeout), and the next read finds the renewed file.
+                renewal = _renewal = Task.Run(RenewAsync);
+            }
+        }
+
+        if (await renewal.WaitAsync(ct).ConfigureAwait(false) is null) return null;
+        try
+        {
+            var renewed = await ReadCredentialsAsync(_options.ResolveCredentialsPath(), ct).ConfigureAwait(false);
+            return renewed?.ExpiresAt is { } expires && expires > expiredAt && expires > _clock.GetUtcNow() ? renewed : null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or JsonException)
+        {
+            _logger.LogWarning("Claude sign-in file could not be read after renewal ({Type})", ex.GetType().Name);
+            return null;
+        }
+    }
+
+    /// <summary>One renewal attempt. Logs only whether it ran, its exit code and its duration; never its output.</summary>
+    private async Task<ClaudeAuthStatusRun?> RenewAsync()
+    {
+        try
+        {
+            if (_renewer!.FindClaudeExecutable() is not { } executable)
+            {
+                _logger.LogInformation("Claude Code was not found; the expired Claude sign-in was not renewed");
+                return null;
+            }
+            var run = await _renewer.RunAuthStatusAsync(executable, _options.RenewalTimeout, CancellationToken.None).ConfigureAwait(false);
+            if (run.TimedOut)
+                _logger.LogWarning("Claude sign-in renewal timed out after {Seconds:0.0} s and was stopped", run.Duration.TotalSeconds);
+            else
+                _logger.LogInformation("Claude sign-in renewal finished with exit code {ExitCode} in {Seconds:0.0} s", run.ExitCode, run.Duration.TotalSeconds);
+            return run;
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            _logger.LogWarning("Claude sign-in renewal could not run ({Type})", ex.GetType().Name);
+            return null;
         }
     }
 
@@ -214,7 +342,9 @@ public sealed class ClaudeNativeClient : INativeUsageClient
                 }
                 else if (reader.ValueTextEquals("subscriptionType"u8)) { reader.Read(); subscription = reader.TokenType == JsonTokenType.String ? reader.GetString() : null; }
                 else if (reader.ValueTextEquals("rateLimitTier"u8)) { reader.Read(); tier = reader.TokenType == JsonTokenType.String ? reader.GetString() : null; }
-                else { reader.Read(); reader.Skip(); }
+                else reader.Read();
+                // An object or array value (of a known field too) is stepped over whole; a plain value needs nothing.
+                reader.Skip();
             }
             token = token?.Trim();
             return string.IsNullOrEmpty(token) ? null : new ClaudeCredentials(token, expires, subscription, tier);
@@ -322,9 +452,16 @@ public sealed class ClaudeNativeClient : INativeUsageClient
         new() { Provider = "claude", Source = "oauth", Status = status, HttpStatus = http, Message = message };
 
     /// <summary>
-    /// Like the shim: when a last good reading exists, show it (marked cached, windows that have reset since cleared)
-    /// and keep the failure's status and message so the app can flag a sign-in problem; otherwise return the failure alone.
+    /// For an expired sign-in or a transient failure, shows the last good reading when one exists (marked cached,
+    /// windows that have reset since cleared) with the failure's status and message. A missing or rejected sign-in
+    /// returns the failure alone and forgets the reading, as the other native clients do.
     /// </summary>
-    private NativeUsageResult FromCacheOr(NativeUsageResult? lastGood, NativeUsageResult failure) =>
-        NativeLastGood.FromCacheOr(lastGood, failure, _clock.GetUtcNow());
+    private NativeUsageResult FromCacheOr(NativeUsageResult? lastGood, NativeUsageResult failure)
+    {
+        if (NativeLastGood.ServesLastGood(failure.Status))
+            return NativeLastGood.FromCacheOr(lastGood, failure, _clock.GetUtcNow());
+        if (failure.Status is NativeUsageStatus.SignInMissing or NativeUsageStatus.Unauthorized)
+            lock (_gate) _lastGood = null;
+        return failure;
+    }
 }

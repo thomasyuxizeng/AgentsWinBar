@@ -4,20 +4,17 @@ using System.Text.Json;
 namespace CodexBarWin.Services.Native;
 
 /// <summary>
-/// The fields of Antigravity's sign-in this reader uses. <see cref="RefreshToken"/> and the client fields are only
-/// populated when the caller asks for them (the opt-in refresh path). Token values never leave this process.
+/// The fields of Antigravity's sign-in this reader uses. The refresh token and client secrets are never read (the app
+/// never renews this sign-in). Token values never leave this process.
 /// </summary>
 public sealed record AntigravityCredentials
 {
     public required string AccessToken { get; init; }
     public DateTimeOffset? Expiry { get; init; }
-    public string? RefreshToken { get; init; }
     /// <summary>Account email as stored by agy ("id_token_email"); used only to compare accounts, never printed.</summary>
     public string? Email { get; init; }
     public string? ProjectId { get; init; }
     public string? AuthMethod { get; init; }
-    public string? ClientId { get; init; }
-    public string? ClientSecret { get; init; }
 
     public override string ToString() => $"AntigravityCredentials {{ Expiry = {Expiry:o}, AuthMethod = {AuthMethod} }}";
 }
@@ -94,57 +91,49 @@ public sealed class WindowsCredentialManagerSource(string target = WindowsCreden
 public static class AntigravityCredentialParser
 {
     /// <summary>
-    /// Accepts agy's Windows shape (a Go oauth2.Token under "token": access_token, refresh_token, RFC 3339 "expiry";
-    /// plus "id_token_email", "auth_method") and upstream CodexBar's flat file shape (access_token/accessToken,
-    /// expiry_date in ms, project_id, client_id/client_secret). Secrets other than the access token are read only
-    /// when <paramref name="includeRefreshFields"/> is set. Returns null without an access token.
+    /// Accepts agy's Windows shape (a Go oauth2.Token under "token": access_token, RFC 3339 "expiry"; plus
+    /// "id_token_email", "auth_method") and upstream CodexBar's flat file shape (access_token/accessToken, expiry_date
+    /// in ms, project_id). The refresh token and client secrets are never read. Returns null for an empty blob or one
+    /// without an access token; malformed JSON throws <see cref="JsonException"/> (a read failure, not a sign-out).
     /// </summary>
-    public static AntigravityCredentials? Parse(ReadOnlySpan<byte> blob, bool includeRefreshFields = false)
+    public static AntigravityCredentials? Parse(ReadOnlySpan<byte> blob)
     {
-        var reader = new Utf8JsonReader(NativeCredentialFile.WithoutBom(blob), NativeCredentialFile.ReaderOptions);
-        try
+        var content = NativeCredentialFile.WithoutBom(blob);
+        if (content.IsEmpty) return null;
+        var reader = new Utf8JsonReader(content, NativeCredentialFile.ReaderOptions);
+        if (!reader.Read() || reader.TokenType != JsonTokenType.StartObject) return null;
+        var fields = new Fields();
+        ReadObject(ref reader, ref fields, nested: false);
+        var access = fields.Access?.Trim();
+        if (string.IsNullOrEmpty(access)) return null;
+        return new AntigravityCredentials
         {
-            if (!reader.Read() || reader.TokenType != JsonTokenType.StartObject) return null;
-            var fields = new Fields();
-            ReadObject(ref reader, ref fields, includeRefreshFields, nested: false);
-            var access = fields.Access?.Trim();
-            if (string.IsNullOrEmpty(access)) return null;
-            return new AntigravityCredentials
-            {
-                AccessToken = access,
-                Expiry = fields.Expiry,
-                RefreshToken = includeRefreshFields ? NativeParse.NonEmpty(fields.Refresh) : null,
-                Email = NativeParse.NonEmpty(fields.Email),
-                ProjectId = NativeParse.NonEmpty(fields.Project),
-                AuthMethod = NativeParse.NonEmpty(fields.AuthMethod),
-                ClientId = includeRefreshFields ? NativeParse.NonEmpty(fields.ClientId) : null,
-                ClientSecret = includeRefreshFields ? NativeParse.NonEmpty(fields.ClientSecret) : null
-            };
-        }
-        catch (JsonException)
-        {
-            return null;
-        }
+            AccessToken = access,
+            Expiry = fields.Expiry,
+            Email = NativeParse.NonEmpty(fields.Email),
+            ProjectId = NativeParse.NonEmpty(fields.Project),
+            AuthMethod = NativeParse.NonEmpty(fields.AuthMethod)
+        };
     }
 
     private struct Fields
     {
-        public string? Access, Refresh, Email, Project, AuthMethod, ClientId, ClientSecret;
+        public string? Access, Email, Project, AuthMethod;
         public DateTimeOffset? Expiry;
     }
 
-    private static void ReadObject(ref Utf8JsonReader reader, ref Fields f, bool secrets, bool nested)
+    private static void ReadObject(ref Utf8JsonReader reader, ref Fields f, bool nested)
     {
         while (reader.Read() && reader.TokenType == JsonTokenType.PropertyName)
         {
             if (!nested && reader.ValueTextEquals("token"u8))
             {
                 reader.Read();
-                if (reader.TokenType == JsonTokenType.StartObject) ReadObject(ref reader, ref f, secrets, nested: true);
+                if (reader.TokenType == JsonTokenType.StartObject) ReadObject(ref reader, ref f, nested: true);
                 else reader.Skip();
+                continue;
             }
-            else if (reader.ValueTextEquals("access_token"u8) || reader.ValueTextEquals("accessToken"u8)) { reader.Read(); f.Access = Str(ref reader) ?? f.Access; }
-            else if (secrets && (reader.ValueTextEquals("refresh_token"u8) || reader.ValueTextEquals("refreshToken"u8))) { reader.Read(); f.Refresh = Str(ref reader) ?? f.Refresh; }
+            if (reader.ValueTextEquals("access_token"u8) || reader.ValueTextEquals("accessToken"u8)) { reader.Read(); f.Access = Str(ref reader) ?? f.Access; }
             else if (reader.ValueTextEquals("expiry"u8)) { reader.Read(); f.Expiry = NativeParse.ParseTimestamp(Str(ref reader)) ?? f.Expiry; }
             else if (reader.ValueTextEquals("expiry_date"u8) || reader.ValueTextEquals("expiresAt"u8))
             {
@@ -155,9 +144,9 @@ public static class AntigravityCredentialParser
             else if (reader.ValueTextEquals("id_token_email"u8) || reader.ValueTextEquals("email"u8)) { reader.Read(); f.Email = Str(ref reader) ?? f.Email; }
             else if (reader.ValueTextEquals("project_id"u8) || reader.ValueTextEquals("projectId"u8)) { reader.Read(); f.Project = Str(ref reader) ?? f.Project; }
             else if (reader.ValueTextEquals("auth_method"u8)) { reader.Read(); f.AuthMethod = Str(ref reader); }
-            else if (secrets && (reader.ValueTextEquals("client_id"u8) || reader.ValueTextEquals("clientId"u8))) { reader.Read(); f.ClientId = Str(ref reader); }
-            else if (secrets && (reader.ValueTextEquals("client_secret"u8) || reader.ValueTextEquals("clientSecret"u8))) { reader.Read(); f.ClientSecret = Str(ref reader); }
-            else { reader.Read(); reader.Skip(); }
+            else reader.Read();
+            // An object or array value (of a known field too) is stepped over whole; a plain value needs nothing.
+            reader.Skip();
         }
     }
 

@@ -51,7 +51,8 @@ internal sealed class CostPriceCatalog
 
     /// <summary>
     /// Exact id first, then Claude's "@default" alias, then a catalog id whose date suffix is the only difference
-    /// (the index stores model ids without their snapshot date).
+    /// (the index stores model ids without their snapshot date). Among several dated ids the latest date wins, so
+    /// the choice does not depend on the catalog's order.
     /// </summary>
     internal ModelPrice? Find(string provider, string model)
     {
@@ -59,22 +60,35 @@ internal sealed class CostPriceCatalog
         if (models.TryGetValue(model, out var price)) return price;
         if (model.StartsWith("claude-", StringComparison.Ordinal) &&
             models.TryGetValue(model + "@default", out price)) return price;
+        ModelPrice? latest = null;
+        string? latestId = null;
+        var latestDate = -1;
         foreach (var (id, candidate) in models)
-            if (id.Length > model.Length && id.StartsWith(model, StringComparison.Ordinal) &&
-                IsDateSuffix(id.AsSpan(model.Length))) return candidate;
-        return null;
+        {
+            if (id.Length <= model.Length || !id.StartsWith(model, StringComparison.Ordinal) ||
+                DateSuffix(id.AsSpan(model.Length)) is not { } date) continue;
+            if (date > latestDate || date == latestDate && string.CompareOrdinal(id, latestId) > 0)
+                (latest, latestId, latestDate) = (candidate, id, date);
+        }
+        return latest;
     }
 
-    private static bool IsDateSuffix(ReadOnlySpan<char> suffix)
+    /// <summary>The date of a "-YYYYMMDD" or "-YYYY-MM-DD" suffix as the number YYYYMMDD, or null for any other suffix.</summary>
+    private static int? DateSuffix(ReadOnlySpan<char> suffix)
     {
-        if (suffix.Length is not (9 or 11) || suffix[0] != '-') return false;
+        if (suffix.Length is not (9 or 11) || suffix[0] != '-') return null;
         var digits = 0;
+        var date = 0;
         foreach (var c in suffix[1..])
         {
-            if (char.IsAsciiDigit(c)) digits++;
-            else if (c != '-') return false;
+            if (char.IsAsciiDigit(c))
+            {
+                digits++;
+                date = date * 10 + (c - '0');
+            }
+            else if (c != '-') return null;
         }
-        return digits == 8;
+        return digits == 8 ? date : null;
     }
 
     /// <summary>Keeps rates the older catalog had for models the newer one no longer lists.</summary>
@@ -117,8 +131,8 @@ internal sealed class CostPriceCatalog
     }
 
     /// <summary>
-    /// Reads the full models.dev catalog from a stream without holding it in memory: only the kept providers'
-    /// models survive the pass.
+    /// Reads the full models.dev catalog from a stream without holding it in memory: only the kept providers are
+    /// materialized, and the others are skipped whatever their shape.
     /// </summary>
     internal static async Task<CostPriceCatalog?> ParseLiveAsync(Stream stream, DateTimeOffset stamp,
         CancellationToken token)
@@ -126,14 +140,14 @@ internal sealed class CostPriceCatalog
         try
         {
             var live = await JsonSerializer.DeserializeAsync(stream,
-                CostPriceJsonContext.Default.DictionaryStringLiveProvider, token).ConfigureAwait(false);
+                CostPriceJsonContext.Default.LiveCatalog, token).ConfigureAwait(false);
             if (live is null) return null;
             var providers = new Dictionary<string, Dictionary<string, ModelPrice>>(StringComparer.Ordinal);
-            foreach (var (name, provider) in live)
+            foreach (var (id, provider) in new[] { (Anthropic, live.Anthropic), (OpenAI, live.OpenAI) })
             {
-                var id = name.Trim().ToLowerInvariant();
-                if (Array.IndexOf(KeptProviders, id) < 0 || provider?.Models is null) continue;
-                providers[id] = ParseModels(provider.Models.Select(m => (m.Key, m.Value)));
+                if (provider.ValueKind != JsonValueKind.Object || !provider.TryGetProperty("models", out var models) ||
+                    models.ValueKind != JsonValueKind.Object) continue;
+                providers[id] = ParseModels(models.EnumerateObject().Select(m => (m.Name, m.Value)));
             }
             return new(providers, stamp);
         }
@@ -382,11 +396,19 @@ internal static class PricingResources
     }
 }
 
-internal sealed class LiveProvider
+/// <summary>
+/// The two providers the scanner prices, read from the full models.dev catalog. Every other provider is skipped
+/// by the reader without being kept, whatever its shape.
+/// </summary>
+internal sealed class LiveCatalog
 {
-    [JsonPropertyName("models")]
-    public Dictionary<string, JsonElement>? Models { get; set; }
+    [JsonPropertyName(CostPriceCatalog.Anthropic)]
+    public JsonElement Anthropic { get; set; }
+
+    [JsonPropertyName(CostPriceCatalog.OpenAI)]
+    public JsonElement OpenAI { get; set; }
 }
 
-[JsonSerializable(typeof(Dictionary<string, LiveProvider>))]
+[JsonSourceGenerationOptions(PropertyNameCaseInsensitive = true)]
+[JsonSerializable(typeof(LiveCatalog))]
 internal sealed partial class CostPriceJsonContext : JsonSerializerContext;

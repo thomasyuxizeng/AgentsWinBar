@@ -376,6 +376,204 @@ public class ClaudeNativeClientTests
         credentials.RateLimitTier.Should().Be("default_claude_max_20x");
     }
 
+    // Review finding 1: an absurd Retry-After must neither throw nor block Claude for more than a day.
+    [TestMethod]
+    public async Task FetchAsync_When429HasHugeRetryAfter_CapsLiveCooldownToMaxPersistedCooldown()
+    {
+        var store = new RecordingCooldownStore();
+        var handler = new RecordingHandler(_ => TooManyRequests("31536000"));
+        var client = new ClaudeNativeClient(handler.Client(), new ListLogger<ClaudeNativeClient>(),
+            new ClaudeNativeOptions { CredentialsPath = _path, DisplayTimeZone = TimeZoneInfo.Utc }, new TestClock(Now), store);
+
+        var result = await client.FetchAsync();
+
+        result.Status.Should().Be(NativeUsageStatus.RateLimited);
+        result.RetryAfter.Should().Be(Now + ClaudeNativeClient.MaxPersistedCooldown);
+        client.BlockedUntil.Should().Be(Now + ClaudeNativeClient.MaxPersistedCooldown);
+        store.Saved.Should().Equal(Now + ClaudeNativeClient.MaxPersistedCooldown);
+    }
+
+    [TestMethod]
+    [DataRow("Infinity")]
+    [DataRow("1e20")]
+    [DataRow("999999999999")]
+    [DataRow("Fri, 31 Dec 9999 23:59:59 GMT")]
+    public async Task FetchAsync_When429HasAbsurdRetryAfter_ServesLastGoodWithBoundedCooldown(string retryAfter)
+    {
+        var calls = 0;
+        var (client, _, clock) = Create(_ => ++calls == 1 ? Json(UsageJson) : TooManyRequests(retryAfter));
+        await client.FetchAsync();
+        clock.Now = Now.AddMinutes(11);
+
+        var result = await client.FetchAsync();
+
+        result.Status.Should().Be(NativeUsageStatus.RateLimited);
+        result.Cached.Should().BeTrue("a 429 keeps the last good reading");
+        result.Primary!.UsedPercent.Should().Be(37);
+        client.BlockedUntil.Should().BeOnOrBefore(clock.Now + ClaudeNativeClient.MaxPersistedCooldown);
+    }
+
+    // Review finding 5: a missing or rejected sign-in must not keep showing the old reading.
+    [TestMethod]
+    public async Task FetchAsync_WhenUnauthorizedAfterGoodReading_DoesNotServeLastGoodReading()
+    {
+        var calls = 0;
+        var (client, _, clock) = Create(_ => ++calls == 1 ? Json(UsageJson) : new HttpResponseMessage(HttpStatusCode.Unauthorized));
+        await client.FetchAsync();
+        clock.Now = Now.AddMinutes(11);
+
+        var result = await client.FetchAsync();
+
+        result.Status.Should().Be(NativeUsageStatus.Unauthorized);
+        result.Cached.Should().BeFalse();
+        result.HasUsage.Should().BeFalse();
+    }
+
+    [TestMethod]
+    public async Task FetchAsync_WhenSignInMissingAfterGoodReading_DoesNotServeLastGoodReading()
+    {
+        var (client, _, clock) = Create();
+        await client.FetchAsync();
+        File.Delete(_path);
+        clock.Now = Now.AddMinutes(11);
+
+        var result = await client.FetchAsync();
+
+        result.Status.Should().Be(NativeUsageStatus.SignInMissing);
+        result.Cached.Should().BeFalse();
+        result.HasUsage.Should().BeFalse();
+    }
+
+    [TestMethod]
+    public async Task FetchAsync_WhenTransientFailureFollowsRejectedSignIn_DoesNotServeReadingFromBeforeRejection()
+    {
+        var calls = 0;
+        var (client, _, clock) = Create(_ => ++calls switch
+        {
+            1 => Json(UsageJson),
+            2 => new HttpResponseMessage(HttpStatusCode.Unauthorized),
+            _ => new HttpResponseMessage(HttpStatusCode.BadGateway)
+        });
+        await client.FetchAsync();
+        clock.Now = Now.AddMinutes(11);
+        await client.FetchAsync();
+        clock.Now = Now.AddMinutes(22);
+
+        var result = await client.FetchAsync();
+
+        result.Status.Should().Be(NativeUsageStatus.Failed);
+        result.Cached.Should().BeFalse("the sign-in that produced the old reading was rejected");
+        result.HasUsage.Should().BeFalse();
+    }
+
+    // Review finding 6: the response body is read only up to a fixed cap.
+    [TestMethod]
+    public async Task FetchAsync_WhenResponseExceedsSizeLimit_FailsWithoutReadingWholeBody()
+    {
+        var body = new PaddedJsonStream("{\"five_hour\": {\"utilization\": 37.0, \"resets_at\": \"2026-11-25T08:29:59Z\"}, \"padding\": \"",
+            HugePadding, "\"}");
+        var (client, _, _) = Create(_ => Streamed(body));
+
+        var result = await client.FetchAsync();
+
+        result.Status.Should().Be(NativeUsageStatus.Failed);
+        body.Served.Should().BeLessThanOrEqualTo(NativeHttp.MaxResponseBytes + 1);
+    }
+
+    // Review finding 7: a known field holding an object or array must not derail the reader.
+    [TestMethod]
+    public void ParseCredentials_WhenKnownFieldPrecedingTokenIsObjectOrArray_StillReadsAccessToken()
+    {
+        var json = """
+            {"claudeAiOauth": {"subscriptionType": ["pro"], "expiresAt": {"ms": 1}, "rateLimitTier": {"nested": 1},
+                               "accessToken": "synthetic-claude-access-token"}}
+            """;
+
+        var credentials = ClaudeNativeClient.ParseCredentials(System.Text.Encoding.UTF8.GetBytes(json));
+
+        credentials.Should().NotBeNull();
+        credentials!.AccessToken.Should().Be(SyntheticToken);
+        credentials.SubscriptionType.Should().BeNull();
+    }
+
+    // Review finding 9: a clock that steps backward must not stretch the cache or the cooldown.
+    [TestMethod]
+    public async Task FetchAsync_WhenClockMovesBackward_DoesNotServeStaleFreshCache()
+    {
+        var (client, handler, clock) = Create();
+        await client.FetchAsync();
+        clock.Now = Now.AddHours(-2);
+
+        var result = await client.FetchAsync();
+
+        result.Cached.Should().BeFalse();
+        handler.Requests.Should().HaveCount(2);
+    }
+
+    [TestMethod]
+    public async Task FetchAsync_WhenClockMovesBackwardDuringCooldown_BlocksNoLongerThanTheCooldown()
+    {
+        var calls = 0;
+        var (client, handler, clock) = Create(_ => ++calls == 1 ? TooManyRequests(null) : Json(UsageJson));
+        await client.FetchAsync();
+        clock.Now = Now.AddHours(-2);
+        var during = await client.FetchAsync();
+        clock.Now = Now.AddHours(-2).AddMinutes(10).AddSeconds(1);
+
+        var after = await client.FetchAsync();
+
+        during.Status.Should().Be(NativeUsageStatus.RateLimited);
+        during.RetryAfter.Should().BeOnOrBefore(Now.AddHours(-2).AddMinutes(10));
+        after.Status.Should().Be(NativeUsageStatus.Ok);
+        handler.Requests.Should().HaveCount(2);
+    }
+
+    // Review finding 15: overlapping refreshes share one call instead of spending the rate limit twice.
+    [TestMethod]
+    public async Task FetchAsync_WhenCalledConcurrentlyOnColdCache_MakesOnlyOneHttpRequest()
+    {
+        using var release = new ManualResetEventSlim(false);
+        var (client, handler, _) = Create(_ =>
+        {
+            release.Wait(TimeSpan.FromSeconds(30));
+            return Json(UsageJson);
+        });
+
+        var first = Task.Run(() => client.FetchAsync());
+        await WaitUntil(() => handler.Requests.Count == 1);
+        var second = Task.Run(() => client.FetchAsync());
+        await WaitUntil(() => handler.Requests.Count >= 2, TimeSpan.FromMilliseconds(750));
+        release.Set();
+        var results = await Task.WhenAll(first, second);
+
+        handler.Requests.Should().ContainSingle();
+        results.Should().OnlyContain(r => r.Status == NativeUsageStatus.Ok);
+    }
+
+    private static async Task WaitUntil(Func<bool> condition, TimeSpan? timeout = null)
+    {
+        var deadline = DateTime.UtcNow + (timeout ?? TimeSpan.FromSeconds(10));
+        while (!condition() && DateTime.UtcNow < deadline) await Task.Delay(10);
+    }
+
+    private static HttpResponseMessage TooManyRequests(string? retryAfter)
+    {
+        var response = new HttpResponseMessage(HttpStatusCode.TooManyRequests);
+        if (retryAfter != null) response.Headers.TryAddWithoutValidation("Retry-After", retryAfter);
+        return response;
+    }
+
+    private sealed class RecordingCooldownStore : IClaudeCooldownStore
+    {
+        public List<DateTimeOffset> Saved { get; } = [];
+        public DateTimeOffset? Load() => null;
+        public Task SaveAsync(DateTimeOffset blockedUntil, CancellationToken ct = default)
+        {
+            lock (Saved) Saved.Add(blockedUntil);
+            return Task.CompletedTask;
+        }
+    }
+
     [TestMethod]
     [DataRow("max", "default_claude_max_20x", "Claude Max 20x")]
     [DataRow("max", "default_claude_max_5x", "Claude Max 5x")]

@@ -26,17 +26,45 @@ public class AntigravityCredentialParserTests
     }
 
     [TestMethod]
-    public void Parse_WhenRefreshFieldsNotRequested_LeavesRefreshTokenUnread()
+    public void Parse_WhenBlobHasRefreshToken_LeavesItUnread()
     {
         var credentials = AntigravityCredentialParser.Parse(Encoding.UTF8.GetBytes(AgyBlob))!;
 
-        credentials.RefreshToken.Should().BeNull();
-        credentials.ToString().Should().NotContain("synthetic-access");
+        credentials.ToString().Should().NotContain("synthetic-access").And.NotContain("synthetic-refresh");
     }
 
+    // Review finding 20.1: token refresh was removed, so the parser keeps no refresh or client secret fields at all.
     [TestMethod]
-    public void Parse_WhenRefreshFieldsRequested_ReadsRefreshToken() =>
-        AntigravityCredentialParser.Parse(Encoding.UTF8.GetBytes(AgyBlob), includeRefreshFields: true)!.RefreshToken.Should().Be("synthetic-refresh");
+    [DataRow("RefreshToken")]
+    [DataRow("ClientId")]
+    [DataRow("ClientSecret")]
+    public void Credentials_WhenInspected_HaveNoRefreshSecretFields(string property) =>
+        typeof(AntigravityCredentials).GetProperty(property).Should().BeNull();
+
+    // Review finding 7: a known field holding an object or array must not derail the reader.
+    [TestMethod]
+    public void Parse_WhenKnownFieldPrecedingTokenIsObjectOrArray_StillReadsAccessToken()
+    {
+        var json = """{"expiry": {"seconds": 1764050000}, "project_id": ["x"], "auth_method": {"a": 1}, "access_token": "synthetic-access"}""";
+
+        var credentials = AntigravityCredentialParser.Parse(Encoding.UTF8.GetBytes(json));
+
+        credentials.Should().NotBeNull();
+        credentials!.AccessToken.Should().Be("synthetic-access");
+        credentials.Expiry.Should().BeNull();
+    }
+
+    // Review finding 20.1: malformed JSON is reported as unreadable, not as "no sign-in".
+    [TestMethod]
+    [DataRow("not json")]
+    [DataRow("{broken")]
+    [DataRow("""{"token": {"access_token": "x" """)]
+    public void Parse_WhenBlobIsMalformedJson_Throws(string json)
+    {
+        var act = () => AntigravityCredentialParser.Parse(Encoding.UTF8.GetBytes(json));
+
+        act.Should().Throw<System.Text.Json.JsonException>();
+    }
 
     [TestMethod]
     public void Parse_WhenUpstreamFlatShape_ReadsMillisecondExpiryAndProject()
@@ -47,12 +75,10 @@ public class AntigravityCredentialParserTests
 
         credentials.Expiry.Should().Be(DateTimeOffset.FromUnixTimeMilliseconds(1764050000000));
         credentials.ProjectId.Should().Be("synthetic-project");
-        credentials.ClientSecret.Should().BeNull("secrets are read only for the refresh path");
     }
 
     [TestMethod]
     [DataRow("")]
-    [DataRow("not json")]
     [DataRow("""{"token":{"token_type":"Bearer"}}""")]
     [DataRow("""["synthetic"]""")]
     public void Parse_WhenNoAccessToken_ReturnsNull(string json) =>

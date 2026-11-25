@@ -169,6 +169,20 @@ public sealed class CodexBarServiceNativeCostTests
         native.Calls.Should().HaveCount(2);
     }
 
+    // Review finding 9: a clock that steps backward must not keep the cost cache alive for the size of the jump.
+    [TestMethod]
+    public async Task GetCostAsync_WhenClockMovesBackward_RescansInsteadOfServingCache()
+    {
+        var native = AllProviders();
+        var service = Create(NoWsl(), native);
+
+        await service.GetCostAsync("claude");
+        _clock.Now = Now.AddHours(-2);
+        await service.GetCostAsync("claude");
+
+        native.Calls.Should().HaveCount(2);
+    }
+
     [TestMethod]
     public async Task GetCostAsync_WhenNativeScanThrowsAfterAGoodResult_ServesLastGoodAsStale()
     {

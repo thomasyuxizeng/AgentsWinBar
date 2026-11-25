@@ -55,6 +55,16 @@ public class ClaudeCooldownStoreTests
         store.Load().Should().BeNull();
     }
 
+    // Review finding 20.2: a bloated cooldown file is not read whole.
+    [TestMethod]
+    public void Load_WhenCooldownFileExceedsSizeLimit_ReturnsNullWithoutReading()
+    {
+        File.WriteAllText(_cooldownPath, "{\"blockedUntil\": \"2026-11-25T06:10:00+00:00\", \"padding\": \"" + new string('x', 70 * 1024) + "\"}");
+        var store = new ClaudeCooldownFile(new ListLogger<ClaudeCooldownFile>(), _cooldownPath);
+
+        store.Load().Should().BeNull();
+    }
+
     [TestMethod]
     public async Task FetchAsync_When429_SavesBlockedUntil()
     {

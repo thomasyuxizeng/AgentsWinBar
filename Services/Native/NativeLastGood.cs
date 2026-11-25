@@ -76,7 +76,13 @@ public sealed class NativeLastGoodStore
             lock (_gate) _lastGood = result;
             return result;
         }
-        if (!NativeLastGood.ServesLastGood(result.Status)) return result;
+        if (!NativeLastGood.ServesLastGood(result.Status))
+        {
+            // A missing or rejected sign-in also forgets the reading it produced, so a later failure cannot bring it back.
+            if (result.Status is NativeUsageStatus.SignInMissing or NativeUsageStatus.Unauthorized)
+                lock (_gate) _lastGood = null;
+            return result;
+        }
         NativeUsageResult? lastGood;
         lock (_gate) lastGood = _lastGood;
         return NativeLastGood.FromCacheOr(lastGood, result, now);

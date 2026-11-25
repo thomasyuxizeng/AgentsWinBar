@@ -26,7 +26,8 @@ public sealed class CostPriceStore
     private readonly SemaphoreSlim _refreshGate = new(1, 1);
     private readonly object _stateGate = new();
     private CostPricing? _pricing;
-    private (long CatalogStamp, long CustomStamp) _loadedFrom;
+    /// <summary>The file stamps the prices were read from; null after a failed read, so the next call reads again.</summary>
+    private (long CatalogStamp, long CustomStamp)? _loadedFrom;
 
     public CostPriceStore(string dataDirectory, ILogger<CostPriceStore> logger, TimeProvider? clock = null,
         Func<HttpMessageHandler>? handlerFactory = null)
@@ -56,11 +57,14 @@ public sealed class CostPriceStore
             if (_pricing is not null && _loadedFrom == stamps) return _pricing;
             var bundled = CostPriceCatalog.Bundled;
             var catalog = bundled;
-            if (ReadFile(CatalogPath) is { } bytes && CostPriceCatalog.Parse(bytes) is { IsPlausible: true } local &&
+            var failed = false;
+            if (ReadFile(CatalogPath, ref failed) is { } bytes && CostPriceCatalog.Parse(bytes) is { IsPlausible: true } local &&
                 local.Stamp > bundled.Stamp)
                 catalog = local.MergeMissingFrom(bundled);
-            var custom = ReadFile(CustomPath) is { } overlay ? CostCustomPricing.Parse(overlay) : CostCustomPricing.Empty;
-            _loadedFrom = stamps;
+            var custom = ReadFile(CustomPath, ref failed) is { } overlay ? CostCustomPricing.Parse(overlay) : CostCustomPricing.Empty;
+            // A file that could not be read (locked while it is written, for example) is read again next time
+            // even though its stamp has not changed.
+            _loadedFrom = failed ? null : stamps;
             return _pricing = new CostPricing(catalog, CostPriceOverlay.Bundled, custom);
         }
     }
@@ -124,7 +128,8 @@ public sealed class CostPriceStore
     private CostPriceCatalog CurrentCatalog()
     {
         var bundled = CostPriceCatalog.Bundled;
-        return ReadFile(CatalogPath) is { } bytes && CostPriceCatalog.Parse(bytes) is { IsPlausible: true } local
+        var failed = false;
+        return ReadFile(CatalogPath, ref failed) is { } bytes && CostPriceCatalog.Parse(bytes) is { IsPlausible: true } local
             ? local.MergeMissingFrom(bundled) : bundled;
     }
 
@@ -158,14 +163,19 @@ public sealed class CostPriceStore
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return 0; }
     }
 
-    private static byte[]? ReadFile(string path)
+    /// <summary>The file's bytes, or null when it is missing, empty or too large; sets <paramref name="failed"/> when it could not be read.</summary>
+    private static byte[]? ReadFile(string path, ref bool failed)
     {
         try
         {
             var info = new FileInfo(path);
             return info.Exists && info.Length is > 0 and <= MaxLocalFileBytes ? File.ReadAllBytes(path) : null;
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return null; }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            failed = true;
+            return null;
+        }
     }
 
     /// <summary>Fails a read once more than the allowed number of bytes came through.</summary>

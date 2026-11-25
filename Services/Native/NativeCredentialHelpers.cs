@@ -99,29 +99,42 @@ public static class NativeCredentialFile
         catch (DirectoryNotFoundException) { return null; }
 
         await using (stream.ConfigureAwait(false))
+            return await ReadToEndAsync(stream, stream.Length, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>Reads <paramref name="stream"/> to its end into a sensitive buffer; <paramref name="length"/> is its size when opened.</summary>
+    internal static async Task<SensitiveBuffer> ReadToEndAsync(Stream stream, long length, CancellationToken ct)
+    {
+        if (length > MaxBytes) throw new InvalidDataException("Credential file is unexpectedly large.");
+        // The owner may grow the file between Length and the read; leave room, grow if needed and read to EOF.
+        var buffer = new SensitiveBuffer((int)length + 4096);
+        try
         {
-            var length = stream.Length;
-            if (length > MaxBytes) throw new InvalidDataException("Credential file is unexpectedly large.");
-            // The owner may grow the file between Length and the read; leave room and read to EOF.
-            var buffer = new SensitiveBuffer((int)length + 4096);
-            try
+            var total = 0;
+            while (true)
             {
-                var total = 0;
-                while (true)
+                if (total == buffer.Array.Length)
                 {
-                    if (total == buffer.Array.Length) throw new InvalidDataException("Credential file grew while being read.");
-                    var read = await stream.ReadAsync(buffer.Array.AsMemory(total), ct).ConfigureAwait(false);
-                    if (read == 0) break;
-                    total += read;
+                    // Copy into a larger buffer; disposing the old one zeroes it before it goes back to the pool.
+                    var larger = new SensitiveBuffer((int)Math.Min((long)total * 2, MaxBytes + 1L));
+                    buffer.Array.AsSpan(0, total).CopyTo(larger.Array);
+                    buffer.Dispose();
+                    buffer = larger;
                 }
-                buffer.Length = total;
-                return buffer;
+                // Never read more than one byte past the cap: enough to tell that the file is too large.
+                var room = Math.Min(buffer.Array.Length - total, MaxBytes + 1 - total);
+                var read = await stream.ReadAsync(buffer.Array.AsMemory(total, room), ct).ConfigureAwait(false);
+                if (read == 0) break;
+                total += read;
+                if (total > MaxBytes) throw new InvalidDataException("Credential file is unexpectedly large.");
             }
-            catch
-            {
-                buffer.Dispose();
-                throw;
-            }
+            buffer.Length = total;
+            return buffer;
+        }
+        catch
+        {
+            buffer.Dispose();
+            throw;
         }
     }
 
@@ -173,6 +186,7 @@ public static class NativeJwt
                 {
                     reader.Read();
                     if (reader.TokenType == JsonTokenType.String) found = NonEmpty(reader.GetString());
+                    else reader.Skip(); // an object or array value is stepped over whole
                     continue;
                 }
                 if (reader.ValueTextEquals("https://api.openai.com/auth"u8))

@@ -26,6 +26,8 @@ public sealed class NativeCostService : INativeCostService, IDisposable
 {
     internal const string IndexFolderName = "cost-index";
     internal const int HistoryDays = 30;
+    /// <summary>How many updates in a row a log that could not be opened is tried again.</summary>
+    internal const int MaxSkipRetries = 3;
 
     private readonly IReadOnlyList<CostLogRoot> _roots;
     private readonly NativeCostScanner _scanner;
@@ -34,11 +36,16 @@ public sealed class NativeCostService : INativeCostService, IDisposable
     private readonly ILogger<NativeCostService> _logger;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly bool _refreshPrices;
+    /// <summary>Unreadable logs and how many updates in a row they failed (only touched under the gate).</summary>
+    private Dictionary<string, int> _skipRetries = new(StringComparer.OrdinalIgnoreCase);
 
-    /// <summary>Production constructor: the signed-in user's log folders and the folder of settings.json.</summary>
-    public NativeCostService(ISettingsService settings, ILoggerFactory loggerFactory)
+    /// <summary>
+    /// Production constructor: the signed-in user's log folders (under the fake profile of
+    /// <paramref name="testOverrides"/>, which is always null in a Release build) and the folder of settings.json.
+    /// </summary>
+    public NativeCostService(ISettingsService settings, ILoggerFactory loggerFactory, NativeTestOverrides? testOverrides = null)
         : this(Path.GetDirectoryName(Path.GetFullPath(settings.SettingsFilePath))!,
-            DefaultRoots(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)), loggerFactory)
+            DefaultRoots(testOverrides?.ProfileRoot ?? Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)), loggerFactory)
     {
     }
 
@@ -88,10 +95,32 @@ public sealed class NativeCostService : INativeCostService, IDisposable
     private IReadOnlyDictionary<string, string?> Scan(string[] providers, DateTimeOffset asOf, CancellationToken ct)
     {
         var plan = _watcher.TakePlan();
+        // A deleted index is rebuilt by a listing now; the changed paths alone would leave it empty.
+        if (!plan.FullListing && !_scanner.IndexExists) plan = new(true, []);
+        UpdateIndex(plan, ct);
+
+        var pricing = _prices.GetPricing();
+        try
+        {
+            return ReadReports(providers, pricing, asOf, ct);
+        }
+        catch (CostIndexDatabase.SqliteException ex) when (ex.InvalidIndex)
+        {
+            // A damaged index is replaced now (opening it for an update validates it), not at the next listing.
+            _logger.LogInformation("Native cost index is damaged; rebuilding it");
+            _watcher.NotifyLost();
+            UpdateIndex(_watcher.TakePlan(), ct);
+            return ReadReports(providers, pricing, asOf, ct);
+        }
+    }
+
+    private void UpdateIndex(CostScanPlan plan, CancellationToken ct)
+    {
+        CostScanResult result;
         try
         {
             // Two readers only when the folders are listed in full (the first scan reads every log once).
-            var result = _scanner.Update(_roots, plan.FullListing ? 2 : 1, ct, plan.FullListing ? null : plan.ChangedPaths);
+            result = _scanner.Update(_roots, plan.FullListing ? 2 : 1, ct, plan.FullListing ? null : plan.ChangedPaths);
             _watcher.Complete(plan, succeeded: true);
             _logger.LogDebug("Native cost update ({Mode}): checked {Checked} files, read {Files} files and {Bytes} bytes",
                 plan.FullListing ? "full listing" : "changed files", result.DiscoveredFiles, result.FilesRead, result.BytesRead);
@@ -102,7 +131,22 @@ public sealed class NativeCostService : INativeCostService, IDisposable
             throw;
         }
 
-        var pricing = _prices.GetPricing();
+        // A log that could not be opened (locked by its writer, for example) is tried again on the next few
+        // updates instead of waiting for the periodic listing; one that stays unreadable is left to that listing.
+        var retries = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        foreach (var path in result.SkippedPaths ?? [])
+        {
+            var attempt = _skipRetries.GetValueOrDefault(path) + 1;
+            if (attempt > MaxSkipRetries) continue;
+            retries[path] = attempt;
+            _watcher.Retry(path);
+        }
+        _skipRetries = retries;
+    }
+
+    private IReadOnlyDictionary<string, string?> ReadReports(string[] providers, CostPricing pricing,
+        DateTimeOffset asOf, CancellationToken ct)
+    {
         var reports = new Dictionary<string, string?>(StringComparer.Ordinal);
         foreach (var provider in providers)
         {
@@ -129,6 +173,9 @@ public sealed class NativeCostService : INativeCostService, IDisposable
         Provider = cliProvider, CurrencyCode = "USD", HistoryDays = HistoryDays, Source = "local", Provenance = "unknown",
         Coverage = new(), SessionCostUSD = 0, SessionTokens = 0, Last30DaysCostUSD = 0, Last30DaysTokens = 0, Daily = []
     };
+
+    /// <summary>The change notifications (tests feed them directly when OS watching is off).</summary>
+    internal CostLogWatcher Watcher => _watcher;
 
     public void Dispose() => _watcher.Dispose();
 }

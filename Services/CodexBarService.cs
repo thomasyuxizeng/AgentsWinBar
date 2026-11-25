@@ -209,7 +209,8 @@ public class CodexBarService : ICodexBarService
                 CostData? published;
                 lock (_costCache)
                 {
-                    if (!forceRefresh && _costCache.TryGetValue(provider, out var cached) &&
+                    // A clock that stepped back past the last attempt ends the cache instead of stretching it.
+                    if (!forceRefresh && _costCache.TryGetValue(provider, out var cached) && now >= cached.AttemptedAt &&
                         now - cached.AttemptedAt < (_costTimedOut.Contains(provider) ? CostTimeoutBackoff : CostCacheTtl))
                         published = cached.Data != null ? CachedCost(cached.Data, now) : LastGoodCost(provider, now);
                     else
@@ -1207,6 +1208,9 @@ public class CodexBarService : ICodexBarService
             Cost = CacheRetention.RetainedCost(previous?.Cost, now),
             Error = acceptsUsage ? null : data.Error ?? "No usage reading available"
         };
+        // A held or replayed reading is not fresh: a window whose reset time has passed belongs to a period that has
+        // ended, so it shows 0% used instead of its old numbers (as the native clients' last-good readings do).
+        if (!freshSuccess) resolved = ClearEndedWindows(resolved, now);
         // Persist complete values independently: a status-only success must not discard the usage reading.
         if (acceptsUsage || statusSuccess || cachedStatus)
         {
@@ -1229,6 +1233,25 @@ public class CodexBarService : ICodexBarService
             });
         }
         return resolved;
+    }
+
+    private static UsageData ClearEndedWindows(UsageData data, DateTime nowUtc)
+    {
+        static bool Ended(UsageWindow? window, DateTime now) =>
+            window?.ResetAt is { } reset && Helpers.DashboardValues.Utc(reset) <= now;
+        static UsageWindow? Clear(UsageWindow? window, DateTime now) =>
+            Ended(window, now) ? window! with { Used = 0, ReportedPercent = 0, ResetAt = null, ResetIn = null } : window;
+
+        if (!Ended(data.Session, nowUtc) && !Ended(data.Weekly, nowUtc) && !Ended(data.Tertiary, nowUtc) &&
+            !(data.ExtraWindows ?? []).Any(e => Ended(e.Window, nowUtc)))
+            return data;
+        return data with
+        {
+            Session = Clear(data.Session, nowUtc),
+            Weekly = Clear(data.Weekly, nowUtc),
+            Tertiary = Clear(data.Tertiary, nowUtc),
+            ExtraWindows = (data.ExtraWindows ?? []).Select(e => Ended(e.Window, nowUtc) ? e with { Window = Clear(e.Window, nowUtc)! } : e).ToList()
+        };
     }
 
     private void ProcessEarlyResets(UsageData current, DateTime nowUtc)

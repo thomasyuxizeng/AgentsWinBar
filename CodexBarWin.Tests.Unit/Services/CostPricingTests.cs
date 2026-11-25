@@ -279,4 +279,19 @@ public sealed class CostPricingTests
 
         rate.Should().Be(new CostRates(4, 20, .2m, 5, 8));
     }
+
+    // Review finding 20.5: only a real date suffix is stripped from a Codex model id.
+    [TestMethod]
+    [DataRow("gpt-6-fast-v1-ab", "gpt-6-fast-v1-ab")]
+    [DataRow("gpt-6.2-sol-2026-10-01", "gpt-6.2-sol")]
+    public void Normalize_WhenCodexModelHasNonDateHyphenatedSuffix_DoesNotStripIt(string raw, string expected) =>
+        CostPricing.Normalize(raw, CostProvider.Codex).Should().Be(expected);
+
+    // Review finding 20.5: a Claude suffix is a date only when all eight characters are digits ("-1234567" parses as an
+    // int, so the old check cut it).
+    [TestMethod]
+    [DataRow("claude-test--1234567", "claude-test--1234567")]
+    [DataRow("claude-test-20261001", "claude-test")]
+    public void Normalize_WhenClaudeModelHasSignedNumberSuffix_DoesNotStripIt(string raw, string expected) =>
+        CostPricing.Normalize(raw, CostProvider.Claude).Should().Be(expected);
 }

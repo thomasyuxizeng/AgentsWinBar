@@ -25,6 +25,22 @@ public class NativeLastGoodTests
 
     private static NativeUsageResult Failure(NativeUsageStatus status) => new() { Provider = "codex", Status = status, HttpStatus = 502, Message = "synthetic failure", NetworkCalls = 1 };
 
+    // Review finding 5: a missing or rejected sign-in also forgets the reading it produced.
+    [TestMethod]
+    [DataRow(NativeUsageStatus.SignInMissing)]
+    [DataRow(NativeUsageStatus.Unauthorized)]
+    public void Apply_WhenTransientFailureFollowsMissingOrRejectedSignIn_DoesNotServeOlderReading(NativeUsageStatus signOut)
+    {
+        var store = new NativeLastGoodStore();
+        store.Apply(Reading() with { UpdatedAt = Now }, Now);
+        store.Apply(Failure(signOut), Now);
+
+        var result = store.Apply(Failure(NativeUsageStatus.Failed), Now);
+
+        result.Cached.Should().BeFalse();
+        result.HasUsage.Should().BeFalse();
+    }
+
     [TestMethod]
     public void ClearPastResets_WhenWindowsHavePassed_ZeroesOnlyThoseWindows()
     {

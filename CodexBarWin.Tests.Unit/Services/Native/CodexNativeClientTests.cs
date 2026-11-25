@@ -191,6 +191,80 @@ public class CodexNativeClientTests
         result.HasUsage.Should().BeFalse();
     }
 
+    // Review finding 1: an absurd Retry-After must not throw out of the client and lose the last good reading.
+    [TestMethod]
+    [DataRow("Infinity")]
+    [DataRow("1e20")]
+    [DataRow("999999999999")]
+    [DataRow("Fri, 31 Dec 9999 23:59:59 GMT")]
+    public async Task FetchAsync_When429HasAbsurdRetryAfter_ServesLastGoodWithBoundedRetryAfter(string retryAfter)
+    {
+        var failing = false;
+        var (client, _) = Create(_ =>
+        {
+            if (!failing) return Json(UsageWithOneStaleWindow());
+            var response = new HttpResponseMessage(HttpStatusCode.TooManyRequests);
+            response.Headers.TryAddWithoutValidation("Retry-After", retryAfter);
+            return response;
+        });
+        await client.FetchAsync();
+
+        failing = true;
+        var result = await client.FetchAsync();
+
+        result.Status.Should().Be(NativeUsageStatus.RateLimited);
+        result.Cached.Should().BeTrue();
+        result.Primary!.UsedPercent.Should().Be(23);
+        result.RetryAfter.Should().BeOnOrBefore(Now + NativeHttp.MaxRetryAfter);
+    }
+
+    // Review finding 20.3: an absurd window length cannot wrap into a negative number of minutes.
+    // 128849018880 s is 2^31 minutes, which an unchecked cast turns into int.MinValue.
+    [TestMethod]
+    [DataRow(9223372036854775807L)]
+    [DataRow(128849018880L)]
+    public void Map_WhenLimitWindowSecondsExceedsIntMaxMinutes_ClampsInsteadOfOverflowing(long seconds)
+    {
+        var usage = System.Text.Json.JsonSerializer.Deserialize($$$"""
+            {"rate_limit": {"primary_window": {"used_percent": 5, "limit_window_seconds": {{{seconds}}}}} }
+            """, NativeJsonContext.Default.CodexUsageResponse)!;
+
+        var result = CodexNativeClient.Map(usage, Now)!;
+
+        (result.Primary ?? result.Secondary)!.WindowMinutes.Should().BePositive();
+    }
+
+    // Review finding 6: the response body is read only up to a fixed cap.
+    [TestMethod]
+    public async Task FetchAsync_WhenResponseExceedsSizeLimit_FailsWithoutReadingWholeBody()
+    {
+        var body = new PaddedJsonStream("{\"plan_type\": \"team\", \"rate_limit\": {\"primary_window\": {\"used_percent\": 23, " +
+            "\"limit_window_seconds\": 18000, \"reset_at\": 1764060000}}, \"padding\": \"", HugePadding, "\"}");
+        var (client, _) = Create(_ => Streamed(body));
+
+        var result = await client.FetchAsync();
+
+        result.Status.Should().Be(NativeUsageStatus.Failed);
+        body.Served.Should().BeLessThanOrEqualTo(NativeHttp.MaxResponseBytes + 1);
+    }
+
+    // Review finding 7: a known field holding an object or array must not derail the reader.
+    [TestMethod]
+    public void ParseCredentials_WhenKnownFieldPrecedingTokenIsObjectOrArray_StillReadsAccessToken()
+    {
+        var access = Jwt("""{"exp":1764050000,"sub":"synthetic"}""");
+        var json = $$$"""
+            {"OPENAI_API_KEY": {"env": "OPENAI_API_KEY"}, "last_refresh": ["x"],
+             "tokens": {"account_id": {"nested": 1}, "id_token": ["x"], "access_token": "{{{access}}}"}}
+            """;
+
+        var (kind, credentials) = CodexNativeClient.ParseCredentials(System.Text.Encoding.UTF8.GetBytes(json));
+
+        kind.Should().Be(CodexCredentialKind.ChatGpt);
+        credentials!.AccessToken.Should().Be(access);
+        credentials.ExpiresAt.Should().Be(DateTimeOffset.FromUnixTimeSeconds(1764050000));
+    }
+
     [TestMethod]
     public async Task FetchAsync_WhenFailureBeforeAnyGoodReading_ReturnsFailureWithoutCachedRow()
     {
