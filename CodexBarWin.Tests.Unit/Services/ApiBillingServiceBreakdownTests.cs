@@ -243,7 +243,7 @@ public partial class ApiBillingServiceTests
         _values.DeveloperModeEnabled = true;
         var result = await _service.GetAsync(true, default);
         result.HasBreakdown.Should().BeTrue(); result.SpentUsd.Should().Be(95.33m); result.UnattributedUsd.Should().Be(0.16m);
-        result.Contributors.Select(c => c.Name).Should().Equal("You", "Riotline");
+        result.Contributors.Select(c => c.Name).Should().Equal("You", "Teammate");
         result.Contributors.Select(c => c.SpentUsd).Should().Equal(71.40m, 23.77m);
         result.Contributors[0].IsYou.Should().BeTrue();
         _handler.Requests.Should().BeEmpty(); _environmentReads.Should().BeEmpty();

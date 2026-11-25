@@ -80,7 +80,7 @@ public sealed class ApiBillingService : IApiBillingService, IDisposable
                     Contributors = new ApiCreditsContributor[]
                     {
                         new() { Name = "You", UserId = "sample-you", SpentUsd = 71.40m, IsYou = true },
-                        new() { Name = "Riotline", UserId = "sample-teammate", SpentUsd = 23.77m }
+                        new() { Name = "Teammate", UserId = "sample-teammate", SpentUsd = 23.77m }
                     }
                 }, now);
             }
