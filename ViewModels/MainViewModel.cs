@@ -55,6 +55,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private DateTime? _lastTrim;
     private bool _disposed;
     private bool _refreshPending;
+    private readonly ISignInWatcher? _signInWatcher;
     private bool _stopped;
     private bool _exiting;
     private int _stopVersion;
@@ -107,7 +108,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
         IEarlyResetStore? earlyResetStore = null,
         IBatterySaverMonitor? batterySaverMonitor = null,
         IDashboardService? dashboardService = null,
-        ResetAnimationVisibility? resetVisibility = null)
+        ResetAnimationVisibility? resetVisibility = null,
+        ISignInWatcher? signInWatcher = null)
     {
         _resetVisibility = resetVisibility ?? ResetAnimationVisibility.Shared;
         _codexBarService = codexBarService;
@@ -125,6 +127,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _batterySaverMonitor = batterySaverMonitor;
         _dashboardService = dashboardService;
         if (_batterySaverMonitor != null) _batterySaverMonitor.BatterySaverChanged += OnBatterySaverChanged;
+        _signInWatcher = signInWatcher;
+        if (_signInWatcher != null) _signInWatcher.RefreshRequested += OnSignInRefreshRequested;
 
         _settingsService.SettingsChanged += OnSettingsChanged;
         _sessionState.Locked += OnSessionLocked;
@@ -252,6 +256,34 @@ public partial class MainViewModel : ObservableObject, IDisposable
         if (IsLoading) return _refreshCompletion?.Task ?? Task.CompletedTask;
         return RefreshCoreAsync();
     }
+
+    /// <summary>
+    /// A sign-in button was used and the provider's tool wrote a new sign-in (or, for Gemini, it is time to re-check):
+    /// refresh now, or right after the refresh that is running. A re-check is skipped once the provider is signed in.
+    /// </summary>
+    private void OnSignInRefreshRequested(object? sender, SignInRefreshRequest request) => OnUiThread(() =>
+    {
+        try
+        {
+            if (_disposed || _stopped || _exiting) return;
+            if (!request.CredentialChanged && !IsSignedOut(request.Provider))
+            {
+                _signInWatcher?.Cancel(request.Provider);
+                return;
+            }
+            ResetAdaptiveRefresh();
+            if (IsLoading) { _refreshPending = true; return; }
+            RefreshCoreAsync().SafeFireAndForget(onError: ex => _logger.LogError(ex, "Sign-in refresh failed"));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Sign-in refresh request failed");
+        }
+    });
+
+    /// <summary>The provider is shown as signed out (missing or rejected sign-in). Call on the UI thread.</summary>
+    public bool IsSignedOut(string provider) =>
+        Providers.Any(p => p.AuthRequired && p.Provider.Equals(provider, StringComparison.OrdinalIgnoreCase));
 
     /// <summary>Requests cost totals while a consumer is open.</summary>
     public IDisposable AcquireCostDemand()
@@ -630,6 +662,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 }
                 catch (Exception ex) { _logger.LogDebug(ex, "Refresh activity could not be recorded"); }
                 if (!developerMode) _history.Record(data, DateTime.UtcNow);
+                // A reading without a sign-in problem ends any wait for a new sign-in
+                if (!data.AuthRequired && !data.HasError && ProviderConstants.IsValidProvider(data.Provider))
+                    _signInWatcher?.Cancel(data.Provider);
                 // Find the index of this provider
                 var index = -1;
                 for (int i = 0; i < Providers.Count; i++)
@@ -1014,6 +1049,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             Stop();
             _settingsService.SettingsChanged -= OnSettingsChanged;
             if (_batterySaverMonitor != null) _batterySaverMonitor.BatterySaverChanged -= OnBatterySaverChanged;
+            if (_signInWatcher != null) _signInWatcher.RefreshRequested -= OnSignInRefreshRequested;
             _sessionState.Locked -= OnSessionLocked;
             _sessionState.Unlocked -= OnSessionActivated;
             _sessionState.Resumed -= OnSessionActivated;

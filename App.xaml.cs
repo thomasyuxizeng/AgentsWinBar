@@ -290,6 +290,11 @@ public partial class App : Application
         services.AddSingleton<IEarlyResetStore, EarlyResetStore>();
         services.AddSingleton<IDashboardService, DashboardService>();
         services.AddSingleton<IToastNotifier, ToastNotifier>();
+        // "Sign in" buttons: open the provider's own sign-in, then watch (only while one is pending) for the new sign-in
+        services.AddSingleton<ISignInSystem, WindowsSignInSystem>();
+        services.AddSingleton<ISignInLauncher, SignInLauncher>();
+        services.AddSingleton<ISignInSignals, WindowsSignInSignals>();
+        services.AddSingleton<ISignInWatcher, SignInWatcher>();
 
         // ViewModels
         services.AddSingleton<MainViewModel>();

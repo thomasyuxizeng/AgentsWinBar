@@ -1,3 +1,4 @@
+using CodexBarWin.Helpers;
 using CodexBarWin.Models;
 using CodexBarWin.Services;
 using CodexBarWin.Tests.Unit.Mocks;
@@ -1475,6 +1476,37 @@ public class CodexBarServiceTests
         results.Should().HaveCount(2);
         _mockWslService.ExecutedCommands.Should().BeEmpty(); // Should NOT execute WSL commands
         _mockCacheService.SetCallCount.Should().Be(0, "developer samples must never overwrite the real usage cache");
+    }
+
+    [TestMethod]
+    public async Task GetAllUsageAsync_DeveloperModeSampleWithAuthRequired_ShowsProviderSignedOut()
+    {
+        _mockSettingsService.Settings.DeveloperModeEnabled = true;
+        _mockSettingsService.SetProviders([new() { Id = "codex", IsEnabled = true }]);
+        _mockSampleDataLoader.SetSampleData("codex",
+            """[{"provider":"codex","source":"oauth","usage":{"primary":{"usedPercent":40,"windowMinutes":300}},"authRequired":true}]""");
+
+        var data = (await _service.GetAllUsageAsync()).Single();
+
+        data.AuthRequired.Should().BeTrue();
+        data.SignInExpired.Should().BeFalse();
+        data.Session!.Percent.Should().Be(40);
+        SignInStatus.Of(data).Should().Be(SignInState.SignedOut);
+        _mockWslService.ExecutedCommands.Should().BeEmpty();
+    }
+
+    [TestMethod]
+    public async Task GetAllUsageAsync_DeveloperModeSampleWithSignInExpired_ShowsExpiredNotSignedOut()
+    {
+        _mockSettingsService.Settings.DeveloperModeEnabled = true;
+        _mockSettingsService.SetProviders([new() { Id = "claude", IsEnabled = true }]);
+        _mockSampleDataLoader.SetSampleData("claude",
+            """[{"provider":"claude","source":"oauth","usage":{"primary":{"usedPercent":40,"windowMinutes":300}},"signInExpired":true}]""");
+
+        var data = (await _service.GetAllUsageAsync()).Single();
+
+        data.AuthRequired.Should().BeFalse();
+        SignInStatus.Of(data).Should().Be(SignInState.Expired);
     }
 
     [TestMethod]

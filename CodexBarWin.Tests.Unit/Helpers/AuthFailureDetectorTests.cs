@@ -62,9 +62,9 @@ public class AuthFailureDetectorTests
     }
 
     [TestMethod]
-    [DataRow("CLAUDE", "Sign in again in WSL by running claude, then /login.")]
-    [DataRow("codex", "Sign in again by running codex login in WSL.")]
-    [DataRow("gemini", "Gemini quota comes from Antigravity. Sign in to Antigravity (agy) in WSL.")]
+    [DataRow("CLAUDE", "Sign in to Claude Code to see your Claude limits.")]
+    [DataRow("codex", "Sign in to Codex to see your Codex limits.")]
+    [DataRow("gemini", "Sign in to Antigravity with Google to see your Gemini limits.")]
     public void GetSignInHint_ValidProvider_ReturnsProviderRecoveryInstructions(string provider, string expected) =>
         AuthFailureDetector.GetSignInHint(provider).Should().Be(expected);
 }

@@ -57,8 +57,8 @@ public class CacheService : ICacheService
         if (!string.Equals(provider, data.Provider, StringComparison.OrdinalIgnoreCase) ||
             string.Equals(data.Status, "offline", StringComparison.OrdinalIgnoreCase) || data.HasError || data.CommandNotFound || data.IsLoading ||
             data.UsageFetchOutcome is FetchOutcome.Failed or FetchOutcome.Unavailable) return;
-        _cache[provider] = data.AuthRequired || data.AuthMessage != null
-            ? data with { AuthRequired = false, AuthMessage = null } : data;
+        _cache[provider] = data.AuthRequired || data.AuthMessage != null || data.SignInExpired
+            ? data with { AuthRequired = false, AuthMessage = null, SignInExpired = false } : data;
         _logger.LogDebug("Cached data for {Provider}", provider);
     }
 

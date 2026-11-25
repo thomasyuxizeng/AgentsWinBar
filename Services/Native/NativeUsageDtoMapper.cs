@@ -45,7 +45,8 @@ public static class NativeUsageDtoMapper
             } : null,
             Error = result.Status == NativeUsageStatus.Ok || hasUsage ? default : ErrorElement(result, authFailure),
             AuthRequired = authFailure,
-            AuthError = authFailure ? result.Message : null
+            AuthError = authFailure ? result.Message : null,
+            SignInExpired = expired
         };
     }
 

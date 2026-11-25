@@ -76,6 +76,8 @@ public record UsageDataDto
     public System.Text.Json.JsonElement Error { get; init; }
     public bool AuthRequired { get; init; }
     public string? AuthError { get; init; }
+    /// <summary>The stored sign-in expired and waits for the provider's own tool to renew it (native route only).</summary>
+    public bool SignInExpired { get; init; }
 
     public UsageData ToUsageData(DateTime? fetchedAt = null)
     {
@@ -116,6 +118,7 @@ public record UsageDataDto
             Error = hasError ? safeMessage ?? "Provider returned an error" : null,
             AuthRequired = authRequired,
             AuthMessage = authRequired ? Helpers.AuthFailureDetector.SanitizeMessage(AuthError ?? message) : null,
+            SignInExpired = SignInExpired && !authRequired,
             UsageFetchOutcome = hasError || string.Equals(Source, "offline", StringComparison.OrdinalIgnoreCase)
                 ? FetchOutcome.Failed
                 : Usage?.Primary?.HasReading == true || Usage?.Secondary?.HasReading == true || Usage?.Tertiary?.HasReading == true ||
