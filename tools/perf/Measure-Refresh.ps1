@@ -7,7 +7,8 @@
   Read-only. Samples every -IntervalMs for -Minutes and writes a CSV, then prints:
     * one row per WSL VM episode (vmmemWSL present): duration, peak working set, peak private bytes, CPU seconds;
     * app totals: CPU seconds per hour, CPU seconds attributed to refreshes, idle CPU seconds per hour,
-      median and peak working set and private bytes, and the refresh count.
+      median and peak working set, private bytes and private working set (Task Manager's memory column, sampled
+      every -PrivateWsEverySeconds through the Process performance class), and the refresh count.
   A refresh is marked by a change of cache.json's last write time (the app writes it after every refresh).
   CPU attributed to a refresh is the app's CPU in the window [marker - PreSeconds, marker + PostSeconds].
 
@@ -23,6 +24,7 @@ param(
     [string]$AppProcess = 'CodexBarWin',
     [int]$PreSeconds = 25,
     [int]$PostSeconds = 5,
+    [int]$PrivateWsEverySeconds = 5,
     [switch]$SummarizeOnly
 )
 
@@ -38,16 +40,24 @@ if (-not $SummarizeOnly) {
     $sw = [Diagnostics.Stopwatch]::StartNew()
     $endMs = $Minutes * 60000
     $writer = [IO.StreamWriter]::new($Out, $false, [Text.UTF8Encoding]::new($false))
-    $writer.WriteLine('t_ms,clock,proc,pid,ws_mb,private_mb,cpu_s,cache_mtime')
+    $writer.WriteLine('t_ms,clock,proc,pid,ws_mb,private_mb,cpu_s,cache_mtime,pws_mb')
+    $nextPws = 0
     try {
         while ($sw.ElapsedMilliseconds -lt $endMs) {
             $t = $sw.ElapsedMilliseconds
             $clock = (Get-Date).ToString('HH:mm:ss.fff')
             $mtime = try { (Get-Item -LiteralPath $CacheFile).LastWriteTimeUtc.Ticks } catch { '' }
+            $pws = @{}
+            if ($t -ge $nextPws) {
+                $nextPws = $t + $PrivateWsEverySeconds * 1000
+                foreach ($c in (Get-CimInstance Win32_PerfFormattedData_PerfProc_Process -Filter "Name LIKE '$AppProcess%'" -ErrorAction SilentlyContinue)) {
+                    $pws[[int]$c.IDProcess] = [math]::Round($c.WorkingSetPrivate / 1MB, 1)
+                }
+            }
             foreach ($p in (Get-Process -Name $names -ErrorAction SilentlyContinue)) {
-                $writer.WriteLine(('{0},{1},{2},{3},{4},{5},{6},{7}' -f $t, $clock, $p.ProcessName, $p.Id,
+                $writer.WriteLine(('{0},{1},{2},{3},{4},{5},{6},{7},{8}' -f $t, $clock, $p.ProcessName, $p.Id,
                     [math]::Round($p.WorkingSet64 / 1MB, 1), [math]::Round($p.PrivateMemorySize64 / 1MB, 1),
-                    (Get-CpuSeconds $p), $mtime))
+                    (Get-CpuSeconds $p), $mtime, $pws[$p.Id]))
             }
             $writer.Flush()
             $sleep = $IntervalMs - ($sw.ElapsedMilliseconds - $t)
@@ -63,6 +73,7 @@ $rows = Import-Csv $Out | ForEach-Object {
         ws = [double]$_.ws_mb; priv = [double]$_.private_mb
         cpu = if ($_.cpu_s -eq '') { $null } else { [double]$_.cpu_s }
         mtime = $_.cache_mtime
+        pws = if ($_.pws_mb) { [double]$_.pws_mb } else { $null }
     }
 }
 if (-not $rows) { Write-Output "No samples in $Out"; return }
@@ -128,4 +139,6 @@ Write-Output 'App process:'
     idle_cpu_s_per_hour = if ($appCpuTotal -ne 'n/a') { [math]::Round(($appCpuTotal - $refreshCpu) / $idleHours, 2) } else { 'n/a' }
     ws_median_mb = & $median ($app.ws); ws_peak_mb = ($app | Measure-Object ws -Maximum).Maximum
     private_median_mb = & $median ($app.priv); private_peak_mb = ($app | Measure-Object priv -Maximum).Maximum
+    private_ws_median_mb = & $median (@($app | Where-Object { $null -ne $_.pws }).pws)
+    private_ws_peak_mb = ($app | Where-Object { $null -ne $_.pws } | Measure-Object pws -Maximum).Maximum
 } | Format-List | Out-String | Write-Output
