@@ -36,8 +36,13 @@ public sealed class CostCacheStore : ICostCacheStore
         {
             await _ioGate.WaitAsync(ct); acquired = true;
             if (!File.Exists(FilePath)) return items;
-            var json = await File.ReadAllTextAsync(FilePath, ct);
-            var file = JsonSerializer.Deserialize(json, AppJsonSerializerContext.Default.CostCacheFile);
+            CostCacheFile? file;
+            await using (var stream = new FileStream(FilePath, FileMode.Open, FileAccess.Read, FileShare.Read,
+                bufferSize: 16 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan))
+            {
+                if (stream.Length == 0) return items;
+                file = await JsonSerializer.DeserializeAsync(stream, AppJsonSerializerContext.Default.CostCacheFile, ct);
+            }
             var now = _clock.GetUtcNow().UtcDateTime;
             foreach (var (key, rawData) in file?.Items ?? [])
             {
@@ -71,15 +76,19 @@ public sealed class CostCacheStore : ICostCacheStore
             await _ioGate.WaitAsync(ct); acquired = true;
             if (DeveloperMode) return false;
             var now = _clock.GetUtcNow().UtcDateTime;
-            var file = new CostCacheFile
+            var jsonFile = new CostCacheFile
             {
                 Items = items.Where(pair => pair.Value.HasData)
                     .ToDictionary(pair => pair.Key, pair => pair.Value)
             };
-            var json = JsonSerializer.Serialize(file, AppJsonSerializerContext.Default.CostCacheFile);
             Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(FilePath))!);
             var temporaryPath = FilePath + ".tmp";
-            await File.WriteAllTextAsync(temporaryPath, json, ct);
+            await using (var stream = new FileStream(temporaryPath, FileMode.Create, FileAccess.Write, FileShare.None,
+                bufferSize: 16 * 1024, FileOptions.Asynchronous))
+            {
+                await JsonSerializer.SerializeAsync(stream, jsonFile, AppJsonSerializerContext.Default.CostCacheFile, ct);
+                await stream.FlushAsync(ct);
+            }
             File.Move(temporaryPath, FilePath, overwrite: true);
             return true;
         }

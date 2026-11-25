@@ -4,6 +4,7 @@ using CodexBarWin.Models;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
+using Microsoft.UI.Xaml.Media;
 
 namespace CodexBarWin.Views;
 
@@ -35,6 +36,7 @@ public sealed partial class DashboardPage : Page
     private IReadOnlyList<AttentionItem> _attention = [];
     private int _arrangedColumns = -1;
     private string _arrangedOrder = string.Empty;
+    private bool _disposed;
 
     public event EventHandler? RefreshRequested;
     public event EventHandler? SettingsRequested;
@@ -45,6 +47,78 @@ public sealed partial class DashboardPage : Page
     public DashboardPage()
     {
         InitializeComponent();
+        AttentionRepeater.ElementPrepared += OnAttentionElementPrepared;
+        AttentionRepeater.ElementClearing += OnAttentionElementClearing;
+    }
+
+    private void OnAttentionElementPrepared(ItemsRepeater sender, ItemsRepeaterElementPreparedEventArgs args)
+    {
+        if (_disposed || args.Element is not HyperlinkButton hb) return;
+        hb.Click -= OnAttentionClicked;
+        hb.Click += OnAttentionClicked;
+    }
+
+    private void OnAttentionElementClearing(ItemsRepeater sender, ItemsRepeaterElementClearingEventArgs args)
+    {
+        if (args.Element is HyperlinkButton hb) hb.Click -= OnAttentionClicked;
+    }
+
+    private void DetachAttentionClicks(DependencyObject root)
+    {
+        var count = VisualTreeHelper.GetChildrenCount(root);
+        for (var i = 0; i < count; i++)
+        {
+            var child = VisualTreeHelper.GetChild(root, i);
+            if (child is HyperlinkButton hb) hb.Click -= OnAttentionClicked;
+            DetachAttentionClicks(child);
+        }
+    }
+
+    /// <summary>Recursively tears down all child panels, charts, toggles, repeaters, and event subscriptions on window close.</summary>
+    public void Cleanup()
+    {
+        if (_disposed) return;
+        _disposed = true;
+        MainScroll.SizeChanged -= OnScrollSizeChanged;
+        RefreshButton.Click -= OnRefreshClicked;
+        TopmostToggle.Click -= OnTopmostClicked;
+        FullScreenToggle.Click -= OnFullScreenClicked;
+        SettingsButton.Click -= OnSettingsClicked;
+
+        SetBusy(false);
+        AttentionRepeater.ElementPrepared -= OnAttentionElementPrepared;
+        AttentionRepeater.ElementClearing -= OnAttentionElementClearing;
+        DetachAttentionClicks(AttentionRepeater);
+        AttentionRepeater.ItemsSource = null;
+        AttentionRepeater.ItemTemplate = null;
+        AttentionPanel.Children.Clear();
+        SummaryGrid.Children.Clear();
+        SummaryCard.Child = null;
+        _attention = [];
+        _snapshot = null;
+
+        foreach (var panel in _panels.Values) panel.Cleanup();
+        _panels.Clear();
+        foreach (var stack in _columnStacks) stack.Children.Clear();
+        _columnStacks.Clear();
+        ProvidersGrid.Children.Clear();
+        ProvidersGrid.ColumnDefinitions.Clear();
+
+        foreach (var card in _graphCards.Values) card.Cleanup();
+        _graphCards.Clear();
+        foreach (var toggle in _graphToggles.Values) toggle.Click -= OnGraphToggleClicked;
+        _graphToggles.Clear();
+        GraphToggles.Children.Clear();
+        GraphsGrid.Children.Clear();
+        GraphsGrid.ColumnDefinitions.Clear();
+        GraphsGrid.RowDefinitions.Clear();
+
+        DiagnosticsExpander.IsExpanded = false;
+        Diagnostics.Cleanup();
+        DiagnosticsExpander.Content = null;
+        DiagnosticsExpander.Header = null;
+        ContentStack.Children.Clear();
+        DataContext = null;
     }
 
     public void SetBusy(bool busy)
@@ -55,10 +129,14 @@ public sealed partial class DashboardPage : Page
         RefreshButton.IsEnabled = !busy;
     }
 
-    public void SetFullScreen(bool on) => FullScreenToggle.IsChecked = on;
+    public void SetFullScreen(bool on)
+    {
+        if (!_disposed) FullScreenToggle.IsChecked = on;
+    }
 
     public void Update(DashboardSnapshot snapshot)
     {
+        if (_disposed) return;
         _snapshot = snapshot;
         UpdateSubtitle(snapshot.Summary);
         UpdateSummary(snapshot);
@@ -72,6 +150,7 @@ public sealed partial class DashboardPage : Page
     /// <summary>The providers whose graphs the user switched off (from settings); redraws the graphs section when it changed.</summary>
     public void SetHiddenGraphs(IEnumerable<string> providerIds)
     {
+        if (_disposed) return;
         var hidden = new HashSet<string>(providerIds, StringComparer.OrdinalIgnoreCase);
         if (hidden.SetEquals(_hiddenGraphs)) return;
         _hiddenGraphs.Clear();
@@ -81,7 +160,7 @@ public sealed partial class DashboardPage : Page
 
     public void RefreshTimes()
     {
-        if (_snapshot == null) return;
+        if (_disposed || _snapshot == null) return;
         UpdateSubtitle(_snapshot.Summary);
         foreach (var panel in _panels.Values) panel.RefreshTimes();
         Diagnostics.RefreshTimes();
@@ -163,7 +242,10 @@ public sealed partial class DashboardPage : Page
     {
         var ids = providers.Select(p => p.Id).ToList();
 
-        foreach (var stale in _panels.Keys.Where(k => !ids.Contains(k)).ToList()) _panels.Remove(stale);
+        foreach (var stale in _panels.Keys.Where(k => !ids.Contains(k)).ToList())
+        {
+            if (_panels.Remove(stale, out var stalePanel)) stalePanel.Cleanup();
+        }
         foreach (var provider in providers)
         {
             if (!_panels.TryGetValue(provider.Id, out var panel))
@@ -181,6 +263,7 @@ public sealed partial class DashboardPage : Page
 
     private void OnScrollSizeChanged(object sender, SizeChangedEventArgs e)
     {
+        if (_disposed) return;
         try
         {
             ArrangeSummary();
@@ -194,8 +277,14 @@ public sealed partial class DashboardPage : Page
     private void UpdateGraphs(IReadOnlyList<DashboardProvider> providers)
     {
         var ids = providers.Select(p => p.Id).ToList();
-        foreach (var stale in _graphCards.Keys.Where(k => !ids.Contains(k)).ToList()) _graphCards.Remove(stale);
-        foreach (var stale in _graphToggles.Keys.Where(k => !ids.Contains(k)).ToList()) _graphToggles.Remove(stale);
+        foreach (var stale in _graphCards.Keys.Where(k => !ids.Contains(k)).ToList())
+        {
+            if (_graphCards.Remove(stale, out var staleCard)) staleCard.Cleanup();
+        }
+        foreach (var stale in _graphToggles.Keys.Where(k => !ids.Contains(k)).ToList())
+        {
+            if (_graphToggles.Remove(stale, out var staleToggle)) staleToggle.Click -= OnGraphToggleClicked;
+        }
 
         foreach (var provider in providers)
         {
@@ -220,7 +309,10 @@ public sealed partial class DashboardPage : Page
                 }
                 if (!DashboardContent.ProviderEquals(card.Data, provider)) card.Data = provider;
             }
-            else _graphCards.Remove(provider.Id);
+            else if (_graphCards.Remove(provider.Id, out var hiddenCard))
+            {
+                hiddenCard.Cleanup();
+            }
         }
 
         var wanted = providers.Select(p => _graphToggles[p.Id]).ToList();

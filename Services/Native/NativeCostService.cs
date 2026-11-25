@@ -18,11 +18,18 @@ public interface INativeCostService
         DateTimeOffset asOf, CancellationToken ct = default);
 }
 
+/// <summary>Direct typed DTO route avoiding JSON serialize-then-deserialize roundtrips in-process.</summary>
+public interface INativeTypedCostService : INativeCostService
+{
+    Task<IReadOnlyDictionary<string, CostDataDto?>> FetchCostDtosAsync(IReadOnlyList<string> providers,
+        DateTimeOffset asOf, CancellationToken ct = default);
+}
+
 /// <summary>
 /// Owns the incremental scanner (index in the app's data folder), the change notifications on the Windows log
 /// folders and the price store. All work runs off the UI thread at background priority.
 /// </summary>
-public sealed class NativeCostService : INativeCostService, IDisposable
+public sealed class NativeCostService : INativeTypedCostService, IDisposable
 {
     internal const string IndexFolderName = "cost-index";
     internal const int HistoryDays = 30;
@@ -77,6 +84,19 @@ public sealed class NativeCostService : INativeCostService, IDisposable
     public async Task<IReadOnlyDictionary<string, string?>> FetchCostJsonAsync(IReadOnlyList<string> providers,
         DateTimeOffset asOf, CancellationToken ct = default)
     {
+        var dtos = await FetchCostDtosAsync(providers, asOf, ct).ConfigureAwait(false);
+        var reports = new Dictionary<string, string?>(dtos.Count, StringComparer.Ordinal);
+        foreach (var (provider, report) in dtos)
+        {
+            reports[provider] = report is null ? null
+                : JsonSerializer.Serialize(report, AppJsonSerializerContext.Default.CostDataDto);
+        }
+        return reports;
+    }
+
+    public async Task<IReadOnlyDictionary<string, CostDataDto?>> FetchCostDtosAsync(IReadOnlyList<string> providers,
+        DateTimeOffset asOf, CancellationToken ct = default)
+    {
         var normalized = providers.Select(ProviderConstants.ValidateAndNormalize).Distinct(StringComparer.Ordinal).ToArray();
         ct.ThrowIfCancellationRequested();
         // At most one download a day, off the caller's thread; new prices apply from the next report.
@@ -92,35 +112,61 @@ public sealed class NativeCostService : INativeCostService, IDisposable
         finally { _gate.Release(); }
     }
 
-    private IReadOnlyDictionary<string, string?> Scan(string[] providers, DateTimeOffset asOf, CancellationToken ct)
+    private IReadOnlyDictionary<string, CostDataDto?> Scan(string[] providers, DateTimeOffset asOf, CancellationToken ct)
     {
         var plan = _watcher.TakePlan();
         // A deleted index is rebuilt by a listing now; the changed paths alone would leave it empty.
         if (!plan.FullListing && !_scanner.IndexExists) plan = new(true, []);
-        UpdateIndex(plan, ct);
-
         var pricing = _prices.GetPricing();
         try
         {
-            return ReadReports(providers, pricing, asOf, ct);
+            return UpdateAndBuildReports(plan, providers, pricing, asOf, ct);
         }
         catch (CostIndexDatabase.SqliteException ex) when (ex.InvalidIndex)
         {
             // A damaged index is replaced now (opening it for an update validates it), not at the next listing.
             _logger.LogInformation("Native cost index is damaged; rebuilding it");
             _watcher.NotifyLost();
-            UpdateIndex(_watcher.TakePlan(), ct);
-            return ReadReports(providers, pricing, asOf, ct);
+            return UpdateAndBuildReports(_watcher.TakePlan(), providers, pricing, asOf, ct);
         }
     }
 
-    private void UpdateIndex(CostScanPlan plan, CancellationToken ct)
+    private IReadOnlyDictionary<string, CostDataDto?> UpdateAndBuildReports(
+        CostScanPlan plan,
+        string[] providers,
+        CostPricing pricing,
+        DateTimeOffset asOf,
+        CancellationToken ct)
     {
+        var reportProviders = new List<CostProvider>(2);
+        foreach (var provider in providers)
+        {
+            CostProvider? source = provider switch
+            {
+                "claude" => CostProvider.Claude,
+                "codex" => CostProvider.Codex,
+                _ => null
+            };
+            if (source is { } known && !reportProviders.Contains(known))
+            {
+                reportProviders.Add(known);
+            }
+        }
+
         CostScanResult result;
+        IReadOnlyDictionary<CostProvider, CostDataDto> scanned;
         try
         {
             // Two readers only when the folders are listed in full (the first scan reads every log once).
-            result = _scanner.Update(_roots, plan.FullListing ? 2 : 1, ct, plan.FullListing ? null : plan.ChangedPaths);
+            (result, scanned) = _scanner.UpdateAndReadReports(
+                _roots,
+                plan.FullListing ? 2 : 1,
+                reportProviders,
+                pricing,
+                asOf,
+                HistoryDays,
+                ct,
+                plan.FullListing ? null : plan.ChangedPaths);
             _watcher.Complete(plan, succeeded: true);
             _logger.LogDebug("Native cost update ({Mode}): checked {Checked} files, read {Files} files and {Bytes} bytes",
                 plan.FullListing ? "full listing" : "changed files", result.DiscoveredFiles, result.FilesRead, result.BytesRead);
@@ -142,12 +188,8 @@ public sealed class NativeCostService : INativeCostService, IDisposable
             _watcher.Retry(path);
         }
         _skipRetries = retries;
-    }
 
-    private IReadOnlyDictionary<string, string?> ReadReports(string[] providers, CostPricing pricing,
-        DateTimeOffset asOf, CancellationToken ct)
-    {
-        var reports = new Dictionary<string, string?>(StringComparer.Ordinal);
+        var reports = new Dictionary<string, CostDataDto?>(providers.Length, StringComparer.Ordinal);
         foreach (var provider in providers)
         {
             ct.ThrowIfCancellationRequested();
@@ -159,11 +201,9 @@ public sealed class NativeCostService : INativeCostService, IDisposable
             };
             // The CLI reports Gemini (its "antigravity" provider) as a successful reading without any usage; there
             // are no local Gemini logs to scan, so the native report says the same.
-            var report = source is { } known
-                ? _scanner.ReadReport(known, pricing, asOf, HistoryDays, ct)
+            reports[provider] = source is { } known
+                ? scanned[known]
                 : provider == "gemini" ? EmptyReport("antigravity") : null;
-            reports[provider] = report is null ? null
-                : JsonSerializer.Serialize(report, AppJsonSerializerContext.Default.CostDataDto);
         }
         return reports;
     }

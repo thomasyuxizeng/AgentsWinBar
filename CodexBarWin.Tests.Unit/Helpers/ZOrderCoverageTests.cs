@@ -71,4 +71,11 @@ public class ZOrderCoverageTests
         new ScreenRect(l1, t1, r1, b1).Intersects(new ScreenRect(l2, t2, r2, b2)).Should().Be(expected);
         new ScreenRect(l2, t2, r2, b2).Intersects(new ScreenRect(l1, t1, r1, b1)).Should().Be(expected);
     }
+
+    [TestMethod]
+    [DataRow(true, 0, 1032, 1920, 1080, true)]
+    [DataRow(false, 0, 1032, 1920, 1080, false)]
+    [DataRow(true, 400, 1032, 800, 1080, false)]
+    public void OverlapsVisible_WhenChecked_ReturnsExpected(bool visible, int left, int top, int right, int bottom, bool expected) =>
+        ZOrderCoverage.OverlapsVisible(visible, new ScreenRect(left, top, right, bottom), Strip).Should().Be(expected);
 }

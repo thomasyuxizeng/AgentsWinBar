@@ -435,6 +435,45 @@ public sealed partial class NativeCostScannerTests
         restored.Should().BeTrue();
     }
 
+    [TestMethod]
+    public void UpdateAndReadReports_IncrementalChangedPath_ReadsOnlyChangedFileAndUpdatesReport()
+    {
+        var logPath = Path.Combine(Claude, "a.jsonl");
+        var untouchedPath = Path.Combine(Claude, "b.jsonl");
+        File.WriteAllText(logPath, ClaudeLine("1", 10) + "\n");
+        File.WriteAllText(untouchedPath, ClaudeLine("2", 25) + "\n");
+
+        var scanner = Scanner();
+        IReadOnlyList<CostLogRoot> roots = [new(CostProvider.Claude, Claude), new(CostProvider.Codex, Codex)];
+        var initial = scanner.UpdateAndReadReports(
+            roots, workers: 2, [CostProvider.Claude, CostProvider.Codex], null, Today, 30, CancellationToken.None);
+        initial.ScanResult.FilesRead.Should().Be(2);
+        initial.Reports[CostProvider.Claude].SessionTokens.Should().Be(35);
+
+        File.AppendAllText(logPath, ClaudeLine("3", 40) + "\n");
+        var incremental = scanner.UpdateAndReadReports(
+            roots, workers: 2, [CostProvider.Claude, CostProvider.Codex], null, Today, 30, CancellationToken.None,
+            changedPaths: [logPath]);
+
+        incremental.ScanResult.FilesRead.Should().Be(1);
+        incremental.Reports[CostProvider.Claude].SessionTokens.Should().Be(75);
+    }
+
+    [TestMethod]
+    public void UpdateAndReadReports_EmptyChangedPaths_SkipsFileScanAndReadsIndexedReports()
+    {
+        File.WriteAllText(Path.Combine(Claude, "a.jsonl"), ClaudeLine("1", 15) + "\n");
+        var scanner = Scanner();
+        IReadOnlyList<CostLogRoot> roots = [new(CostProvider.Claude, Claude), new(CostProvider.Codex, Codex)];
+        scanner.Update(roots, workers: 2);
+
+        var result = scanner.UpdateAndReadReports(
+            roots, workers: 2, [CostProvider.Claude], null, Today, 30, CancellationToken.None, changedPaths: []);
+
+        result.ScanResult.FilesRead.Should().Be(0);
+        result.Reports[CostProvider.Claude].SessionTokens.Should().Be(15);
+    }
+
     private static ILogger<NativeCostScanner> OnBatchCommitted(Action action)
     {
         var logger = new Mock<ILogger<NativeCostScanner>>();
@@ -457,6 +496,32 @@ public sealed partial class NativeCostScannerTests
         $$$$"""
         {"type":"assistant","timestamp":"{{{{timestamp}}}}","requestId":"request-{{{{id}}}}","message":{"id":"message-{{{{id}}}}","model":"claude-sonnet-4-6","usage":{"input_tokens":{{{{input}}}}}}}
         """;
+
+    [TestMethod]
+    public void UpdateAndReadReports_AlternatingModelsInSameFile_ResolvesAllModelBreakdowns()
+    {
+        var logPath = Path.Combine(Claude, "alternating.jsonl");
+        var lines = new[]
+        {
+            ClaudeLine("1", 100),
+            ClaudeLine("2", 200).Replace("claude-sonnet-4-6", "claude-haiku-4-5", StringComparison.Ordinal),
+            ClaudeLine("3", 300).Replace("claude-sonnet-4-6", "claude-opus-4-6", StringComparison.Ordinal),
+            ClaudeLine("4", 400),
+            ClaudeLine("5", 500).Replace("claude-sonnet-4-6", "claude-haiku-4-5", StringComparison.Ordinal)
+        };
+        File.WriteAllLines(logPath, lines);
+
+        var scanner = Scanner();
+        var result = scanner.UpdateAndReadReports(
+            [new(CostProvider.Claude, Claude)], workers: 1, [CostProvider.Claude], null, Today, 30, CancellationToken.None);
+
+        var claude = result.Reports[CostProvider.Claude];
+        claude.SessionTokens.Should().Be(1500);
+        var breakdowns = claude.Daily!.Single().ModelBreakdowns!;
+        breakdowns.Should().Contain(m => m.ModelName == "claude-sonnet-4-6" && m.TotalTokens == 500);
+        breakdowns.Should().Contain(m => m.ModelName == "claude-haiku-4-5" && m.TotalTokens == 700);
+        breakdowns.Should().Contain(m => m.ModelName == "claude-opus-4-6" && m.TotalTokens == 300);
+    }
 
     private sealed class DoubleRates : CostPricing
     {

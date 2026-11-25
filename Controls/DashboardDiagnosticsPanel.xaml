@@ -50,7 +50,7 @@
         <Border x:Name="Card0" Style="{StaticResource CardBorder}">
             <StackPanel Spacing="10">
                 <TextBlock Text="SYSTEM" Style="{StaticResource CardTitle}"/>
-                <ItemsControl ItemsSource="{x:Bind SystemFacts, Mode=OneWay}" IsTabStop="False"
+                <ItemsControl x:Name="SystemFactsList" ItemsSource="{x:Bind SystemFacts, Mode=OneWay}" IsTabStop="False"
                               ItemTemplate="{StaticResource FactTemplate}" ItemsPanel="{StaticResource FactsPanel}"/>
             </StackPanel>
         </Border>
@@ -58,7 +58,7 @@
         <Border x:Name="Card1" Style="{StaticResource CardBorder}">
             <StackPanel Spacing="10">
                 <TextBlock Text="SETTINGS IN EFFECT" Style="{StaticResource CardTitle}"/>
-                <ItemsControl ItemsSource="{x:Bind SettingsFacts, Mode=OneWay}" IsTabStop="False"
+                <ItemsControl x:Name="SettingsFactsList" ItemsSource="{x:Bind SettingsFacts, Mode=OneWay}" IsTabStop="False"
                               ItemTemplate="{StaticResource FactTemplate}" ItemsPanel="{StaticResource FactsPanel}"/>
             </StackPanel>
         </Border>
@@ -66,7 +66,7 @@
         <Border x:Name="Card2" Style="{StaticResource CardBorder}">
             <StackPanel Spacing="10">
                 <TextBlock Text="USAGE HISTORY STORE" Style="{StaticResource CardTitle}"/>
-                <ItemsControl ItemsSource="{x:Bind HistoryFacts, Mode=OneWay}" IsTabStop="False"
+                <ItemsControl x:Name="HistoryFactsList" ItemsSource="{x:Bind HistoryFacts, Mode=OneWay}" IsTabStop="False"
                               ItemTemplate="{StaticResource FactTemplate}" ItemsPanel="{StaticResource FactsPanel}"/>
             </StackPanel>
         </Border>
@@ -75,7 +75,7 @@
                 Visibility="{x:Bind views:DashboardFormat.VisCount(CostCacheFacts.Count), Mode=OneWay}">
             <StackPanel Spacing="10">
                 <TextBlock Text="COST SCANS" Style="{StaticResource CardTitle}"/>
-                <ItemsControl ItemsSource="{x:Bind CostCacheFacts, Mode=OneWay}" IsTabStop="False"
+                <ItemsControl x:Name="CostCacheFactsList" ItemsSource="{x:Bind CostCacheFacts, Mode=OneWay}" IsTabStop="False"
                               ItemTemplate="{StaticResource FactTemplate}" ItemsPanel="{StaticResource FactsPanel}"/>
             </StackPanel>
         </Border>
@@ -87,7 +87,7 @@
                 <TextBlock Text="No refreshes recorded yet" Style="{StaticResource Meta}"
                            Visibility="{x:Bind views:DashboardFormat.VisEmpty(Data.RecentRefreshes.Count), Mode=OneWay}"/>
                 <ScrollViewer MaxHeight="300" VerticalScrollBarVisibility="Auto" Padding="0,0,10,0">
-                    <ItemsControl ItemsSource="{x:Bind Data.RecentRefreshes, Mode=OneWay}" IsTabStop="False">
+                    <ItemsControl x:Name="RefreshesList" ItemsSource="{x:Bind Data.RecentRefreshes, Mode=OneWay}" IsTabStop="False">
                         <ItemsControl.ItemsPanel>
                             <ItemsPanelTemplate><StackPanel Spacing="6"/></ItemsPanelTemplate>
                         </ItemsControl.ItemsPanel>
@@ -131,7 +131,7 @@
                 <TextBlock Text="ALERTS THIS SESSION" Style="{StaticResource CardTitle}"/>
                 <TextBlock Text="None raised yet" Style="{StaticResource Meta}"
                            Visibility="{x:Bind views:DashboardFormat.VisEmpty(Data.RecentAlerts.Count), Mode=OneWay}"/>
-                <ItemsControl ItemsSource="{x:Bind Data.RecentAlerts, Mode=OneWay}" IsTabStop="False">
+                <ItemsControl x:Name="AlertsList" ItemsSource="{x:Bind Data.RecentAlerts, Mode=OneWay}" IsTabStop="False">
                     <ItemsControl.ItemsPanel>
                         <ItemsPanelTemplate><StackPanel Spacing="8"/></ItemsPanelTemplate>
                     </ItemsControl.ItemsPanel>

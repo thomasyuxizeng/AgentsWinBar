@@ -63,7 +63,7 @@
                               ToolTipService.ToolTip="Full screen (F11)" Padding="10,6">
                     <FontIcon FontFamily="Segoe Fluent Icons" Glyph="&#xE740;" FontSize="14"/>
                 </ToggleButton>
-                <Button Click="OnSettingsClicked" AutomationProperties.Name="Settings" ToolTipService.ToolTip="Settings"
+                <Button x:Name="SettingsButton" Click="OnSettingsClicked" AutomationProperties.Name="Settings" ToolTipService.ToolTip="Settings"
                         Padding="10,6">
                     <FontIcon FontFamily="Segoe Fluent Icons" Glyph="&#xE713;" FontSize="14"/>
                 </Button>
@@ -98,7 +98,7 @@
                                 <ItemsRepeater.ItemTemplate>
                                     <DataTemplate x:DataType="helpers:AttentionItem">
                                         <HyperlinkButton Padding="0,2" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
-                                                         Click="OnAttentionClicked" Tag="{x:Bind ProviderId}"
+                                                         Tag="{x:Bind ProviderId}"
                                                          AutomationProperties.Name="{x:Bind views:DashboardFormat.AttentionText(Label, Detail)}"
                                                          ToolTipService.ToolTip="{x:Bind views:DashboardFormat.AttentionText(Label, Detail)}">
                                             <!-- A Grid, not a horizontal StackPanel: the StackPanel measures its text with unlimited

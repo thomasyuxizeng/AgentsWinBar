@@ -59,4 +59,17 @@ public class ActivityLogTests
         var log = new ActivityLog(); log.RecordAlert(null!); log.RecordRefresh(null!);
         log.RecentAlerts.Should().BeEmpty(); log.RecentRefreshes.Should().BeEmpty();
     }
+
+    [TestMethod]
+    public void RecordRefresh_MonotonicAndEqualTimestamps_KeepsNewestFirstOrder()
+    {
+        var log = new ActivityLog();
+        log.RecordRefresh(new() { ProviderId = "claude", TimestampUtc = Now });
+        log.RecordRefresh(new() { ProviderId = "codex", TimestampUtc = Now });
+        log.RecordRefresh(new() { ProviderId = "gemini", TimestampUtc = Now.AddSeconds(1) });
+        log.RecordRefresh(new() { ProviderId = "antigravity", TimestampUtc = Now.AddSeconds(-1) });
+
+        log.RecentRefreshes.Select(e => e.ProviderId)
+            .Should().Equal("gemini", "codex", "claude", "antigravity");
+    }
 }

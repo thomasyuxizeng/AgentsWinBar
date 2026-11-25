@@ -107,4 +107,31 @@ public class ResetRefreshSchedulerTests
         var reset = Now.AddSeconds(20);
         ResetRefreshScheduler.GetSchedule([reset.ToLocalTime()], Now, Normal).TargetResetAtUtc.Should().Be(reset);
     }
+
+    [TestMethod]
+    public void PruneExpiredAttempts_MixedEntries_RemovesOnlyFullyExpiredEntries()
+    {
+        var fullyExpired = Now.AddMinutes(-61);
+        var oldResetRecentTrigger = Now.AddMinutes(-90);
+        var recentReset = Now.AddMinutes(-30);
+        var attempts = new Dictionary<DateTime, ResetRefreshAttempt>
+        {
+            [fullyExpired] = new(Now.AddMinutes(-61)),
+            [oldResetRecentTrigger] = new(Now.AddMinutes(-30)),
+            [recentReset] = new(Now.AddMinutes(-61))
+        };
+
+        var removed = ResetRefreshScheduler.PruneExpiredAttempts(attempts, Now);
+
+        removed.Should().Be(1);
+        attempts.Should().ContainKeys(oldResetRecentTrigger, recentReset);
+        attempts.Should().NotContainKey(fullyExpired);
+    }
+
+    [TestMethod]
+    public void PruneExpiredAttempts_EmptyDictionary_ReturnsZero()
+    {
+        var attempts = new Dictionary<DateTime, ResetRefreshAttempt>();
+        ResetRefreshScheduler.PruneExpiredAttempts(attempts, Now).Should().Be(0);
+    }
 }

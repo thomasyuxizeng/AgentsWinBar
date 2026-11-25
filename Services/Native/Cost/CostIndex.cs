@@ -68,6 +68,7 @@ internal sealed class CostIndex(CostIndexDatabase database) : IDisposable
     private CostIndexDatabase.Statement? _save;
     private CostIndexDatabase.Statement? _add;
     private CostIndexDatabase.Statement? _remove;
+    private CostIndexDatabase.Statement? _readFile;
 
     internal static long ReadVersion(CostIndexDatabase database)
     {
@@ -139,20 +140,56 @@ internal sealed class CostIndex(CostIndexDatabase database) : IDisposable
         var files = new Dictionary<(CostProvider, CostKey), IndexedFile>();
         while (row.Step())
         {
-            var total = new CostTokens(row.Number(13), row.Number(14), row.Number(15), row.Number(16), 0, row.Number(17));
-            var model = row.Text(10);
-            files.Add(((CostProvider)row.Number(0), new(row.Number(1), row.Number(2))),
-                new(row.Number(3), row.Number(4), row.Number(5), row.Number(6), row.Number(7),
-                    new(row.Number(8), row.Number(9)), new CodexCursor
-                    {
-                        Model = model.Length == 0 ? null : model,
-                        Tier = (int)row.Number(11),
-                        Total = row.Number(12) != 0 ? total : null,
-                        HasRequest = row.Number(18) != 0,
-                        Thread = new(row.Number(19), row.Number(20))
-                    }));
+            files.Add(((CostProvider)row.Number(0), new(row.Number(1), row.Number(2))), ReadIndexedFile(row, 3));
         }
         return files;
+    }
+
+    internal IndexedFile? ReadFile(CostProvider provider, CostKey path)
+    {
+        var row = _readFile ??= database.Prepare("""
+            SELECT length,modified,created,offset,generation,volume,file_id,model,tier,has_total,
+                   input,output,read,written,reasoning,has_request,thread1,thread2
+            FROM files WHERE provider=? AND path1=? AND path2=?
+            """);
+        row.Bind(1, (int)provider);
+        row.Bind(2, path.First);
+        row.Bind(3, path.Second);
+        try
+        {
+            return row.Step() ? ReadIndexedFile(row, 0) : null;
+        }
+        finally
+        {
+            row.Reset();
+        }
+    }
+
+    private static IndexedFile ReadIndexedFile(CostIndexDatabase.Statement row, int offset)
+    {
+        var total = new CostTokens(
+            row.Number(offset + 10),
+            row.Number(offset + 11),
+            row.Number(offset + 12),
+            row.Number(offset + 13),
+            0,
+            row.Number(offset + 14));
+        var model = row.Text(offset + 7);
+        return new(
+            row.Number(offset),
+            row.Number(offset + 1),
+            row.Number(offset + 2),
+            row.Number(offset + 3),
+            row.Number(offset + 4),
+            new(row.Number(offset + 5), row.Number(offset + 6)),
+            new CodexCursor
+            {
+                Model = model.Length == 0 ? null : model,
+                Tier = (int)row.Number(offset + 8),
+                Total = row.Number(offset + 9) != 0 ? total : null,
+                HasRequest = row.Number(offset + 15) != 0,
+                Thread = new(row.Number(offset + 16), row.Number(offset + 17))
+            });
     }
 
     internal void Save(CostProvider provider, CostKey path, IndexedFile file)
@@ -253,6 +290,7 @@ internal sealed class CostIndex(CostIndexDatabase database) : IDisposable
         _save?.Dispose();
         _add?.Dispose();
         _remove?.Dispose();
-        _save = _add = _remove = null;
+        _readFile?.Dispose();
+        _save = _add = _remove = _readFile = null;
     }
 }

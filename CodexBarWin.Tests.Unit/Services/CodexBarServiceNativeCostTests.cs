@@ -256,6 +256,32 @@ public sealed class CodexBarServiceNativeCostTests
         native.Calls.Should().BeEmpty();
     }
 
+    [TestMethod]
+    public async Task GetCostAndCostsAsync_WithTypedCostService_CallsFetchCostDtosAsyncWithoutJsonRoundtrip()
+    {
+        var typed = new Mock<INativeTypedCostService>(MockBehavior.Strict);
+        var claudeDto = new CostDataDto
+        {
+            Provider = "claude", CurrencyCode = "USD", Source = "local", Provenance = "native-jsonl",
+            SessionTokens = 1234, SessionCostUSD = 0.75m, Last30DaysTokens = 2000, Last30DaysCostUSD = 1.5m
+        };
+        typed.Setup(n => n.FetchCostDtosAsync(It.IsAny<IReadOnlyList<string>>(), Now, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Dictionary<string, CostDataDto?>(StringComparer.Ordinal) { ["claude"] = claudeDto });
+        var service = Create(NoWsl(), typed.Object);
+
+        var single = await service.GetCostAsync("claude");
+        var streamed = new List<CostData?>();
+        await foreach (var (_, cost) in service.GetCostsAsync(["claude"], forceRefresh: true))
+        {
+            streamed.Add(cost);
+        }
+
+        single!.TodayTokens.Should().Be(1234);
+        streamed.Should().ContainSingle().Which!.TodayCostUSD.Should().Be(0.75m);
+        typed.Verify(n => n.FetchCostDtosAsync(It.IsAny<IReadOnlyList<string>>(), Now, It.IsAny<CancellationToken>()), Times.Exactly(2));
+        typed.VerifyNoOtherCalls();
+    }
+
     private sealed class FakeNativeCost(Func<string, string?> report) : INativeCostService
     {
         public List<string[]> Calls { get; } = [];

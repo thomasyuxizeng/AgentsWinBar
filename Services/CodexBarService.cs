@@ -242,6 +242,19 @@ public class CodexBarService : ICodexBarService
                 completed[index] = true;
                 var costsEnabled = CostsEnabled;
                 var data = costsEnabled ? InterpretCostResult(due[index], result, now, ledgerScans) : null;
+                FinalizeCostCompletion(index, data, result.ExitCode, result.Error, costsEnabled);
+            }
+            void CompleteDto(int index, CostDataDto? dto, WslResult failure)
+            {
+                ct.ThrowIfCancellationRequested();
+                if (completed[index]) return;
+                completed[index] = true;
+                var costsEnabled = CostsEnabled;
+                var data = costsEnabled && dto != null ? InterpretCostDto(due[index], dto, now, ledgerScans) : null;
+                FinalizeCostCompletion(index, data, failure.ExitCode, failure.Error, costsEnabled);
+            }
+            void FinalizeCostCompletion(int index, CostData? data, int exitCode, string error, bool costsEnabled)
+            {
                 if (costsEnabled)
                 {
                     lock (_costCache)
@@ -249,8 +262,8 @@ public class CodexBarService : ICodexBarService
                         var provider = due[index];
                         if (data == null)
                         {
-                            var timedOut = result.ExitCode == 124 ||
-                                result.Error.Contains("timed out", StringComparison.OrdinalIgnoreCase);
+                            var timedOut = exitCode == 124 ||
+                                error.Contains("timed out", StringComparison.OrdinalIgnoreCase);
                             _costTimeouts[provider] = timedOut ? Math.Min(_costTimeouts.GetValueOrDefault(provider) + 1, 3) : 0;
                             if (timedOut) _costTimedOut.Add(provider);
                             else _costTimedOut.Remove(provider);
@@ -296,15 +309,23 @@ public class CodexBarService : ICodexBarService
             }
             if (nativeCost)
             {
-                // One index update serves every due provider. Each report then takes the CLI's path through
-                // InterpretCostResult, so the ledger, the cache and last-good handling behave as with WSL.
+                // One index update serves every due provider. Direct typed DTO pipeline avoids JSON serialize/deserialize;
+                // non-typed test doubles keep using FetchCostJsonAsync through InterpretCostResult.
                 using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
                 deadline.CancelAfter(timeouts.Max());
+                IReadOnlyDictionary<string, CostDataDto?>? dtoReports = null;
                 IReadOnlyDictionary<string, string?>? reports = null;
                 var failure = new WslResult();
                 try
                 {
-                    reports = await _nativeCost!.FetchCostJsonAsync(due, now, deadline.Token);
+                    if (_nativeCost is INativeTypedCostService typedCost)
+                    {
+                        dtoReports = await typedCost.FetchCostDtosAsync(due, now, deadline.Token);
+                    }
+                    else
+                    {
+                        reports = await _nativeCost!.FetchCostJsonAsync(due, now, deadline.Token);
+                    }
                     ct.ThrowIfCancellationRequested();
                 }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
@@ -318,9 +339,19 @@ public class CodexBarService : ICodexBarService
                     _logger.LogDebug(ex, "Native cost scan unavailable");
                 }
                 for (var i = 0; i < due.Count; i++)
-                    Complete(i, reports != null && reports.TryGetValue(due[i], out var json) && !string.IsNullOrWhiteSpace(json)
-                        ? new WslResult { Success = true, Output = json }
-                        : failure);
+                {
+                    if (dtoReports != null)
+                    {
+                        dtoReports.TryGetValue(due[i], out var dto);
+                        CompleteDto(i, dto, failure);
+                    }
+                    else
+                    {
+                        Complete(i, reports != null && reports.TryGetValue(due[i], out var json) && !string.IsNullOrWhiteSpace(json)
+                            ? new WslResult { Success = true, Output = json }
+                            : failure);
+                    }
+                }
                 return;
             }
             if (!useBatch)
@@ -476,6 +507,19 @@ public class CodexBarService : ICodexBarService
             var dto = json.StartsWith('[')
                 ? JsonSerializer.Deserialize(json, AppJsonSerializerContext.Default.ListCostDataDto)?.FirstOrDefault()
                 : JsonSerializer.Deserialize(json, AppJsonSerializerContext.Default.CostDataDto);
+            return InterpretCostDto(provider, dto, attemptedAt, ledgerScans);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Cost scan unavailable for {Provider}", provider);
+            return null;
+        }
+    }
+
+    private CostData? InterpretCostDto(string provider, CostDataDto? dto, DateTimeOffset attemptedAt, List<CostData>? ledgerScans = null)
+    {
+        try
+        {
             if (dto == null || !dto.HasReading || !string.Equals(dto.Provider, provider == "gemini" ? "antigravity" : provider,
                 StringComparison.OrdinalIgnoreCase)) return null;
             var data = dto.ToCostData(provider, attemptedAt.UtcDateTime);
@@ -523,6 +567,13 @@ public class CodexBarService : ICodexBarService
             WslResult result;
             if (UsesNativeUsage(normalizedProvider))
             {
+                if (_nativeUsage is INativeTypedUsageService typedUsage)
+                {
+                    var dto = await typedUsage.FetchUsageDtoAsync(normalizedProvider, ct);
+                    prefetchedStatus = await AwaitPrefetchedStatusAsync(normalizedProvider, prefetchTasks, ct);
+                    ct.ThrowIfCancellationRequested();
+                    return InterpretNativeUsageDto(normalizedProvider, dto, prefetchedStatus, generation);
+                }
                 result = await FetchNativeResultAsync(normalizedProvider, ct);
             }
             else
@@ -653,6 +704,7 @@ public class CodexBarService : ICodexBarService
     private async Task<UsageData> FetchNativeProviderAsync(string provider, Dictionary<string, StatusPrefetch> prefetchTasks,
         long generation, CancellationToken ct)
     {
+        UsageDataDto? typedDto = null;
         WslResult? result = null;
         string? error = null;
         using (var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct))
@@ -660,7 +712,14 @@ public class CodexBarService : ICodexBarService
             deadline.CancelAfter(UsageTimeout(provider));
             try
             {
-                result = await FetchNativeResultAsync(provider, deadline.Token);
+                if (_nativeUsage is INativeTypedUsageService typedUsage)
+                {
+                    typedDto = await typedUsage.FetchUsageDtoAsync(ProviderConstants.ValidateAndNormalize(provider), deadline.Token);
+                }
+                else
+                {
+                    result = await FetchNativeResultAsync(provider, deadline.Token);
+                }
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
             catch (OperationCanceledException) { error = "Request timed out"; }
@@ -672,9 +731,33 @@ public class CodexBarService : ICodexBarService
         }
         var status = await AwaitPrefetchedStatusAsync(provider, prefetchTasks, ct);
         ct.ThrowIfCancellationRequested();
-        return result != null
-            ? InterpretProviderResult(provider, result, status, generation)
-            : ProviderError(provider, error!, status, generation);
+        return typedDto != null
+            ? InterpretNativeUsageDto(provider, typedDto, status, generation)
+            : result != null
+                ? InterpretProviderResult(provider, result, status, generation)
+                : ProviderError(provider, error!, status, generation);
+    }
+
+    private UsageData InterpretNativeUsageDto(string provider, UsageDataDto? dto, ProviderStatus? prefetchedStatus, long generation)
+    {
+        try
+        {
+            if (dto != null)
+            {
+                var data = dto.ToUsageData(_timeProvider.GetUtcNow().UtcDateTime);
+                if (string.Equals(data.Provider, provider, StringComparison.OrdinalIgnoreCase))
+                {
+                    data = AttachProviderStatus(data, prefetchedStatus);
+                    return ResolveUsage(data with { Provider = provider }, generation, prefetchedStatus != null);
+                }
+            }
+            return ProviderError(provider, "No data available", prefetchedStatus, generation);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to interpret {Provider}", provider);
+            return ProviderError(provider, "Unexpected error occurred", prefetchedStatus, generation);
+        }
     }
 
     private async Task<IReadOnlyList<UsageData>> FetchAllProvidersAsync(IReadOnlyList<string> providers,

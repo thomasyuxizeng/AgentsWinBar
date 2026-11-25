@@ -45,6 +45,7 @@ public sealed partial class SettingsPage : Page
     public event EventHandler? CancelRequested;
 
     private MainViewModel? _mainViewModel;
+    private bool _disposed;
 
     public SettingsPage()
     {
@@ -53,8 +54,28 @@ public sealed partial class SettingsPage : Page
         Unloaded += OnUnloaded;
     }
 
+    /// <summary>Detaches singleton ViewModel subscriptions and clears item sources when the Settings window closes.</summary>
+    public void Cleanup()
+    {
+        if (_disposed) return;
+        _disposed = true;
+        Loaded -= OnLoaded;
+        Unloaded -= OnUnloaded;
+        if (_mainViewModel != null)
+        {
+            _mainViewModel.Providers.CollectionChanged -= OnProvidersChanged;
+            _mainViewModel = null;
+        }
+        ProvidersItemsControl.ItemsSource = null;
+        SignInsItemsControl.ItemsSource = null;
+        SaveErrorBar.IsOpen = false;
+        _viewModel = null;
+        DataContext = null;
+    }
+
     private void OnLoaded(object sender, RoutedEventArgs e)
     {
+        if (_disposed) return;
         try
         {
             _mainViewModel ??= App.Services.GetRequiredService<MainViewModel>();
@@ -73,7 +94,10 @@ public sealed partial class SettingsPage : Page
         if (_mainViewModel != null) _mainViewModel.Providers.CollectionChanged -= OnProvidersChanged;
     }
 
-    private void OnProvidersChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e) => UpdateSignIns();
+    private void OnProvidersChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
+    {
+        if (!_disposed) UpdateSignIns();
+    }
 
     /// <summary>Each enabled provider (saved settings, in display order) with its sign-in state from the last refresh.</summary>
     private void UpdateSignIns()

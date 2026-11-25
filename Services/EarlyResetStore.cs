@@ -75,30 +75,27 @@ public sealed class EarlyResetStore : IEarlyResetStore
                 return;
             }
 
-            string json;
+            EarlyResetStoreFile? file = null;
             try
             {
-                json = await File.ReadAllTextAsync(FilePath, ct).ConfigureAwait(false);
+                await using var stream = new FileStream(FilePath, FileMode.Open, FileAccess.Read, FileShare.Read,
+                    bufferSize: 16 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
+                file = await JsonSerializer.DeserializeAsync(stream, AppJsonSerializerContext.Default.EarlyResetStoreFile, ct)
+                    .ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
                 throw;
             }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Failed to read early resets file");
-                return;
-            }
-
-            EarlyResetStoreFile? file = null;
-            try
-            {
-                file = JsonSerializer.Deserialize(json, AppJsonSerializerContext.Default.EarlyResetStoreFile);
-            }
-            catch (Exception ex)
+            catch (JsonException ex)
             {
                 _logger.LogWarning(ex, "Early resets file is corrupt, renaming aside");
                 RenameCorruptFile();
+                return;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to read early resets file");
                 return;
             }
 
@@ -206,7 +203,6 @@ public sealed class EarlyResetStore : IEarlyResetStore
                 };
             }
 
-            var json = JsonSerializer.Serialize(file, AppJsonSerializerContext.Default.EarlyResetStoreFile);
             var dir = Path.GetDirectoryName(Path.GetFullPath(FilePath));
             if (!string.IsNullOrEmpty(dir))
             {
@@ -214,7 +210,13 @@ public sealed class EarlyResetStore : IEarlyResetStore
             }
 
             var tempPath = FilePath + ".tmp";
-            await File.WriteAllTextAsync(tempPath, json, ct).ConfigureAwait(false);
+            await using (var stream = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None,
+                bufferSize: 16 * 1024, FileOptions.Asynchronous))
+            {
+                await JsonSerializer.SerializeAsync(stream, file, AppJsonSerializerContext.Default.EarlyResetStoreFile, ct)
+                    .ConfigureAwait(false);
+                await stream.FlushAsync(ct).ConfigureAwait(false);
+            }
             File.Move(tempPath, FilePath, overwrite: true);
 
             _logger.LogDebug("Saved early resets to {Path}", FilePath);

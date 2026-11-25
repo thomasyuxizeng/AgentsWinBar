@@ -25,6 +25,7 @@ namespace CodexBarWin.Models;
 [JsonSerializable(typeof(GeminiSpendLogRowDto))]
 [JsonSerializable(typeof(ResetAnimationMode))]
 [JsonSerializable(typeof(CacheData))]
+[JsonSerializable(typeof(UsageData))]
 [JsonSerializable(typeof(UsageDataDto))]
 [JsonSerializable(typeof(List<UsageDataDto>))]
 [JsonSerializable(typeof(ProviderStatusDto))]

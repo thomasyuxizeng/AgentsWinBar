@@ -60,14 +60,29 @@ public sealed partial class NativeCostScanner
     /// which re-buckets the stored days).
     /// </summary>
     public CostScanResult Update(IReadOnlyList<CostLogRoot> roots, int workers = 1,
-        CancellationToken cancellationToken = default, IReadOnlyCollection<string>? changedPaths = null)
+        CancellationToken cancellationToken = default, IReadOnlyCollection<string>? changedPaths = null) =>
+        UpdateAndReadReports(roots, workers, null, null, null, 30, cancellationToken, changedPaths).ScanResult;
+
+    internal (CostScanResult ScanResult, IReadOnlyDictionary<CostProvider, CostDataDto> Reports) UpdateAndReadReports(
+        IReadOnlyList<CostLogRoot> roots,
+        int workers,
+        IReadOnlyList<CostProvider>? reportProviders,
+        CostPricing? pricing,
+        DateTimeOffset? asOf,
+        int historyDays,
+        CancellationToken cancellationToken,
+        IReadOnlyCollection<string>? changedPaths = null)
     {
         var zone = _zone ?? SystemZone();
         if (changedPaths is not null)
         {
             changedPaths = RelevantPaths(roots, changedPaths);
             var applied = _appliedZoneId;
-            if (changedPaths.Count == 0 && (applied is null || applied == zone.Id)) return new(0, 0, 0, 0, 0, 0, 0);
+            if (changedPaths.Count == 0 && (applied is null || applied == zone.Id))
+            {
+                var skippedReports = ReadReportsFromDisk(reportProviders, pricing, asOf, historyDays, zone, cancellationToken);
+                return (new(0, 0, 0, 0, 0, 0, 0), skippedReports);
+            }
         }
         ArgumentOutOfRangeException.ThrowIfLessThan(workers, 1);
         cancellationToken.ThrowIfCancellationRequested();
@@ -86,9 +101,9 @@ public sealed partial class NativeCostScanner
 
         try
         {
-            var result = UpdateIndex(roots, workers, zone, changedPaths, cancellationToken);
+            var outcome = UpdateIndexCore(roots, workers, zone, changedPaths, reportProviders, pricing, asOf, historyDays, cancellationToken);
             _appliedZoneId = zone.Id;
-            return result;
+            return outcome;
         }
         finally
         {
@@ -96,12 +111,9 @@ public sealed partial class NativeCostScanner
         }
     }
 
-    /// <summary>
-    /// The changed paths worth opening the index for: an existing log, or an existing directory, under one of the
-    /// roots. Paths are made absolute first, so "root\..\elsewhere.jsonl" is not taken for a file under the root.
-    /// </summary>
     private static List<string> RelevantPaths(IReadOnlyList<CostLogRoot> roots, IReadOnlyCollection<string> changedPaths)
     {
+        if (changedPaths.Count == 0) return [];
         var prefixes = roots.Select(root => (root.Provider,
             Prefix: Path.TrimEndingDirectorySeparator(Path.GetFullPath(root.Directory)) + Path.DirectorySeparatorChar)).ToArray();
         var relevant = new List<string>();
@@ -123,14 +135,21 @@ public sealed partial class NativeCostScanner
         return relevant;
     }
 
-    private CostScanResult UpdateIndex(IReadOnlyList<CostLogRoot> roots, int workers, TimeZoneInfo zone,
-        IReadOnlyCollection<string>? changedPaths, CancellationToken cancellationToken)
+    private (CostScanResult ScanResult, IReadOnlyDictionary<CostProvider, CostDataDto> Reports) UpdateIndexCore(
+        IReadOnlyList<CostLogRoot> roots,
+        int workers,
+        TimeZoneInfo zone,
+        IReadOnlyCollection<string>? changedPaths,
+        IReadOnlyList<CostProvider>? reportProviders,
+        CostPricing? pricing,
+        DateTimeOffset? asOf,
+        int historyDays,
+        CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         Directory.CreateDirectory(Path.GetDirectoryName(_indexPath)!);
         using var database = OpenForUpdate(cancellationToken);
         using var index = new CostIndex(database);
-        var previous = index.ReadFiles();
         database.Execute("BEGIN IMMEDIATE");
         index.SetZone(zone, cancellationToken);
         database.Execute("COMMIT");
@@ -180,14 +199,18 @@ public sealed partial class NativeCostScanner
             }
         }
 
-        var inputs = new List<Input>();
+        // Incremental changedPaths updates only query the affected keys instead of loading all historical files rows.
+        Dictionary<(CostProvider, CostKey), IndexedFile>? previous = changedPaths is null ? index.ReadFiles() : null;
+        var inputs = new List<Input>(changedPaths is null ? candidates.Count : Math.Min(candidates.Count, 16));
         var files = 0;
         long size = 0;
         foreach (var ((provider, key), entry) in candidates)
         {
             files++;
             size += entry.Length;
-            previous.TryGetValue((provider, key), out var state);
+            var state = previous is not null
+                ? (previous.TryGetValue((provider, key), out var found) ? found : null)
+                : index.ReadFile(provider, key);
             if (state is null || state.Length != entry.Length || state.WriteTime != entry.WriteTime ||
                 state.Created != entry.Created)
                 inputs.Add(new(provider, key, entry, state));
@@ -232,7 +255,9 @@ public sealed partial class NativeCostScanner
         List<string>? skippedPaths = null;
         foreach (var input in inputs)
             if (input.Skipped) (skippedPaths ??= []).Add(input.Entry.Path);
-        return new(opened, bytes, malformed, oversized, unavailable, files, size, skippedPaths);
+        var scanResult = new CostScanResult(opened, bytes, malformed, oversized, unavailable, files, size, skippedPaths);
+        var reports = ReadReportsFromIndex(index, reportProviders, pricing, asOf, historyDays, zone, cancellationToken);
+        return (scanResult, reports);
 
         void CommitBatch()
         {
@@ -394,29 +419,113 @@ public sealed partial class NativeCostScanner
         int historyDays = 30, CancellationToken cancellationToken = default)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(historyDays);
+        pricing ??= new CostPricing();
+        var zone = _zone ?? SystemZone();
+        var today = CostIndex.LocalDay(asOf ?? DateTimeOffset.UtcNow, zone);
+        var first = Math.Max(0, today.DayNumber - historyDays + 1);
+        var rows = ReadDays(provider, first, today.DayNumber, cancellationToken);
+        return BuildReport(provider, rows, pricing, today, historyDays);
+    }
+
+    private IReadOnlyDictionary<CostProvider, CostDataDto> ReadReportsFromDisk(
+        IReadOnlyList<CostProvider>? reportProviders,
+        CostPricing? pricing,
+        DateTimeOffset? asOf,
+        int historyDays,
+        TimeZoneInfo zone,
+        CancellationToken cancellationToken)
+    {
+        if (reportProviders is null || reportProviders.Count == 0)
+            return new Dictionary<CostProvider, CostDataDto>();
+
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(historyDays);
+        pricing ??= new CostPricing();
+        var today = CostIndex.LocalDay(asOf ?? DateTimeOffset.UtcNow, zone);
+        var first = Math.Max(0, today.DayNumber - historyDays + 1);
+        var reports = new Dictionary<CostProvider, CostDataDto>(reportProviders.Count);
+
+        if (File.Exists(_indexPath))
+        {
+            using var database = new CostIndexDatabase(_indexPath, readOnly: true);
+            database.Execute("PRAGMA busy_timeout=5000; BEGIN");
+            if (CostIndex.ReadVersion(database) == CostIndex.SchemaVersion)
+            {
+                using var index = new CostIndex(database);
+                foreach (var provider in reportProviders)
+                {
+                    if (reports.ContainsKey(provider)) continue;
+                    var rows = index.ReadDays(provider, first, today.DayNumber, cancellationToken);
+                    reports[provider] = BuildReport(provider, rows, pricing, today, historyDays);
+                }
+                return reports;
+            }
+        }
+
+        foreach (var provider in reportProviders)
+        {
+            if (!reports.ContainsKey(provider))
+                reports[provider] = BuildReport(provider, [], pricing, today, historyDays);
+        }
+        return reports;
+    }
+
+    private static IReadOnlyDictionary<CostProvider, CostDataDto> ReadReportsFromIndex(
+        CostIndex index,
+        IReadOnlyList<CostProvider>? reportProviders,
+        CostPricing? pricing,
+        DateTimeOffset? asOf,
+        int historyDays,
+        TimeZoneInfo zone,
+        CancellationToken cancellationToken)
+    {
+        if (reportProviders is null || reportProviders.Count == 0)
+            return new Dictionary<CostProvider, CostDataDto>();
+
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(historyDays);
+        pricing ??= new CostPricing();
+        var today = CostIndex.LocalDay(asOf ?? DateTimeOffset.UtcNow, zone);
+        var first = Math.Max(0, today.DayNumber - historyDays + 1);
+        var reports = new Dictionary<CostProvider, CostDataDto>(reportProviders.Count);
+        foreach (var provider in reportProviders)
+        {
+            if (reports.ContainsKey(provider)) continue;
+            var rows = index.ReadDays(provider, first, today.DayNumber, cancellationToken);
+            reports[provider] = BuildReport(provider, rows, pricing, today, historyDays);
+        }
+        return reports;
+    }
+
+    private static CostDataDto BuildReport(CostProvider provider, List<IndexedDay> rows, CostPricing pricing,
+        DateOnly today, int historyDays)
+    {
         var providerName = provider switch
         {
             CostProvider.Claude => "claude",
             CostProvider.Codex => "codex",
             _ => throw new ArgumentOutOfRangeException(nameof(provider))
         };
-        pricing ??= new CostPricing();
-        var today = CostIndex.LocalDay(asOf ?? DateTimeOffset.UtcNow, _zone ?? SystemZone());
-        var first = Math.Max(0, today.DayNumber - historyDays + 1);
-        var rows = ReadDays(provider, first, today.DayNumber, cancellationToken);
         long priced = 0, unpriced = 0, unpricedTokens = 0;
         var days = new List<DailyCost>();
-        foreach (var group in rows.GroupBy(row => row.Day))
+        // CostIndex.ReadDays returns rows ordered by (Day, Model, Band), so a single pass needs no GroupBy allocations.
+        var index = 0;
+        while (index < rows.Count)
         {
+            var currentDay = rows[index].Day;
             var day = new CostTokens();
             long dayUnpricedTokens = 0;
+            decimal dayTotalCost = 0;
             var breakdown = new List<ModelCost>();
-            foreach (var modelGroup in group.GroupBy(row => row.Model))
+
+            while (index < rows.Count && rows[index].Day == currentDay)
             {
+                var currentModel = rows[index].Model;
                 decimal? cost = null;
                 var modelTokens = new CostTokens();
-                foreach (var row in modelGroup)
+
+                while (index < rows.Count && rows[index].Day == currentDay &&
+                       string.Equals(rows[index].Model, currentModel, StringComparison.Ordinal))
                 {
+                    var row = rows[index++];
                     var price = pricing.PriceTokens(provider, row.Model, (row.Band & 1) != 0, (row.Band & 2) != 0,
                         (row.Band & 4) != 0, row.Band >> 3, row.Tokens);
                     if (price is { } known)
@@ -432,17 +541,32 @@ public sealed partial class NativeCostScanner
                     }
                     modelTokens = modelTokens.Add(row.Tokens);
                 }
+
                 day = day.Add(modelTokens);
-                breakdown.Add(new ModelCost { ModelName = modelGroup.Key, Cost = cost, TotalTokens = modelTokens.Total });
+                dayTotalCost += cost ?? 0;
+                breakdown.Add(new ModelCost { ModelName = currentModel, Cost = cost, TotalTokens = modelTokens.Total });
             }
+
             days.Add(new DailyCost
             {
-                Date = DateOnly.FromDayNumber(group.Key), TotalCost = breakdown.Sum(model => model.Cost ?? 0),
+                Date = DateOnly.FromDayNumber(currentDay), TotalCost = dayTotalCost,
                 TotalTokens = day.Total, InputTokens = provider == CostProvider.Codex ? day.Input + day.Read + day.Write : day.Input,
                 OutputTokens = day.Output, CacheReadTokens = day.Read, CacheCreationTokens = day.Write,
                 ReasoningTokens = day.Reasoning, UnpricedTokens = dayUnpricedTokens, ModelBreakdowns = breakdown
             });
             unpricedTokens += dayUnpricedTokens;
+        }
+
+        decimal last30Cost = 0;
+        long last30Tokens = 0;
+        var last30Start = today.DayNumber - 29;
+        for (var i = 0; i < days.Count; i++)
+        {
+            if (days[i].Date.DayNumber >= last30Start)
+            {
+                last30Cost += days[i].TotalCost;
+                last30Tokens += days[i].TotalTokens;
+            }
         }
 
         return new CostDataDto
@@ -452,8 +576,8 @@ public sealed partial class NativeCostScanner
             Coverage = new() { Priced = (int)Math.Min(int.MaxValue, priced), Unpriced = (int)Math.Min(int.MaxValue, unpriced) },
             SessionCostUSD = days.Count > 0 && days[^1].Date == today ? days[^1].TotalCost : 0,
             SessionTokens = days.Count > 0 && days[^1].Date == today ? days[^1].TotalTokens : 0,
-            Last30DaysCostUSD = days.Where(d => d.Date.DayNumber >= today.DayNumber - 29).Sum(d => d.TotalCost),
-            Last30DaysTokens = days.Where(d => d.Date.DayNumber >= today.DayNumber - 29).Sum(d => d.TotalTokens),
+            Last30DaysCostUSD = last30Cost,
+            Last30DaysTokens = last30Tokens,
             UnpricedTokens = unpricedTokens,
             Daily = days
         };

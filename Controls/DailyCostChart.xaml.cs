@@ -13,6 +13,9 @@ public sealed partial class DailyCostChart : UserControl
 {
     private IReadOnlyList<DailyCost> _series = [];
     private string _currency = "USD";
+    private bool _disposed;
+    private SolidColorBrush? _baselineBrush;
+    private SolidColorBrush? _barBrush;
 
     public static readonly DependencyProperty SeriesProperty = DependencyProperty.Register(nameof(Series),
         typeof(IReadOnlyList<DailyCost>), typeof(DailyCostChart), new PropertyMetadata(null, OnSeriesChanged));
@@ -28,14 +31,33 @@ public sealed partial class DailyCostChart : UserControl
 
     public DailyCostChart() => InitializeComponent();
 
+    /// <summary>Detaches handlers, clears plotted bars and tooltips, and releases series references on close.</summary>
+    public void Cleanup()
+    {
+        if (_disposed) return;
+        _disposed = true;
+        Plot.SizeChanged -= OnPlotSizeChanged;
+        foreach (var child in Plot.Children) ToolTipService.SetToolTip(child, null);
+        Plot.Children.Clear();
+        _baselineBrush = null;
+        _barBrush = null;
+        _series = [];
+        _drawnSeries = null;
+        _drawnCurrency = null;
+        SetValue(SeriesProperty, null);
+        DataContext = null;
+    }
+
     private static void OnSeriesChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
     {
         var chart = (DailyCostChart)d;
+        if (chart._disposed) return;
         chart.SetSeries(chart.Series ?? [], chart.Currency);
     }
 
     public void SetSeries(IReadOnlyList<DailyCost> series, string currency)
     {
+        if (_disposed) return;
         _series = series;
         _currency = currency;
         Draw();
@@ -43,6 +65,7 @@ public sealed partial class DailyCostChart : UserControl
 
     private void OnPlotSizeChanged(object sender, SizeChangedEventArgs e)
     {
+        if (_disposed) return;
         try { Draw(); }
         catch (Exception ex) { App.Services.GetRequiredService<ILogger<DailyCostChart>>().LogError(ex, "Daily cost chart size update failed"); }
     }
@@ -54,12 +77,14 @@ public sealed partial class DailyCostChart : UserControl
 
     private void Draw()
     {
+        if (_disposed) return;
         if (_drawnSeries != null && _drawnCurrency == _currency && _drawnWidth == Plot.ActualWidth &&
             _drawnHeight == Plot.Height && DashboardContent.SequenceEquals(_drawnSeries, _series, DashboardContent.DailyEquals)) return;
         _drawnSeries = _series;
         _drawnCurrency = _currency;
         _drawnWidth = Plot.ActualWidth;
         _drawnHeight = Plot.Height;
+        foreach (var child in Plot.Children) ToolTipService.SetToolTip(child, null);
         Plot.Children.Clear();
         if (_series.Count == 0)
         {
@@ -70,16 +95,16 @@ public sealed partial class DailyCostChart : UserControl
         if (Plot.ActualWidth <= 0) return;
         var max = Math.Max(0.01m, _series.Max(d => d.TotalCost));
         var slot = Plot.ActualWidth / _series.Count;
-        var baseline = new Rectangle { Width = Plot.ActualWidth, Height = 1,
-            Fill = new SolidColorBrush(Windows.UI.Color.FromArgb(90, 128, 128, 128)) };
+        _baselineBrush ??= new SolidColorBrush(Windows.UI.Color.FromArgb(90, 128, 128, 128));
+        _barBrush ??= new SolidColorBrush(Windows.UI.Color.FromArgb(255, 0, 120, 212));
+        var baseline = new Rectangle { Width = Plot.ActualWidth, Height = 1, Fill = _baselineBrush };
         Canvas.SetTop(baseline, Plot.Height - 1);
         Plot.Children.Add(baseline);
         for (var i = 0; i < _series.Count; i++)
         {
             var day = _series[i];
             var height = Math.Max(2, (double)(day.TotalCost / max) * (Plot.Height - 8));
-            var bar = new Rectangle { Width = Math.Max(1, slot - 3), Height = height, RadiusX = 2, RadiusY = 2,
-                Fill = new SolidColorBrush(Windows.UI.Color.FromArgb(255, 0, 120, 212)) };
+            var bar = new Rectangle { Width = Math.Max(1, slot - 3), Height = height, RadiusX = 2, RadiusY = 2, Fill = _barBrush };
             Canvas.SetLeft(bar, i * slot + 1);
             Canvas.SetTop(bar, Plot.Height - height);
             ToolTipService.SetToolTip(bar, $"{day.Date:MMM d}: {CostFormatter.Money(day.TotalCost, _currency)} estimated · {CostFormatter.Tokens(day.TotalTokens)} tokens");

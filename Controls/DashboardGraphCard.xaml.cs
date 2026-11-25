@@ -1,6 +1,7 @@
 using CodexBarWin.Models;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Media;
 
 namespace CodexBarWin.Controls;
 
@@ -9,6 +10,8 @@ public sealed partial class DashboardGraphCard : UserControl
 {
     public static readonly DependencyProperty DataProperty = DependencyProperty.Register(nameof(Data),
         typeof(DashboardProvider), typeof(DashboardGraphCard), new PropertyMetadata(null, OnDataChanged));
+
+    private bool _disposed;
 
     public DashboardProvider? Data
     {
@@ -26,9 +29,35 @@ public sealed partial class DashboardGraphCard : UserControl
         InitializeComponent();
     }
 
+    /// <summary>Detaches child charts, item sources, and compiled bindings when removed or closed.</summary>
+    public void Cleanup()
+    {
+        if (_disposed) return;
+        _disposed = true;
+        CleanupBurndownCharts(WindowsChartsList);
+        WindowsChartsList.ItemsSource = null;
+        WindowsChartsList.ItemTemplate = null;
+        CostChart.Cleanup();
+        Bindings?.StopTracking();
+        SetValue(DataProperty, null);
+        DataContext = null;
+    }
+
+    private static void CleanupBurndownCharts(DependencyObject root)
+    {
+        var count = VisualTreeHelper.GetChildrenCount(root);
+        for (var i = 0; i < count; i++)
+        {
+            var child = VisualTreeHelper.GetChild(root, i);
+            if (child is BurndownChart chart) chart.Cleanup();
+            else CleanupBurndownCharts(child);
+        }
+    }
+
     private static void OnDataChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
     {
         var card = (DashboardGraphCard)d;
+        if (card._disposed) return;
         if (card.Content is UIElement content) content.Visibility = card.Data == null ? Visibility.Collapsed : Visibility.Visible;
         card.Bindings.Update();
     }

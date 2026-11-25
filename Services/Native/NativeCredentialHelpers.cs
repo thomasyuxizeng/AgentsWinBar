@@ -13,9 +13,24 @@ namespace CodexBarWin.Services.Native;
 /// </summary>
 public sealed class SensitiveBuffer : IDisposable
 {
+    private const int MaxPooledBytes = 512 * 1024;
     private byte[]? _array;
+    private readonly bool _pooled;
 
-    public SensitiveBuffer(int capacity) => _array = ArrayPool<byte>.Shared.Rent(Math.Max(1, capacity));
+    public SensitiveBuffer(int capacity)
+    {
+        var size = Math.Max(1, capacity);
+        if (size <= MaxPooledBytes)
+        {
+            _array = ArrayPool<byte>.Shared.Rent(size);
+            _pooled = true;
+        }
+        else
+        {
+            _array = new byte[size];
+            _pooled = false;
+        }
+    }
 
     public int Length { get; internal set; }
     public ReadOnlySpan<byte> Span => _array.AsSpan(0, Length);
@@ -34,7 +49,10 @@ public sealed class SensitiveBuffer : IDisposable
         var array = Interlocked.Exchange(ref _array, null);
         if (array == null) return;
         CryptographicOperations.ZeroMemory(array);
-        ArrayPool<byte>.Shared.Return(array);
+        if (_pooled)
+        {
+            ArrayPool<byte>.Shared.Return(array);
+        }
     }
 }
 

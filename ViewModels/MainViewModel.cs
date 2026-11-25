@@ -53,6 +53,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private int _dashboardVisibility;
     private bool _flyoutVisible;
     private DateTime? _lastTrim;
+    private DateTime? _lastCompact;
+    private bool _hasCompactedAfterStartup;
+    private bool _dashboardTrimPending;
+    private long _baselineHeapBytes;
     private bool _disposed;
     private bool _refreshPending;
     private readonly ISignInWatcher? _signInWatcher;
@@ -210,6 +214,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         RecreateTimer(interval - (now - oldest));
         RefreshDemandedCostsAsync().SafeFireAndForget(
             onError: ex => _logger.LogError(ex, "Cached usage cost refresh failed"));
+        ScheduleWorkingSetTrim();
         return true;
     }
 
@@ -313,8 +318,14 @@ public partial class MainViewModel : ObservableObject, IDisposable
         if (Interlocked.Increment(ref _dashboardVisibility) == 1) OnUiThread(() => RefreshApiCredits(false));
         return new ActionLease(() =>
         {
-            Interlocked.Decrement(ref _dashboardVisibility);
-            OnUiThread(ScheduleWorkingSetTrim);
+            if (Interlocked.Decrement(ref _dashboardVisibility) == 0)
+            {
+                OnUiThread(() =>
+                {
+                    _dashboardTrimPending = true;
+                    ScheduleWorkingSetTrim();
+                });
+            }
         });
     }
 
@@ -365,14 +376,20 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         var locked = QuerySessionLocked();
         var now = DateTime.UtcNow;
-        foreach (var window in new[] { data.Session, data.Weekly, data.Tertiary }.Concat(data.ExtraWindows.Select(e => e.Window)))
-        {
-            if (window?.ResetDetectedAtUtc is not { } stamp) continue;
-            // A stamp is the detection time, so only a fresh one can have been detected on this locked screen
-            if (_knownResetStamps.Add(stamp) && locked && now - stamp.ToUniversalTime() <= TimeSpan.FromMinutes(5))
-                _resetVisibility.NoteUnseen(stamp);
-        }
+        NoteWindowResetStamp(data.Session, locked, now);
+        NoteWindowResetStamp(data.Weekly, locked, now);
+        NoteWindowResetStamp(data.Tertiary, locked, now);
+        foreach (var extra in data.ExtraWindows)
+            NoteWindowResetStamp(extra.Window, locked, now);
         if (_knownResetStamps.Count > 64) _knownResetStamps.Clear();
+    }
+
+    private void NoteWindowResetStamp(UsageWindow? window, bool locked, DateTime nowUtc)
+    {
+        if (window?.ResetDetectedAtUtc is not { } stamp) return;
+        // A stamp is the detection time, so only a fresh one can have been detected on this locked screen
+        if (_knownResetStamps.Add(stamp) && locked && nowUtc - stamp.ToUniversalTime() <= TimeSpan.FromMinutes(5))
+            _resetVisibility.NoteUnseen(stamp);
     }
 
     private void OnSessionLocked(object? sender, EventArgs e)
@@ -451,6 +468,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
             if (scanCts.IsCancellationRequested)
                 RefreshDemandedCostsAsync().SafeFireAndForget(
                     onError: ex => _logger.LogError(ex, "Pending demanded cost refresh failed"));
+            else
+                ScheduleWorkingSetTrim();
         }
     }
 
@@ -504,6 +523,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
             if (scanCts.IsCancellationRequested)
                 RefreshDemandedCostsAsync().SafeFireAndForget(
                     onError: ex => _logger.LogError(ex, "Pending demanded cost refresh failed"));
+            else
+                ScheduleWorkingSetTrim();
         }
     }
 
@@ -524,7 +545,15 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     if (_disposed || _stopped || _exiting || ct.IsCancellationRequested ||
                         !ReferenceEquals(backgroundScan ? _backgroundCostRefreshCts : _costRefreshCts, scanCts) ||
                         !_settingsService.Settings.ShowCostTotals || _settingsService.Settings.DeveloperModeEnabled) return;
-                    var index = Providers.ToList().FindIndex(p => p.Provider.Equals(provider, StringComparison.OrdinalIgnoreCase));
+                    var index = -1;
+                    for (var i = 0; i < Providers.Count; i++)
+                    {
+                        if (Providers[i].Provider.Equals(provider, StringComparison.OrdinalIgnoreCase))
+                        {
+                            index = i;
+                            break;
+                        }
+                    }
                     if (index >= 0) Providers[index] = Providers[index] with { Cost = cost };
                 }
                 catch (Exception ex) { published.TrySetException(ex); }
@@ -555,8 +584,29 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 _flyoutVisible, Volatile.Read(ref _dashboardVisibility) > 0,
                 IsLoading || _costRefreshCts != null || _backgroundCostRefreshCts != null))
             {
-                WorkingSetTrimmer.Trim();
+                var currentHeapBytes = GC.GetTotalMemory(forceFullCollection: false);
+                var compactLoh = WorkingSetTrimmer.ShouldCompactLoh(
+                    now,
+                    _lastCompact,
+                    _hasCompactedAfterStartup,
+                    _dashboardTrimPending,
+                    currentHeapBytes,
+                    _baselineHeapBytes);
+
+                await Task.Run(() => WorkingSetTrimmer.Trim(compactLoh), trimCts.Token);
+
                 _lastTrim = now;
+                if (compactLoh)
+                {
+                    _hasCompactedAfterStartup = true;
+                    _dashboardTrimPending = false;
+                    _lastCompact = now;
+                    _baselineHeapBytes = GC.GetTotalMemory(forceFullCollection: false);
+                }
+                else if (_baselineHeapBytes == 0)
+                {
+                    _baselineHeapBytes = currentHeapBytes;
+                }
             }
         }
         catch (OperationCanceledException) when (trimCts.IsCancellationRequested) { }
@@ -661,7 +711,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     });
                 }
                 catch (Exception ex) { _logger.LogDebug(ex, "Refresh activity could not be recorded"); }
-                if (!developerMode) _history.Record(data, DateTime.UtcNow);
+                if (!developerMode) _history.Record(data, DateTime.UtcNow, prune: false);
                 // A reading without a sign-in problem ends any wait for a new sign-in
                 if (!data.AuthRequired && !data.HasError && ProviderConstants.IsValidProvider(data.Provider))
                     _signInWatcher?.Cancel(data.Provider);
@@ -756,6 +806,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
             if (costProviders != null && !ct.IsCancellationRequested && !_refreshPending)
                 RefreshBackgroundCostsAsync(costProviders, forceCostRefresh).SafeFireAndForget(
                     onError: ex => _logger.LogError(ex, "Background cost refresh failed"));
+            else if (!_refreshPending)
+                ScheduleWorkingSetTrim();
             _forceCostRefreshPending = false;
             if (_refreshPending && !_disposed && !_stopped && !_exiting)
             {
@@ -969,6 +1021,16 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
     }
 
+    private bool IsProviderEnabled(string providerId)
+    {
+        foreach (var provider in _settingsService.Settings.Providers)
+        {
+            if (provider.IsEnabled && provider.Id.Equals(providerId, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+        return false;
+    }
+
     /// <summary>
     /// Recreates the periodic timer with the current refresh interval from settings.
     /// </summary>
@@ -976,6 +1038,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         if (_disposed || _stopped || _exiting || IsLoading) return;
         var now = DateTime.UtcNow;
+        ResetRefreshScheduler.PruneExpiredAttempts(_resetRefreshAttempts, now);
         var pendingSinceUtc = _carryOverSinceUtc;
         _carryOverSinceUtc = null;
         var normalDelay = firstDelay ?? GetScheduledDelay();
@@ -986,11 +1049,18 @@ public partial class MainViewModel : ObservableObject, IDisposable
             var lockedInterval = TimeSpan.FromMinutes(_settingsService.Settings.LockedRefreshIntervalMinutes);
             if (lockedInterval > normalDelay) normalDelay = lockedInterval;
         }
-        var enabled = _settingsService.Settings.Providers.Where(p => p.IsEnabled).Select(p => p.Id)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var resetTimes = Providers.Where(p => enabled.Contains(p.Provider))
-            .SelectMany(p => new[] { p.Session, p.Weekly, p.Tertiary }
-                .Concat(p.ExtraWindows.Select(e => e.Window))).Select(w => w?.ResetAt);
+        var resetTimes = new List<DateTime?>(Providers.Count * 4);
+        foreach (var provider in Providers)
+        {
+            if (!IsProviderEnabled(provider.Provider)) continue;
+            if (provider.Session?.ResetAt is { } sessionReset) resetTimes.Add(sessionReset);
+            if (provider.Weekly?.ResetAt is { } weeklyReset) resetTimes.Add(weeklyReset);
+            if (provider.Tertiary?.ResetAt is { } tertiaryReset) resetTimes.Add(tertiaryReset);
+            foreach (var extra in provider.ExtraWindows)
+            {
+                if (extra.Window?.ResetAt is { } extraReset) resetTimes.Add(extraReset);
+            }
+        }
         var schedule = locked ? new ResetRefreshSchedule(normalDelay)
             : ResetRefreshScheduler.GetSchedule(resetTimes, now, normalDelay, _resetRefreshAttempts);
         EffectiveRefreshInterval = schedule.Delay;

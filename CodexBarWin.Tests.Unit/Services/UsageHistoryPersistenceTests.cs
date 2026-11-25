@@ -284,4 +284,51 @@ public class UsageHistoryPersistenceTests
     [DataRow(10900, 10000, false)]
     public void ShouldCompact_WhenDeadWeightComparedWithThreshold_ReturnsExpected(int inFile, int kept, bool expected) =>
         UsageHistoryPersistence.ShouldCompact(inFile, kept).Should().Be(expected);
+
+    [TestMethod]
+    public async Task SaveAndLoadAsync_LargeHistoryExceedingChunkThreshold_RoundTripsViaStreamingUtf8()
+    {
+        var clock = new Clock();
+        var store = new UsageHistoryStore();
+        var start = clock.Now.UtcDateTime.AddHours(-12);
+        for (var i = 0; i < 600; i++)
+        {
+            store.Add(new UsageHistorySample
+            {
+                Timestamp = start.AddMinutes(i),
+                Provider = i % 2 == 0 ? "claude" : "codex",
+                WindowKey = "extra:model-quota",
+                UsedPercent = (i % 100) + 0.5
+            }, clock.Now.UtcDateTime);
+        }
+
+        var persistence = Create(store, clock);
+        await persistence.LoadAsync();
+        await persistence.SaveAsync(force: true);
+
+        var reloaded = new UsageHistoryStore();
+        await Create(reloaded, clock, Path.GetDirectoryName(persistence.FilePath)).LoadAsync();
+        reloaded.Count.Should().Be(600);
+        reloaded.Samples.Should().Equal(store.Samples);
+    }
+
+    [TestMethod]
+    public async Task ParseStreamAsync_WithUtf8BomAndCutOffTail_KeepsCompleteSamplesAndMarksNotIntact()
+    {
+        var at = new DateTime(2026, 10, 4, 9, 0, 0, DateTimeKind.Utc);
+        var bytes = UsageHistoryPersistence.Format([
+            new() { Timestamp = at, Provider = "claude", WindowKey = "session", UsedPercent = 12.5 },
+            new() { Timestamp = at.AddMinutes(1), Provider = "codex", WindowKey = "weekly", UsedPercent = 34.0 }
+        ]);
+        var cut = bytes[..^10];
+        var withBom = new byte[] { 0xEF, 0xBB, 0xBF }.Concat(cut).ToArray();
+        using var stream = new MemoryStream(withBom);
+
+        var (samples, intact) = await UsageHistoryPersistence.ParseStreamAsync(stream, CancellationToken.None);
+
+        intact.Should().BeFalse();
+        samples.Should().ContainSingle();
+        samples[0].Provider.Should().Be("claude");
+        samples[0].UsedPercent.Should().Be(12.5);
+    }
 }

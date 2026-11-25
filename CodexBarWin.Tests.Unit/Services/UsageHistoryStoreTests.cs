@@ -104,4 +104,51 @@ public class UsageHistoryStoreTests
     [TestMethod]
     public void ExtraWindowKey_NullTitle_ReturnsEmptyExtraKey() =>
         UsageHistoryStore.ExtraWindowKey(new() { Title = null! }).Should().Be("extra:");
+
+    [TestMethod]
+    public void Add_WhenRepeatedKeys_PoolsProviderAndWindowKeyInstances()
+    {
+        var store = new UsageHistoryStore();
+        var key1 = string.Concat("extra:", "custom-model");
+        var key2 = string.Concat("extra:", "custom-model");
+        var p1 = string.Concat("cla", "ude");
+        var p2 = string.Concat("cla", "ude");
+
+        store.Add(Sample(10, 0, p1, key1), Now).Should().BeTrue();
+        store.Add(Sample(20, 1, p2, key2), Now.AddMinutes(1)).Should().BeTrue();
+
+        var samples = store.Samples;
+        samples.Should().HaveCount(2);
+        ReferenceEquals(samples[0].Provider, samples[1].Provider).Should().BeTrue();
+        ReferenceEquals(samples[0].WindowKey, samples[1].WindowKey).Should().BeTrue();
+    }
+
+    [TestMethod]
+    public void Record_WhenPruneFalse_DefersPruningUntilExplicitPrune()
+    {
+        var store = new UsageHistoryStore();
+        store.Add(Sample(10, 0), Now).Should().BeTrue();
+
+        var later = Now.AddDays(14).AddMinutes(1);
+        var data = new UsageData { Provider = "codex", Session = new() { ReportedPercent = 25 } };
+        store.Record(data, later, prune: false).Should().Be(1);
+
+        store.Count.Should().Be(2);
+        store.Prune(later).Should().Be(1);
+        store.Count.Should().Be(1);
+    }
+
+    [TestMethod]
+    public void Prune_WhenNewestSampleRemovedByClockShift_RebuildsLastByKey()
+    {
+        var store = new UsageHistoryStore();
+        store.Add(Sample(10, 0), Now).Should().BeTrue();
+        store.Add(Sample(20, 10), Now.AddMinutes(10)).Should().BeTrue();
+
+        // Clock moves back before the second sample; Prune removes it and resets _lastByKey to the first sample.
+        var earlier = Now.AddMinutes(5);
+        store.Prune(earlier).Should().Be(1);
+        store.Add(Sample(30, 5), earlier).Should().BeTrue();
+        store.Get("claude", "session").Select(s => s.UsedPercent).Should().Equal(10, 30);
+    }
 }

@@ -89,22 +89,41 @@ public class CacheService : ICacheService
         {
             if (DeveloperMode) return;
             var now = DateTime.UtcNow;
-            foreach (var (k, v) in _cache.ToArray())
+            var items = new Dictionary<string, UsageData>(_cache.Count, StringComparer.Ordinal);
+            foreach (var (k, v) in _cache)
             {
                 var retained = CacheRetention.PruneExpired(v, now);
-                if (retained == null) _cache.TryRemove(new KeyValuePair<string, UsageData>(k, v));
-                else _cache.TryUpdate(k, retained, v);
+                if (retained == null)
+                {
+                    if (!_cache.TryRemove(new KeyValuePair<string, UsageData>(k, v)) && _cache.TryGetValue(k, out var newer))
+                    {
+                        var newerRetained = CacheRetention.PruneExpired(newer, now);
+                        if (newerRetained != null) items[k] = newerRetained;
+                    }
+                }
+                else if (_cache.TryUpdate(k, retained, v) || !_cache.TryGetValue(k, out var newer))
+                {
+                    items[k] = retained;
+                }
+                else
+                {
+                    items[k] = CacheRetention.PruneExpired(newer, now) ?? retained;
+                }
             }
             var cacheData = new CacheData
             {
                 Timestamp = now,
-                Items = _cache.ToDictionary(kv => kv.Key, kv => kv.Value)
+                Items = items
             };
 
-            var json = System.Text.Json.JsonSerializer.Serialize(cacheData, AppJsonSerializerContext.Default.CacheData);
             Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(_cachePath))!);
             var temporaryPath = _cachePath + ".tmp";
-            await File.WriteAllTextAsync(temporaryPath, json);
+            await using (var stream = new FileStream(temporaryPath, FileMode.Create, FileAccess.Write, FileShare.None,
+                bufferSize: 16 * 1024, FileOptions.Asynchronous))
+            {
+                await JsonSerializer.SerializeAsync(stream, cacheData, AppJsonSerializerContext.Default.CacheData);
+                await stream.FlushAsync();
+            }
             File.Move(temporaryPath, _cachePath, overwrite: true);
             _logger.LogDebug("Cache saved to {Path}", _cachePath);
         }
@@ -127,9 +146,11 @@ public class CacheService : ICacheService
                 return;
             }
 
-            var json = await File.ReadAllTextAsync(_cachePath);
+            await using var stream = new FileStream(_cachePath, FileMode.Open, FileAccess.Read, FileShare.Read,
+                bufferSize: 16 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
+            if (stream.Length == 0) return;
             // Parse structurally and deserialize entry by entry, so one corrupt sibling cannot discard valid providers.
-            using var document = JsonDocument.Parse(json);
+            using var document = await JsonDocument.ParseAsync(stream);
             if (document.RootElement.ValueKind != JsonValueKind.Object) return;
             var timestamp = FindProperty(document.RootElement, "timestamp");
             if (timestamp.ValueKind != JsonValueKind.String || !timestamp.TryGetDateTime(out var savedAt)) return;
@@ -153,9 +174,8 @@ public class CacheService : ICacheService
                 UsageData? data;
                 try
                 {
-                    var single = "{\"items\":{" + JsonSerializer.Serialize(item.Name) + ":" + item.Value.GetRawText() + "}}";
-                    var parsed = JsonSerializer.Deserialize(single, AppJsonSerializerContext.Default.CacheData);
-                    if (parsed?.Items == null || !parsed.Items.TryGetValue(item.Name, out data) || data == null) continue;
+                    data = JsonSerializer.Deserialize(item.Value, AppJsonSerializerContext.Default.UsageData);
+                    if (data == null) continue;
                 }
                 catch (JsonException) { continue; }
                 // An entry that omits extraWindows deserializes it as null; treat that as none rather than as corruption.

@@ -32,15 +32,37 @@ public sealed partial class BurndownChart : UserControl
     }
     public WindowAccent Accent { get => (WindowAccent)GetValue(AccentProperty); set => SetValue(AccentProperty, value); }
 
+    private bool _disposed;
+    private bool _drawQueued;
+    private BurndownSeries? _drawnSeries;
+    private (double Width, double Height, WindowAccent Accent, bool Compact, ElementTheme Theme)? _drawnSignature;
+
     public BurndownChart()
     {
         InitializeComponent();
         ActualThemeChanged += OnActualThemeChanged;
     }
 
+    /// <summary>Detaches event handlers, clears plotted shapes, and releases series references on window close.</summary>
+    public void Cleanup()
+    {
+        if (_disposed) return;
+        _disposed = true;
+        ActualThemeChanged -= OnActualThemeChanged;
+        Plot.SizeChanged -= OnPlotSizeChanged;
+        Plot.Children.Clear();
+        Plot.Clip = null;
+        UsageLegend.Foreground = null;
+        _drawnSeries = null;
+        _drawnSignature = null;
+        SetValue(SeriesProperty, null);
+        DataContext = null;
+    }
+
     private static void OnCompactChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
     {
         var chart = (BurndownChart)d;
+        if (chart._disposed) return;
         var compact = chart.IsCompact;
         chart.TitleText.Visibility = chart.AxisLabels.Visibility = chart.LegendPanel.Visibility =
             compact ? Visibility.Collapsed : Visibility.Visible;
@@ -49,14 +71,21 @@ public sealed partial class BurndownChart : UserControl
         chart.RequestDraw();
     }
 
-    private static void OnDataChanged(DependencyObject d, DependencyPropertyChangedEventArgs e) => ((BurndownChart)d).RequestDraw();
+    private static void OnDataChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+    {
+        var chart = (BurndownChart)d;
+        if (!chart._disposed) chart.RequestDraw();
+    }
+
     private void OnPlotSizeChanged(object sender, SizeChangedEventArgs e)
     {
+        if (_disposed) return;
         try { RequestDraw(); }
         catch (Exception ex) { App.Services.GetRequiredService<ILogger<BurndownChart>>().LogError(ex, "Usage history size update failed"); }
     }
     private void OnActualThemeChanged(FrameworkElement sender, object args)
     {
+        if (_disposed) return;
         try { RequestDraw(); }
         catch (Exception ex)
         {
@@ -64,16 +93,13 @@ public sealed partial class BurndownChart : UserControl
         }
     }
 
-    private bool _drawQueued;
-    private BurndownSeries? _drawnSeries;
-    private (double Width, double Height, WindowAccent Accent, bool Compact, ElementTheme Theme)? _drawnSignature;
-
     private void RequestDraw()
     {
-        if (_drawQueued) return;
+        if (_disposed || _drawQueued) return;
         _drawQueued = DispatcherQueue.TryEnqueue(() =>
         {
             _drawQueued = false;
+            if (_disposed) return;
             try { Draw(); }
             catch (Exception ex)
             {
@@ -84,7 +110,7 @@ public sealed partial class BurndownChart : UserControl
 
     private void Draw()
     {
-        if (Plot == null) return;
+        if (_disposed || Plot == null) return;
         var signature = (Plot.ActualWidth, Plot.Height, Accent, IsCompact, ActualTheme);
         if (_drawnSignature == signature && DashboardContent.SeriesEquals(_drawnSeries, Series)) return;
         _drawnSignature = signature;

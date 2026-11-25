@@ -17,9 +17,7 @@ public sealed class ActivityLog : IActivityLog
         if (entry == null) return;
         lock (_gate)
         {
-            _refreshes.Insert(0, entry);
-            _refreshes.Sort((a, b) => b.TimestampUtc.CompareTo(a.TimestampUtc));
-            if (_refreshes.Count > 40) _refreshes.RemoveRange(40, _refreshes.Count - 40);
+            InsertDescending(_refreshes, entry, 40, static item => item.TimestampUtc);
         }
     }
 
@@ -28,9 +26,23 @@ public sealed class ActivityLog : IActivityLog
         if (entry == null) return;
         lock (_gate)
         {
-            _alerts.Insert(0, entry);
-            _alerts.Sort((a, b) => b.TimestampUtc.CompareTo(a.TimestampUtc));
-            if (_alerts.Count > 20) _alerts.RemoveRange(20, _alerts.Count - 20);
+            InsertDescending(_alerts, entry, 20, static item => item.TimestampUtc);
         }
+    }
+
+    private static void InsertDescending<T>(List<T> items, T entry, int capacity, Func<T, DateTime> getTimestamp)
+    {
+        var timestamp = getTimestamp(entry);
+        if (items.Count == 0 || timestamp >= getTimestamp(items[0]))
+        {
+            items.Insert(0, entry);
+        }
+        else
+        {
+            var index = 1;
+            while (index < items.Count && timestamp < getTimestamp(items[index])) index++;
+            items.Insert(index, entry);
+        }
+        if (items.Count > capacity) items.RemoveRange(capacity, items.Count - capacity);
     }
 }

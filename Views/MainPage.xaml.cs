@@ -20,6 +20,25 @@ public sealed class ProviderSlot : InPlaceRow
 {
     public string Provider { get; set; } = string.Empty;
     public UsageData? Data { get; set; }
+
+    protected override int UpdateFromCore(InPlaceRow next)
+    {
+        var other = (ProviderSlot)next;
+        var changed = 0;
+        if (!string.Equals(Provider, other.Provider, StringComparison.Ordinal))
+        {
+            Provider = other.Provider;
+            changed++;
+            RaisePropertyChanged(nameof(Provider));
+        }
+        if (!EqualityComparer<UsageData?>.Default.Equals(Data, other.Data))
+        {
+            Data = other.Data;
+            changed++;
+            RaisePropertyChanged(nameof(Data));
+        }
+        return changed;
+    }
 }
 
 /// <summary>
@@ -36,10 +55,22 @@ public sealed partial class MainPage : Page
     /// <summary>The cards shown: one slot per provider in the view model, in its order.</summary>
     public ObservableCollection<ProviderSlot> Slots { get; } = [];
 
+    private volatile bool _isFlyoutVisible;
+    private int _slotsDirty;
+    private int _uiDirty;
+
     public MainPage()
     {
         InitializeComponent();
         ViewModel = App.Services.GetRequiredService<MainViewModel>();
+    }
+
+    internal void SetFlyoutVisible(bool visible)
+    {
+        _isFlyoutVisible = visible;
+        if (!visible) return;
+        if (Interlocked.Exchange(ref _slotsDirty, 0) != 0) SyncSlots();
+        if (Interlocked.Exchange(ref _uiDirty, 0) != 0) UpdateUI();
     }
 
     protected override void OnNavigatedTo(NavigationEventArgs e)
@@ -47,6 +78,8 @@ public sealed partial class MainPage : Page
         base.OnNavigatedTo(e);
         ViewModel.PropertyChanged += OnViewModelPropertyChanged;
         ViewModel.Providers.CollectionChanged += OnProvidersChanged;
+        Interlocked.Exchange(ref _slotsDirty, 0);
+        Interlocked.Exchange(ref _uiDirty, 0);
         SyncSlots();
         UpdateUI();
     }
@@ -60,6 +93,11 @@ public sealed partial class MainPage : Page
 
     private void OnProvidersChanged(object? sender, NotifyCollectionChangedEventArgs e)
     {
+        if (!_isFlyoutVisible)
+        {
+            Volatile.Write(ref _slotsDirty, 1);
+            return;
+        }
         if (DispatcherQueue.HasThreadAccess) SyncSlots();
         else DispatcherQueue.TryEnqueue(SyncSlots);
     }
@@ -79,6 +117,11 @@ public sealed partial class MainPage : Page
 
     private void OnViewModelPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
+        if (!_isFlyoutVisible)
+        {
+            Volatile.Write(ref _uiDirty, 1);
+            return;
+        }
         DispatcherQueue.TryEnqueue(UpdateUI);
     }
 

@@ -1,5 +1,7 @@
+using System.Collections.Concurrent;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.Linq.Expressions;
 using System.Reflection;
 
 namespace CodexBarWin.Helpers;
@@ -19,7 +21,9 @@ public sealed class KeepOnUpdateAttribute : Attribute;
 /// </summary>
 public abstract class InPlaceRow : INotifyPropertyChanged
 {
-    private static readonly Dictionary<Type, PropertyInfo[]> CopiedProperties = new();
+    private static readonly ConcurrentDictionary<Type, Func<InPlaceRow, InPlaceRow, int>> CompiledUpdaters = new();
+    private static readonly ConcurrentDictionary<string, PropertyChangedEventArgs> CachedEventArgs = new(StringComparer.Ordinal);
+    private static readonly MethodInfo RaiseMethod = typeof(InPlaceRow).GetMethod(nameof(RaisePropertyChanged), BindingFlags.Instance | BindingFlags.NonPublic)!;
 
     public event PropertyChangedEventHandler? PropertyChanged;
 
@@ -31,17 +35,18 @@ public abstract class InPlaceRow : INotifyPropertyChanged
     public int UpdateFrom(InPlaceRow next)
     {
         if (next.GetType() != GetType()) throw new ArgumentException("Rows must have the same type.", nameof(next));
-        var changed = 0;
-        foreach (var property in PropertiesOf(GetType()))
-        {
-            var value = property.GetValue(next);
-            if (Equals(property.GetValue(this), value)) continue;
-            property.SetValue(this, value);
-            changed++;
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(property.Name));
-        }
-        return changed;
+        return UpdateFromCore(next);
     }
+
+    /// <summary>
+    /// Typed subclasses override this for reflection-free, allocation-free property copying; other subclasses use a
+    /// once-compiled expression delegate per type.
+    /// </summary>
+    protected virtual int UpdateFromCore(InPlaceRow next) =>
+        CompiledUpdaters.GetOrAdd(GetType(), BuildUpdater)(this, next);
+
+    protected void RaisePropertyChanged(string propertyName) =>
+        PropertyChanged?.Invoke(this, CachedEventArgs.GetOrAdd(propertyName, static name => new PropertyChangedEventArgs(name)));
 
     /// <summary>
     /// Makes <paramref name="target"/> show <paramref name="next"/>: in place when both have the same keys in the same order,
@@ -70,18 +75,52 @@ public abstract class InPlaceRow : INotifyPropertyChanged
         return true;
     }
 
-    private static PropertyInfo[] PropertiesOf(Type type)
+    private static Func<InPlaceRow, InPlaceRow, int> BuildUpdater(Type type)
     {
-        lock (CopiedProperties)
+        var properties = type.GetProperties(BindingFlags.Public | BindingFlags.Instance)
+            .Where(p => p.CanRead && p.CanWrite && p.GetIndexParameters().Length == 0 && p.GetCustomAttribute<KeepOnUpdateAttribute>() == null)
+            .OrderBy(p => p.GetCustomAttribute<UpdateLastAttribute>() != null)
+            .ThenBy(p => p.MetadataToken)
+            .ToArray();
+
+        var targetParam = Expression.Parameter(typeof(InPlaceRow), "target");
+        var sourceParam = Expression.Parameter(typeof(InPlaceRow), "source");
+        var typedTarget = Expression.Variable(type, "t");
+        var typedSource = Expression.Variable(type, "s");
+        var changed = Expression.Variable(typeof(int), "changed");
+
+        var variables = new List<ParameterExpression> { typedTarget, typedSource, changed };
+        var body = new List<Expression>
         {
-            if (CopiedProperties.TryGetValue(type, out var cached)) return cached;
-            var properties = type.GetProperties(BindingFlags.Public | BindingFlags.Instance)
-                .Where(p => p.CanRead && p.CanWrite && p.GetIndexParameters().Length == 0 && p.GetCustomAttribute<KeepOnUpdateAttribute>() == null)
-                .OrderBy(p => p.GetCustomAttribute<UpdateLastAttribute>() != null)
-                .ThenBy(p => p.MetadataToken)
-                .ToArray();
-            CopiedProperties[type] = properties;
-            return properties;
+            Expression.Assign(typedTarget, Expression.Convert(targetParam, type)),
+            Expression.Assign(typedSource, Expression.Convert(sourceParam, type)),
+            Expression.Assign(changed, Expression.Constant(0))
+        };
+
+        foreach (var prop in properties)
+        {
+            var propType = prop.PropertyType;
+            var nextVal = Expression.Variable(propType, "v");
+            variables.Add(nextVal);
+
+            var comparerType = typeof(EqualityComparer<>).MakeGenericType(propType);
+            var defaultComparer = Expression.Property(null, comparerType.GetProperty(nameof(EqualityComparer<object>.Default))!);
+            var equalsMethod = comparerType.GetMethod(nameof(EqualityComparer<object>.Equals), [propType, propType])!;
+
+            var targetProp = Expression.Property(typedTarget, prop);
+            var sourceProp = Expression.Property(typedSource, prop);
+
+            body.Add(Expression.Assign(nextVal, sourceProp));
+            var areEqual = Expression.Call(defaultComparer, equalsMethod, targetProp, nextVal);
+            var updateBlock = Expression.Block(
+                Expression.Assign(targetProp, nextVal),
+                Expression.PostIncrementAssign(changed),
+                Expression.Call(targetParam, RaiseMethod, Expression.Constant(prop.Name)));
+            body.Add(Expression.IfThen(Expression.Not(areEqual), updateBlock));
         }
+
+        body.Add(changed);
+        var block = Expression.Block(variables, body);
+        return Expression.Lambda<Func<InPlaceRow, InPlaceRow, int>>(block, targetParam, sourceParam).Compile();
     }
 }

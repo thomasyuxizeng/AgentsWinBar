@@ -39,8 +39,10 @@ internal struct CodexCursor
 
 internal sealed class CostLogParser(CostProvider provider, bool subagent, CodexCursor cursor)
 {
-    private byte[] _lastRawModel = [];
-    private string _lastModel = "unknown";
+    private const int ModelCacheCapacity = 8;
+    private readonly (byte[] RawUtf8, string Canonical)[] _modelCache = new (byte[], string)[ModelCacheCapacity];
+    private int _modelCacheCount;
+    private int _modelCacheNextWrite;
     internal CodexCursor Cursor = cursor;
     internal long BadLines { get; private set; }
 
@@ -196,10 +198,19 @@ internal sealed class CostLogParser(CostProvider provider, bool subagent, CodexC
     private string? Model(ref Utf8JsonReader reader)
     {
         if (reader.TokenType != JsonTokenType.String || reader.ValueSpan.Length > 256) return null;
-        if (reader.ValueTextEquals(_lastRawModel)) return _lastModel;
+        for (var i = 0; i < _modelCacheCount; i++)
+        {
+            if (reader.ValueTextEquals(_modelCache[i].RawUtf8))
+            {
+                return _modelCache[i].Canonical;
+            }
+        }
         var raw = reader.GetString() ?? "";
-        _lastRawModel = Encoding.UTF8.GetBytes(raw);
-        return _lastModel = CostPricing.Normalize(raw, provider);
+        var canonical = CostPricing.Normalize(raw, provider);
+        _modelCache[_modelCacheNextWrite] = (Encoding.UTF8.GetBytes(raw), canonical);
+        if (_modelCacheCount < ModelCacheCapacity) _modelCacheCount++;
+        _modelCacheNextWrite = (_modelCacheNextWrite + 1) % ModelCacheCapacity;
+        return canonical;
     }
 
     private static void ReadSessionMetadata(ref Utf8JsonReader reader, ref Record record)

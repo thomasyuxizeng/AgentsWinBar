@@ -245,4 +245,17 @@ public sealed class NativeCostServiceTests
             new CostLogRoot(CostProvider.Codex, @"C:\Users\someone\.codex\sessions"),
             new CostLogRoot(CostProvider.Codex, @"C:\Users\someone\.codex\archived_sessions"));
     }
+
+    [TestMethod]
+    public async Task FetchCostDtosAsync_WhenLogsExist_MatchesJsonReportDtos()
+    {
+        File.WriteAllText(Path.Combine(Claude, "session.jsonl"), Lines(ClaudeLine("1", 1_000_000)));
+        using var service = Service();
+
+        var dtos = await service.FetchCostDtosAsync(["Claude", "gemini"], Now);
+        var jsonReports = await service.FetchCostJsonAsync(["Claude", "gemini"], Now);
+
+        dtos["claude"].Should().BeEquivalentTo(Read(jsonReports["claude"]));
+        dtos["gemini"].Should().BeEquivalentTo(Read(jsonReports["gemini"]));
+    }
 }

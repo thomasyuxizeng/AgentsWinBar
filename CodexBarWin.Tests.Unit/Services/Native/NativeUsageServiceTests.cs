@@ -184,6 +184,33 @@ public class NativeUsageServiceTests
         data.HasError.Should().BeTrue();
     }
 
+    [TestMethod]
+    public async Task FetchUsageDtoAsync_WhenOk_MatchesSerializedJsonDto()
+    {
+        var service = Create(new FakeClient("claude", _ => Task.FromResult(Ok("claude", 42))));
+
+        var dto = await service.FetchUsageDtoAsync("  CLAUDE ");
+        var fromJson = Parse(await service.FetchUsageJsonAsync("claude")).Single();
+
+        dto.Provider.Should().Be("claude");
+        dto.Source.Should().Be("oauth");
+        dto.Usage!.Primary!.UsedPercent.Should().Be(42);
+        dto.ToUsageData(Now.UtcDateTime).Should().BeEquivalentTo(fromJson.ToUsageData(Now.UtcDateTime),
+            options => options.Excluding(m => m.Name == "TimeUntilReset" || m.Name == "ElapsedPercent" || m.Name == "Pace"));
+    }
+
+    [TestMethod]
+    public async Task FetchUsageDtoAsync_WhenClientThrows_ReturnsErrorDto()
+    {
+        var service = Create(new FakeClient("codex", _ => throw new InvalidOperationException("bug")));
+
+        var dto = await service.FetchUsageDtoAsync("codex");
+
+        dto.Provider.Should().Be("codex");
+        dto.Usage.Should().BeNull();
+        dto.ToUsageData(Now.UtcDateTime).HasError.Should().BeTrue();
+    }
+
     private sealed class FakeClient(string provider, Func<CancellationToken, Task<NativeUsageResult>> read) : INativeUsageClient
     {
         private int _calls;
