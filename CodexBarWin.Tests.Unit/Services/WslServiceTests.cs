@@ -564,9 +564,11 @@ public class WslServiceTests
 
     private static void RequireWslExecution()
     {
-        if (Environment.GetEnvironmentVariable("CODEXBARWIN_SKIP_BASH_INTEGRATION") == "1" ||
+        // Opt-in: these run real wsl.exe, which boots the WSL virtual machine (about 1.3 GB of RAM).
+        if (Environment.GetEnvironmentVariable("CODEXBARWIN_RUN_WSL_INTEGRATION") != "1" ||
+            Environment.GetEnvironmentVariable("CODEXBARWIN_SKIP_BASH_INTEGRATION") == "1" ||
             Environment.GetEnvironmentVariable("CODEXBARWIN_SKIP_WSL_INTEGRATION") == "1")
-            Assert.Inconclusive("Bash/WSL execution disabled for this test run");
+            Assert.Inconclusive("WSL integration tests run only with CODEXBARWIN_RUN_WSL_INTEGRATION=1");
     }
 
     [TestMethod]

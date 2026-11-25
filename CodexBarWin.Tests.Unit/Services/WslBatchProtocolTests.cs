@@ -205,8 +205,11 @@ public class WslBatchProtocolTests
 
     private static async Task<WslResult?[]> RunInBashAsync(WslBatchCommand[] commands, string marker)
     {
-        if (Environment.GetEnvironmentVariable("CODEXBARWIN_SKIP_BASH_INTEGRATION") == "1")
-            Assert.Inconclusive("Bash/WSL execution disabled for this test run");
+        // Opt-in: the batch script targets WSL's bash (Git for Windows' bash lacks what it needs), and starting WSL boots
+        // a virtual machine (about 1.3 GB of RAM). The app reads usage and costs natively and uses WSL only as a fallback.
+        if (Environment.GetEnvironmentVariable("CODEXBARWIN_RUN_WSL_INTEGRATION") != "1" ||
+            Environment.GetEnvironmentVariable("CODEXBARWIN_SKIP_BASH_INTEGRATION") == "1")
+            Assert.Inconclusive("WSL batch script tests run only with CODEXBARWIN_RUN_WSL_INTEGRATION=1");
         const string prerequisites = "command -v timeout && command -v flock && command -v base64";
         // Prefer the real thing: WSL launched exactly like production (--exec, no default-shell re-parsing).
         // Otherwise a Unix-style bash, but never the System32 bash.exe stub, which is the WSL launcher and
