@@ -351,6 +351,9 @@ public sealed partial class DashboardAppWindow : Window
         catch (Exception ex) { _logger.LogError(ex, "Dashboard timer cleanup failed"); }
         _viewModel.Providers.CollectionChanged -= OnProvidersChanged;
         _viewModel.PropertyChanged -= OnViewModelPropertyChanged;
+        // Closed mid-refresh, the page never hears the refresh end, and an active ring would outlive the window.
+        try { _page.SetBusy(false); }
+        catch (Exception ex) { _logger.LogError(ex, "Dashboard spinner cleanup failed"); }
         _appWindow.Changed -= OnAppWindowChanged;
         if (Content is FrameworkElement root) root.ActualThemeChanged -= OnActualThemeChanged;
         App.Windows.Remove(this);
