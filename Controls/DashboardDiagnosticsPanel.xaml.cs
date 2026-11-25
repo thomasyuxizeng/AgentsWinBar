@@ -26,16 +26,43 @@ public sealed partial class DashboardDiagnosticsPanel : UserControl
     public IReadOnlyList<DashboardFact> HistoryFacts { get; private set; } = [];
     public IReadOnlyList<DashboardFact> CostCacheFacts { get; private set; } = [];
 
+    private bool _disposed;
+
     public DashboardDiagnosticsPanel()
     {
         InitializeComponent();
     }
 
-    private static void OnDataChanged(DependencyObject d, DependencyPropertyChangedEventArgs e) =>
-        ((DashboardDiagnosticsPanel)d).Refresh();
+    /// <summary>Detaches layout handlers, clears item sources, and stops compiled bindings on window close.</summary>
+    public void Cleanup()
+    {
+        if (_disposed) return;
+        _disposed = true;
+        CardsGrid.SizeChanged -= OnSizeChanged;
+        SystemFacts = SettingsFacts = HistoryFacts = CostCacheFacts = [];
+        SystemFactsList.ItemsSource = null;
+        SettingsFactsList.ItemsSource = null;
+        HistoryFactsList.ItemsSource = null;
+        CostCacheFactsList.ItemsSource = null;
+        RefreshesList.ItemsSource = null;
+        AlertsList.ItemsSource = null;
+        CardsGrid.Children.Clear();
+        CardsGrid.ColumnDefinitions.Clear();
+        CardsGrid.RowDefinitions.Clear();
+        Bindings?.StopTracking();
+        SetValue(DataProperty, null);
+        DataContext = null;
+    }
+
+    private static void OnDataChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+    {
+        var panel = (DashboardDiagnosticsPanel)d;
+        if (!panel._disposed) panel.Refresh();
+    }
 
     public void RefreshTimes()
     {
+        if (_disposed) return;
         DashboardTemplateBindings.Update(Card3, item =>
         {
             if (item is not DashboardFact fact) return item;
@@ -105,6 +132,7 @@ public sealed partial class DashboardDiagnosticsPanel : UserControl
 
     private void OnSizeChanged(object sender, SizeChangedEventArgs e)
     {
+        if (_disposed) return;
         try { Arrange(); }
         catch (Exception ex) { App.LogHandled("Dashboard layout update failed", ex); }
     }

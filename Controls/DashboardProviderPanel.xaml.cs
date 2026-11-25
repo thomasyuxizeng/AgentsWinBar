@@ -55,11 +55,53 @@ public sealed partial class DashboardProviderPanel : UserControl
     private readonly Dictionary<string, DashboardWindowRow> _rows = new();
     private string _windowsLayout = string.Empty;
     private bool _stacked;
+    private bool _disposed;
 
     public DashboardProviderPanel()
     {
         InitializeComponent();
         UpdateDetailsButton();
+    }
+
+    /// <summary>Closes live InfoBars, stops child window rows/meters, detaches event handlers and compiled bindings.</summary>
+    public void Cleanup()
+    {
+        if (_disposed) return;
+        _disposed = true;
+        WindowsHost.SizeChanged -= OnWindowsHostSizeChanged;
+        DetailsButton.Click -= OnDetailsClicked;
+        SignInButton.Click -= OnSignInClicked;
+
+        SignedOutBar.IsOpen = false;
+        SignedOutBar.Visibility = Visibility.Collapsed;
+        SignedOutBar.ActionButton = null;
+        SignedOutBar.Content = null;
+        IncidentBar.IsOpen = false;
+        IncidentBar.Visibility = Visibility.Collapsed;
+        IncidentBar.Content = null;
+        FetchErrorBar.IsOpen = false;
+        FetchErrorBar.Visibility = Visibility.Collapsed;
+        FetchErrorBar.Content = null;
+
+        ApiMeter.Cleanup();
+        foreach (var row in _rows.Values) row.Cleanup();
+        _rows.Clear();
+        WindowsHost.Children.Clear();
+        WindowsHost.ColumnDefinitions.Clear();
+
+        ApiUseList.ItemsSource = null;
+        GeminiUseList.ItemsSource = null;
+        TokenMixList.ItemsSource = null;
+        TopModelsList.ItemsSource = null;
+        CostFactsList.ItemsSource = null;
+        TokenRows = ModelRows = [];
+        CostFacts = [];
+        ApiUseRows = GeminiUseRows = [];
+        _costRowsData = null;
+
+        Bindings?.StopTracking();
+        SetValue(DataProperty, null);
+        DataContext = null;
     }
 
     private void OnDetailsClicked(object sender, RoutedEventArgs e)
@@ -102,6 +144,7 @@ public sealed partial class DashboardProviderPanel : UserControl
 
     private void OnWindowsHostSizeChanged(object sender, SizeChangedEventArgs e)
     {
+        if (_disposed) return;
         try
         {
             // Two columns need room; a narrow panel stacks them
@@ -113,11 +156,15 @@ public sealed partial class DashboardProviderPanel : UserControl
         catch (Exception ex) { App.LogHandled("Dashboard window layout update failed", ex); }
     }
 
-    private static void OnDataChanged(DependencyObject d, DependencyPropertyChangedEventArgs e) =>
-        ((DashboardProviderPanel)d).Refresh();
+    private static void OnDataChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+    {
+        var panel = (DashboardProviderPanel)d;
+        if (!panel._disposed) panel.Refresh();
+    }
 
     public void RefreshTimes()
     {
+        if (_disposed) return;
         Bindings.Update();
         foreach (var row in _rows.Values) row.RefreshTimes();
         DashboardTemplateBindings.Update(CostSection, item => item is DashboardFact { Label: "Scanned" } fact && Data?.Cost is { } cost
@@ -203,7 +250,10 @@ public sealed partial class DashboardProviderPanel : UserControl
 
         void Rebuild()
         {
-            foreach (var stale in _rows.Keys.Where(k => windows.All(w => w.Key != k)).ToList()) _rows.Remove(stale);
+            foreach (var stale in _rows.Keys.Where(k => windows.All(w => w.Key != k)).ToList())
+            {
+                if (_rows.Remove(stale, out var staleRow)) staleRow.Cleanup();
+            }
             foreach (var row in _rows.Values) if (row.Parent is Panel parent) parent.Children.Remove(row);
             WindowsHost.Children.Clear();
             WindowsHost.ColumnDefinitions.Clear();

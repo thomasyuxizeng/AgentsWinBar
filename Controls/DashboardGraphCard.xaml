@@ -41,7 +41,7 @@
                            VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
             </StackPanel>
 
-            <ItemsControl ItemsSource="{x:Bind Data.Windows, Mode=OneWay}" IsTabStop="False">
+            <ItemsControl x:Name="WindowsChartsList" ItemsSource="{x:Bind Data.Windows, Mode=OneWay}" IsTabStop="False">
                 <ItemsControl.ItemsPanel>
                     <ItemsPanelTemplate><StackPanel Spacing="16"/></ItemsPanelTemplate>
                 </ItemsControl.ItemsPanel>
@@ -77,7 +77,7 @@
                     <TextBlock Text="Daily cost" FontSize="13" FontWeight="SemiBold"/>
                     <TextBlock Grid.Column="1" Text="Last 30 days" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
                 </Grid>
-                <controls:DailyCostChart PlotHeight="88"
+                <controls:DailyCostChart x:Name="CostChart" PlotHeight="88"
                                          Series="{x:Bind Data.Cost.Daily, Mode=OneWay}"
                                          Currency="{x:Bind Data.Cost.Currency, Mode=OneWay}"/>
             </StackPanel>

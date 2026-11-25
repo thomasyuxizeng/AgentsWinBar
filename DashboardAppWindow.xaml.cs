@@ -25,7 +25,7 @@ public sealed partial class DashboardAppWindow : Window
     private readonly IDashboardService _dashboardService;
     private readonly ISettingsService _settings;
     private readonly ILogger<DashboardAppWindow> _logger;
-    private readonly DashboardPage _page = new();
+    private DashboardPage? _page = new();
     private readonly DispatcherQueueTimer _redrawTimer;
     private readonly DispatcherQueueTimer _clockTimer;
     private MicaController? _micaController;
@@ -138,7 +138,7 @@ public sealed partial class DashboardAppWindow : Window
     private void Redraw()
     {
         // Nobody sees a locked screen; the 30-second clock redraws once it is unlocked (a cheap query, not a snapshot)
-        if (_closed || _redrawing || _hidden || SessionStateNative.IsCurrentSessionLocked()) return;
+        if (_closed || _redrawing || _hidden || _page == null || SessionStateNative.IsCurrentSessionLocked()) return;
         _redrawing = true;
         try
         {
@@ -170,7 +170,7 @@ public sealed partial class DashboardAppWindow : Window
             or nameof(MainViewModel.NextRefreshUtc) or nameof(MainViewModel.EffectiveRefreshInterval))) return;
         Post(() =>
         {
-            _page.SetBusy(_viewModel.IsLoading);
+            _page?.SetBusy(_viewModel.IsLoading);
             if (e.PropertyName == nameof(MainViewModel.IsLoading)) return;
             _redrawTimer.Stop();
             _redrawTimer.Start();
@@ -211,12 +211,12 @@ public sealed partial class DashboardAppWindow : Window
     {
         _appWindow.SetPresenter(on ? AppWindowPresenterKind.FullScreen : AppWindowPresenterKind.Default);
         if (_appWindow.Presenter is OverlappedPresenter presenter) presenter.IsAlwaysOnTop = _topmost;
-        _page.SetFullScreen(on);
+        _page?.SetFullScreen(on);
     }
 
     private void OnAppWindowChanged(AppWindow sender, AppWindowChangedEventArgs args) => HandleEvent(() =>
     {
-        if (args.DidPresenterChange) _page.SetFullScreen(sender.Presenter.Kind == AppWindowPresenterKind.FullScreen);
+        if (args.DidPresenterChange) _page?.SetFullScreen(sender.Presenter.Kind == AppWindowPresenterKind.FullScreen);
         UpdateVisibility();
     });
 
@@ -335,11 +335,14 @@ public sealed partial class DashboardAppWindow : Window
         _visibility = null;
         _redrawTimer.Tick -= OnTimerTick;
         _clockTimer.Tick -= OnTimerTick;
-        _page.RefreshRequested -= OnRefreshRequested;
-        _page.SettingsRequested -= OnSettingsRequested;
-        _page.TopmostChanged -= OnTopmostChanged;
-        _page.FullScreenChanged -= OnFullScreenChanged;
-        _page.GraphVisibilityChanged -= OnGraphVisibilityChanged;
+        if (_page != null)
+        {
+            _page.RefreshRequested -= OnRefreshRequested;
+            _page.SettingsRequested -= OnSettingsRequested;
+            _page.TopmostChanged -= OnTopmostChanged;
+            _page.FullScreenChanged -= OnFullScreenChanged;
+            _page.GraphVisibilityChanged -= OnGraphVisibilityChanged;
+        }
         _settings.SettingsChanged -= OnSettingsChanged;
         foreach (var accelerator in _accelerators)
         {
@@ -351,14 +354,27 @@ public sealed partial class DashboardAppWindow : Window
         catch (Exception ex) { _logger.LogError(ex, "Dashboard timer cleanup failed"); }
         _viewModel.Providers.CollectionChanged -= OnProvidersChanged;
         _viewModel.PropertyChanged -= OnViewModelPropertyChanged;
-        // Closed mid-refresh, the page never hears the refresh end, and an active ring would outlive the window.
-        try { _page.SetBusy(false); }
-        catch (Exception ex) { _logger.LogError(ex, "Dashboard spinner cleanup failed"); }
+        try { _page?.Cleanup(); }
+        catch (Exception ex) { _logger.LogError(ex, "Dashboard page cleanup failed"); }
+        _page = null;
+        try { PageHost.Content = null; }
+        catch (Exception ex) { _logger.LogError(ex, "Dashboard page host detach failed"); }
         _appWindow.Changed -= OnAppWindowChanged;
-        if (Content is FrameworkElement root) root.ActualThemeChanged -= OnActualThemeChanged;
+        if (Content is FrameworkElement root)
+        {
+            root.ActualThemeChanged -= OnActualThemeChanged;
+            if (root is UIElement rootUi) rootUi.KeyboardAccelerators.Clear();
+        }
+        try { Content = null; }
+        catch (Exception ex) { _logger.LogError(ex, "Dashboard content detach failed"); }
         App.Windows.Remove(this);
-        try { _micaController?.Dispose(); }
+        try
+        {
+            _micaController?.RemoveAllSystemBackdropTargets();
+            _micaController?.Dispose();
+        }
         catch (Exception ex) { _logger.LogError(ex, "Dashboard backdrop cleanup failed"); }
         _micaController = null;
+        _backdropConfiguration = null;
     }
 }

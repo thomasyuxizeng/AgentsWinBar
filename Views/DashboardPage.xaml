@@ -63,7 +63,7 @@
                               ToolTipService.ToolTip="Full screen (F11)" Padding="10,6">
                     <FontIcon FontFamily="Segoe Fluent Icons" Glyph="&#xE740;" FontSize="14"/>
                 </ToggleButton>
-                <Button Click="OnSettingsClicked" AutomationProperties.Name="Settings" ToolTipService.ToolTip="Settings"
+                <Button x:Name="SettingsButton" Click="OnSettingsClicked" AutomationProperties.Name="Settings" ToolTipService.ToolTip="Settings"
                         Padding="10,6">
                     <FontIcon FontFamily="Segoe Fluent Icons" Glyph="&#xE713;" FontSize="14"/>
                 </Button>

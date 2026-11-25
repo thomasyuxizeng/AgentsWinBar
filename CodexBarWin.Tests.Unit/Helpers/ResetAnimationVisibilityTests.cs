@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using AwesomeAssertions;
 using CodexBarWin.Helpers;
 
@@ -86,5 +87,59 @@ public class ResetAnimationVisibilityTests
         visibility.NoteVisible(Back);
         visibility.VisibleSince(Detected).Should().BeNull();
         visibility.VisibleSince(Detected.AddMinutes(39)).Should().Be(Back);
+    }
+
+    [TestMethod]
+    public void SubscribeResumed_LiveTarget_InvokesCallbackOnNoteVisible()
+    {
+        var visibility = new ResetAnimationVisibility();
+        var target = new DummyTarget();
+        using var sub = visibility.SubscribeResumed(target, static t => t.Hits++);
+        visibility.NoteUnseen(Detected);
+        visibility.NoteVisible(Back).Should().BeTrue();
+        target.Hits.Should().Be(1);
+    }
+
+    [TestMethod]
+    public void SubscribeResumed_DisposedSubscription_DoesNotInvokeOrRetain()
+    {
+        var visibility = new ResetAnimationVisibility();
+        var target = new DummyTarget();
+        var sub = visibility.SubscribeResumed(target, static t => t.Hits++);
+        sub.Dispose();
+        visibility.WeakListenerCount.Should().Be(0);
+        visibility.NoteUnseen(Detected);
+        visibility.NoteVisible(Back).Should().BeTrue();
+        target.Hits.Should().Be(0);
+    }
+
+    [TestMethod]
+    public void SubscribeResumed_UnreferencedTarget_AllowsGcAndPrunesDeadListener()
+    {
+        var visibility = new ResetAnimationVisibility();
+        var weakTarget = SubscribeTemporaryTarget(visibility);
+
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        GC.Collect();
+
+        weakTarget.TryGetTarget(out _).Should().BeFalse();
+
+        visibility.NoteUnseen(Detected);
+        visibility.NoteVisible(Back).Should().BeTrue();
+        visibility.WeakListenerCount.Should().Be(0);
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static WeakReference<DummyTarget> SubscribeTemporaryTarget(ResetAnimationVisibility visibility)
+    {
+        var target = new DummyTarget();
+        _ = visibility.SubscribeResumed(target, static t => t.Hits++);
+        return new WeakReference<DummyTarget>(target);
+    }
+
+    private sealed class DummyTarget
+    {
+        public int Hits { get; set; }
     }
 }

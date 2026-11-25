@@ -120,12 +120,12 @@
             </Grid>
 
             <!-- Signed out: the provider's CLI needs a new login. Replaces the generic fetch-error banner below; the numbers further down are last-known -->
-            <InfoBar IsOpen="{x:Bind views:DashboardFormat.IsSignedOut(Data), Mode=OneWay}" IsClosable="False"
+            <InfoBar x:Name="SignedOutBar" IsOpen="{x:Bind views:DashboardFormat.IsSignedOut(Data), Mode=OneWay}" IsClosable="False"
                      Visibility="{x:Bind views:DashboardFormat.VisSignedOut(Data), Mode=OneWay}"
                      Severity="Error" Title="Signed out" AutomationProperties.Name="Signed out">
                 <!-- InfoBar's compact action size (24 high) keeps the title row's height; the hint starts below the button -->
                 <InfoBar.ActionButton>
-                    <Button Content="Sign in" Click="OnSignInClicked" MinHeight="24" Padding="8,0,8,1"
+                    <Button x:Name="SignInButton" Content="Sign in" Click="OnSignInClicked" MinHeight="24" Padding="8,0,8,1"
                             AutomationProperties.Name="{x:Bind views:DashboardFormat.SignInButtonName(Data), Mode=OneWay}"/>
                 </InfoBar.ActionButton>
                 <StackPanel Spacing="4" Margin="0,0,0,12">
@@ -135,7 +135,7 @@
             </InfoBar>
 
             <!-- Incident detail (only when the status page has more to say than the header's description) -->
-            <InfoBar IsOpen="{x:Bind views:DashboardFormat.HasIncident(Data), Mode=OneWay}" IsClosable="False"
+            <InfoBar x:Name="IncidentBar" IsOpen="{x:Bind views:DashboardFormat.HasIncident(Data), Mode=OneWay}" IsClosable="False"
                      Visibility="{x:Bind views:DashboardFormat.VisIncident(Data), Mode=OneWay}"
                      Severity="{x:Bind views:DashboardFormat.IncidentSeverity(Data.ServiceStatus), Mode=OneWay}"
                      Title="{x:Bind views:DashboardFormat.IncidentHeading(Data), Mode=OneWay}">
@@ -156,7 +156,7 @@
             </InfoBar>
 
             <!-- Fetch error -->
-            <InfoBar IsOpen="{x:Bind views:DashboardFormat.HasFetchError(Data), Mode=OneWay}" IsClosable="False"
+            <InfoBar x:Name="FetchErrorBar" IsOpen="{x:Bind views:DashboardFormat.HasFetchError(Data), Mode=OneWay}" IsClosable="False"
                      Visibility="{x:Bind views:DashboardFormat.VisFetchError(Data), Mode=OneWay}"
                      Severity="Error" Title="Last fetch failed">
                 <StackPanel Spacing="4" Margin="0,-8,0,12">
@@ -217,7 +217,7 @@
                                    Visibility="{x:Bind views:DashboardFormat.VisApiLeftOver(Data.ApiCredits), Mode=OneWay}"/>
                     </Grid>
 
-                    <controls:UsageMeter Height="8"
+                    <controls:UsageMeter x:Name="ApiMeter" Height="8"
                                          Percent="{x:Bind Data.ApiCredits.PercentUsed, Mode=OneWay}"
                                          TimePercent="{x:Bind views:DashboardFormat.ApiTime(Data.ApiCredits), Mode=OneWay}"
                                          AutomationProperties.Name="{x:Bind views:DashboardFormat.ApiAutomationName(Data.ApiCredits), Mode=OneWay}"/>
@@ -235,7 +235,7 @@
                     <StackPanel Spacing="6" Margin="0,4,0,0"
                                 Visibility="{x:Bind views:DashboardFormat.VisApiBreakdown(Data.ApiCredits), Mode=OneWay}">
                         <TextBlock Text="Used by" Style="{StaticResource SubHeading}"/>
-                        <ItemsControl ItemsSource="{x:Bind ApiUseRows, Mode=OneWay}" IsTabStop="False">
+                        <ItemsControl x:Name="ApiUseList" ItemsSource="{x:Bind ApiUseRows, Mode=OneWay}" IsTabStop="False">
                             <ItemsControl.ItemsPanel>
                                 <ItemsPanelTemplate><StackPanel Spacing="6"/></ItemsPanelTemplate>
                             </ItemsControl.ItemsPanel>
@@ -354,7 +354,7 @@
                     <StackPanel Spacing="6" Margin="0,4,0,0"
                                 Visibility="{x:Bind views:DashboardFormat.VisCount(GeminiUseRowTotal), Mode=OneWay}">
                         <TextBlock Text="By model" Style="{StaticResource SubHeading}"/>
-                        <ItemsControl ItemsSource="{x:Bind GeminiUseRows, Mode=OneWay}" IsTabStop="False">
+                        <ItemsControl x:Name="GeminiUseList" ItemsSource="{x:Bind GeminiUseRows, Mode=OneWay}" IsTabStop="False">
                             <ItemsControl.ItemsPanel>
                                 <ItemsPanelTemplate><StackPanel Spacing="6"/></ItemsPanelTemplate>
                             </ItemsControl.ItemsPanel>
@@ -434,7 +434,7 @@
                 <!-- Details: token mix, top models and how the numbers were made -->
                 <StackPanel Spacing="8" Margin="0,8,0,0" Visibility="{x:Bind views:DashboardFormat.Vis(ShowDetails), Mode=OneWay}">
                     <TextBlock Text="Token mix (30 days)" Style="{StaticResource SubHeading}"/>
-                    <ItemsControl ItemsSource="{x:Bind TokenRows, Mode=OneWay}" IsTabStop="False">
+                    <ItemsControl x:Name="TokenMixList" ItemsSource="{x:Bind TokenRows, Mode=OneWay}" IsTabStop="False">
                         <ItemsControl.ItemsPanel>
                             <ItemsPanelTemplate><StackPanel Spacing="6"/></ItemsPanelTemplate>
                         </ItemsControl.ItemsPanel>
@@ -457,7 +457,7 @@
 
                     <TextBlock Text="Top models (30 days)" Style="{StaticResource SubHeading}" Margin="0,4,0,0"
                                Visibility="{x:Bind views:DashboardFormat.VisCount(ModelRows.Count), Mode=OneWay}"/>
-                    <ItemsControl ItemsSource="{x:Bind ModelRows, Mode=OneWay}" IsTabStop="False">
+                    <ItemsControl x:Name="TopModelsList" ItemsSource="{x:Bind ModelRows, Mode=OneWay}" IsTabStop="False">
                         <ItemsControl.ItemsPanel>
                             <ItemsPanelTemplate><StackPanel Spacing="6"/></ItemsPanelTemplate>
                         </ItemsControl.ItemsPanel>
@@ -480,7 +480,7 @@
                         </ItemsControl.ItemTemplate>
                     </ItemsControl>
 
-                    <ItemsControl ItemsSource="{x:Bind CostFacts, Mode=OneWay}" IsTabStop="False" Margin="0,4,0,0">
+                    <ItemsControl x:Name="CostFactsList" ItemsSource="{x:Bind CostFacts, Mode=OneWay}" IsTabStop="False" Margin="0,4,0,0">
                         <ItemsControl.ItemsPanel>
                             <ItemsPanelTemplate><StackPanel Spacing="4"/></ItemsPanelTemplate>
                         </ItemsControl.ItemsPanel>

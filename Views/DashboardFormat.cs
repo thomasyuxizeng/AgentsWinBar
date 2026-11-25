@@ -14,12 +14,12 @@ namespace CodexBarWin.Views;
 /// </summary>
 internal static class DashboardFormat
 {
-    private static readonly SolidColorBrush Amber = new(Color.FromArgb(255, 255, 185, 0));
-    private static readonly SolidColorBrush Red = new(Color.FromArgb(255, 232, 17, 35));
-    private static readonly SolidColorBrush Green = new(Color.FromArgb(255, 16, 163, 127));
-    private static readonly SolidColorBrush Grey = new(Color.FromArgb(255, 156, 163, 175));
-    private static readonly SolidColorBrush White = new(Colors.White);
-    private static readonly SolidColorBrush NearBlack = new(Color.FromArgb(0xDD, 0, 0, 0));
+    private static readonly Color AmberColor = Color.FromArgb(255, 255, 185, 0);
+    private static readonly Color RedColor = Color.FromArgb(255, 232, 17, 35);
+    private static readonly Color GreenColor = Color.FromArgb(255, 16, 163, 127);
+    private static readonly Color GreyColor = Color.FromArgb(255, 156, 163, 175);
+    private static readonly Color WhiteColor = Colors.White;
+    private static readonly Color NearBlackColor = Color.FromArgb(0xDD, 0, 0, 0);
 
     public static Visibility Vis(bool visible) => visible ? Visibility.Visible : Visibility.Collapsed;
     public static Visibility VisNot(bool hidden) => hidden ? Visibility.Collapsed : Visibility.Visible;
@@ -37,16 +37,16 @@ internal static class DashboardFormat
     public static string LimitLabel(double percent) => percent >= UsageThresholds.Critical ? "At limit" : percent >= UsageThresholds.Warning ? "Near limit" : string.Empty;
     public static Visibility LimitVis(double percent) => Vis(percent >= UsageThresholds.Warning);
     /// <summary>Chip text colour: white on the red chip, near-black on the amber one (both readable in either theme).</summary>
-    public static Brush LimitForeground(double percent) => percent >= UsageThresholds.Critical ? White : NearBlack;
+    public static Brush LimitForeground(double percent) => new SolidColorBrush(percent >= UsageThresholds.Critical ? WhiteColor : NearBlackColor);
     /// <summary>"RESET EARLY" chip and its detail line for a window reset ahead of schedule (empty / collapsed otherwise).</summary>
     public static string EarlyChip(DashboardWindow? window) => EarlyResetDisplay.Chip(window?.EarlyResetAtUtc);
     public static Visibility EarlyVis(DashboardWindow? window) => Vis(window?.EarlyResetAtUtc != null);
     public static string EarlyDetail(DashboardWindow? window) => window == null ? string.Empty
         : EarlyResetDisplay.Detail(window.EarlyResetAtUtc, window.EarlyResetFromPercent, window.EarlyResetToPercent, DateTime.UtcNow);
     public static Visibility VisEarlyDetail(DashboardWindow? window) => VisText(EarlyDetail(window));
-    public static Brush EarlyBrush() => Green;
+    public static Brush EarlyBrush() => new SolidColorBrush(GreenColor);
 
-    public static Brush LimitBrush(double percent) => percent >= UsageThresholds.Critical ? Red : Amber;
+    public static Brush LimitBrush(double percent) => new SolidColorBrush(percent >= UsageThresholds.Critical ? RedColor : AmberColor);
 
     public static string Money(decimal value, string currency) => CostFormatter.Money(value, currency);
     public static string Tokens(long tokens) => CostFormatter.Tokens(tokens);
@@ -105,7 +105,7 @@ internal static class DashboardFormat
         : resetsAtUtc.HasValue ? $"{resetText} · {Local(resetsAtUtc)}" : resetText;
 
     // Provider service status
-    public static Brush StatusBrush(ProviderStatus? status) => Controls.ProviderStatusVisuals.Brush(status);
+    public static Brush StatusBrush(ProviderStatus? status) => Controls.ProviderStatusVisuals.CreateBrush(status);
     public static string StatusText(ProviderStatus? status) => ProviderStatusPresentation.Description(status);
     public static string StatusChecked(ProviderStatus? status) => status?.UpdatedAt is { } at
         ? $"Status page updated {Ago(at)}" : status == null ? "No status reported" : string.Empty;
@@ -344,13 +344,13 @@ internal static class DashboardFormat
     public static Visibility VisCritical(AttentionSeverity severity) => Vis(severity == AttentionSeverity.Critical);
     public static Visibility VisCaution(AttentionSeverity severity) => Vis(severity != AttentionSeverity.Critical);
 
-    public static Brush OkBrush(bool ok) => ok ? Green : Red;
+    public static Brush OkBrush(bool ok) => new SolidColorBrush(ok ? GreenColor : RedColor);
     public static string OkGlyph(bool ok) => ok ? "" : "";   // check / cancel
     public static string Duration(int ms) => ms < 1000 ? $"{ms} ms" : $"{ms / 1000.0:0.0} s";
     public static string Bytes(long bytes) => bytes < 1024 ? $"{bytes} B"
         : bytes < 1024 * 1024 ? $"{bytes / 1024.0:0.#} KB" : $"{bytes / 1024.0 / 1024.0:0.#} MB";
     public static string OnOff(bool on) => on ? "On" : "Off";
-    public static Brush OnOffBrush(bool on) => on ? Green : Grey;
+    public static Brush OnOffBrush(bool on) => new SolidColorBrush(on ? GreenColor : GreyColor);
     public static string Seconds(int seconds) => seconds % 60 == 0 && seconds >= 60 ? $"{seconds / 60} min" : $"{seconds} s";
     public static string Unknown(string? text) => string.IsNullOrWhiteSpace(text) ? "Unknown" : text!;
     public static string Plural(int count, string singular, string? plural = null) =>

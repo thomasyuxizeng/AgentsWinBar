@@ -35,15 +35,34 @@ public sealed partial class DashboardWindowRow : UserControl
         set => SetValue(ResetFromPercentProperty, value);
     }
 
-    private static void OnResetFromPercentChanged(DependencyObject d, DependencyPropertyChangedEventArgs e) =>
-        ((DashboardWindowRow)d).Meter.ResetFromPercent = (double?)e.NewValue;
+    private bool _disposed;
 
-    private static void OnResetDetectedAtUtcChanged(DependencyObject d, DependencyPropertyChangedEventArgs e) =>
-        ((DashboardWindowRow)d).Meter.ResetDetectedAtUtc = (DateTime?)e.NewValue;
+    private static void OnResetFromPercentChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+    {
+        var row = (DashboardWindowRow)d;
+        if (!row._disposed) row.Meter.ResetFromPercent = (double?)e.NewValue;
+    }
+
+    private static void OnResetDetectedAtUtcChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+    {
+        var row = (DashboardWindowRow)d;
+        if (!row._disposed) row.Meter.ResetDetectedAtUtc = (DateTime?)e.NewValue;
+    }
 
     public DashboardWindowRow()
     {
         InitializeComponent();
+    }
+
+    /// <summary>Stops child meter listeners/animations and detaches compiled bindings when the row is discarded or closed.</summary>
+    public void Cleanup()
+    {
+        if (_disposed) return;
+        _disposed = true;
+        Meter.Cleanup();
+        Bindings?.StopTracking();
+        SetValue(DataProperty, null);
+        DataContext = null;
     }
 
     /// <summary>How many consecutive windows (ending with this one) share this window's reset; the caption names the group.</summary>
@@ -58,6 +77,7 @@ public sealed partial class DashboardWindowRow : UserControl
     /// <summary>Sets the reset grouping and the details state together, redrawing once when either changed.</summary>
     public void SetLayout(bool showReset, int groupSize, bool showDetails)
     {
+        if (_disposed) return;
         if (ShowReset == showReset && GroupSize == groupSize && ShowDetails == showDetails) return;
         ShowReset = showReset;
         GroupSize = Math.Max(1, groupSize);
@@ -65,11 +85,15 @@ public sealed partial class DashboardWindowRow : UserControl
         Bindings.Update();
     }
 
-    public void RefreshTimes() => Bindings.Update();
+    public void RefreshTimes()
+    {
+        if (!_disposed) Bindings.Update();
+    }
 
     private static void OnDataChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
     {
         var control = (DashboardWindowRow)d;
+        if (control._disposed) return;
         if (control.Content is UIElement content) content.Visibility = control.Data == null ? Visibility.Collapsed : Visibility.Visible;
         control.Bindings.Update();
     }

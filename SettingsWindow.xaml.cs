@@ -16,7 +16,7 @@ namespace CodexBarWin;
 public sealed partial class SettingsWindow : Window
 {
     private readonly SettingsViewModel _viewModel;
-    private readonly SettingsPage _settingsPage;
+    private SettingsPage? _settingsPage;
     private MicaController? _micaController;
     private SystemBackdropConfiguration? _backdropConfiguration;
     private AppWindow? _appWindow;
@@ -158,12 +158,25 @@ public sealed partial class SettingsWindow : Window
 
     private void OnWindowClosed(object sender, WindowEventArgs args)
     {
+        Closed -= OnWindowClosed;
+        if (_settingsPage != null)
+        {
+            _settingsPage.SaveRequested -= OnSaveRequested;
+            _settingsPage.CancelRequested -= OnCancelRequested;
+            _settingsPage.Cleanup();
+            _settingsPage = null;
+        }
+        ContentFrame.Content = null;
         if (Content is FrameworkElement rootElement)
         {
             rootElement.ActualThemeChanged -= OnActualThemeChanged;
         }
+        Content = null;
         App.Windows.Remove(this);
+        _micaController?.RemoveAllSystemBackdropTargets();
         _micaController?.Dispose();
+        _micaController = null;
+        _backdropConfiguration = null;
     }
 
     private void OnSaveRequested(object? sender, EventArgs e)

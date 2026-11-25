@@ -148,6 +148,8 @@ public sealed partial class UsageMeter : UserControl
     }
 
     private BarResetAnimation? _resetAnimation;
+    private IDisposable? _resumedSubscription;
+    private bool _disposed;
     private double _fillWidth;
     private double _previousFillWidth;
     private Brush? _previousFillBrush;
@@ -156,21 +158,54 @@ public sealed partial class UsageMeter : UserControl
     {
         InitializeComponent();
         SizeChanged += OnSizeChanged;
-        Unloaded += (_, _) =>
-        {
-            ResetAnimationVisibility.Shared.Resumed -= OnScreenVisibleAgain;
-            _resetAnimation?.Stop();
-        };
-        Loaded += (_, _) =>
-        {
-            ResetAnimationVisibility.Shared.Resumed -= OnScreenVisibleAgain;
-            ResetAnimationVisibility.Shared.Resumed += OnScreenVisibleAgain;
-            PlayPendingReset();
-        };
+        Unloaded += OnUnloaded;
+        Loaded += OnLoaded;
+    }
+
+    private void OnLoaded(object sender, RoutedEventArgs e)
+    {
+        if (_disposed) return;
+        _resumedSubscription?.Dispose();
+        _resumedSubscription = ResetAnimationVisibility.Shared.SubscribeResumed(this, static meter => meter.OnScreenVisibleAgain());
+        PlayPendingReset();
+    }
+
+    private void OnUnloaded(object sender, RoutedEventArgs e)
+    {
+        _resumedSubscription?.Dispose();
+        _resumedSubscription = null;
+        _resetAnimation?.Stop();
+    }
+
+    /// <summary>Detaches event subscriptions, stops any active reset animation, and releases brushes when the host window closes.</summary>
+    public void Cleanup()
+    {
+        if (_disposed) return;
+        _disposed = true;
+        SizeChanged -= OnSizeChanged;
+        Loaded -= OnLoaded;
+        Unloaded -= OnUnloaded;
+        _resumedSubscription?.Dispose();
+        _resumedSubscription = null;
+        _resetAnimation?.Dispose();
+        _resetAnimation = null;
+        _previousFillBrush = null;
+        _barBrushes.Clear();
+        _timeBrushes.Clear();
+        UsageBar.Fill = null;
+        TimeBar.Fill = null;
+        BackgroundRect.Fill = null;
+        TimeMarker.Fill = null;
+        ToolTipService.SetToolTip(this, null);
+        DataContext = null;
     }
 
     // A reset detected while the session was locked waits here; the session coming back plays it once
-    private void OnScreenVisibleAgain(object? sender, EventArgs e) => DispatcherQueue?.TryEnqueue(PlayPendingReset);
+    private void OnScreenVisibleAgain()
+    {
+        if (_disposed) return;
+        DispatcherQueue?.TryEnqueue(() => { if (!_disposed) PlayPendingReset(); });
+    }
 
     // The last timestamp this bar played, so a persistent bar that is re-loaded (page navigation) never replays it
     private DateTime? _playedResetAt;
@@ -189,6 +224,7 @@ public sealed partial class UsageMeter : UserControl
 
     private void TryPlayReset(DateTime? newValue, DateTime? oldValue)
     {
+        if (_disposed) return;
         // Nothing plays on a locked screen: it would be missed. The reset is remembered (see MainViewModel) and plays on return.
         var shown = IsLoaded && Visibility == Visibility.Visible && ActualWidth > 0 && !SessionStateNative.IsCurrentSessionLocked();
         var visibleSince = newValue is { } stamp ? ResetAnimationVisibility.Shared.VisibleSince(stamp) : null;
@@ -230,6 +266,7 @@ public sealed partial class UsageMeter : UserControl
 
     private void OnSizeChanged(object sender, SizeChangedEventArgs e)
     {
+        if (_disposed) return;
         try
         {
             UpdateBar();
@@ -253,12 +290,16 @@ public sealed partial class UsageMeter : UserControl
     private Brush BarBrushFor(double honestPercent)
     {
         var key = (Accent, UsageThresholds.Level(honestPercent));
-        if (!_barBrushes.TryGetValue(key, out var barBrush)) _barBrushes[key] = barBrush = GetBarBrush(honestPercent, Accent);
+        if (Accent == WindowAccent.ClaudeAndOpenAi && honestPercent < UsageThresholds.Warning)
+            return ClaudeToOpenAiGradient();
+        if (!_barBrushes.TryGetValue(key, out var barBrush))
+            _barBrushes[key] = barBrush = CreateBarBrush(honestPercent, Accent);
         return barBrush;
     }
 
     private void UpdateBar()
     {
+        if (_disposed) return;
         var signature = (Percent, TimePercent, Accent, PaceText, ActualWidth);
         if (_lastUpdate == signature) return;
         _lastUpdate = signature;
@@ -287,7 +328,7 @@ public sealed partial class UsageMeter : UserControl
         var time = Math.Clamp(TimePercent, 0, 100);
         TimeBar.Visibility = Visibility.Visible;
         TimeBar.Width = ActualWidth * (time / 100.0);
-        if (!_timeBrushes.TryGetValue(Accent, out var timeBrush)) _timeBrushes[Accent] = timeBrush = GetTimeBrush(Accent);
+        var timeBrush = TimeBrushFor(Accent);
         if (!ReferenceEquals(TimeBar.Fill, timeBrush)) TimeBar.Fill = timeBrush;
 
         // The marker only appears when usage is outpacing the schedule (the blue has run past the time
@@ -313,18 +354,16 @@ public sealed partial class UsageMeter : UserControl
     private static readonly Color ClaudeOrange = Color.FromArgb(255, 0xD9, 0x77, 0x57);   // Anthropic orange (#D97757)
     private static readonly Color OpenAiTeal = Color.FromArgb(255, 0x10, 0xA3, 0x7F);     // OpenAI green (#10A37F)
 
-    // Solid brushes are immutable here. Gradients remain owned by each meter so their relative
-    // coordinates follow that meter's bounds rather than another control's bounds.
-    private static readonly Dictionary<(WindowAccent Accent, int Band), Brush> BarBrushes = new();
-    private static readonly Dictionary<WindowAccent, Brush> TimeBrushes = new();
-
-    internal static Brush GetBarBrush(double percent, WindowAccent accent)
+    private Brush TimeBrushFor(WindowAccent accent)
     {
-        if (accent == WindowAccent.ClaudeAndOpenAi && percent < UsageThresholds.Warning) return ClaudeToOpenAiGradient();
-        var key = (accent, UsageThresholds.Level(percent));
-        if (!BarBrushes.TryGetValue(key, out var brush)) BarBrushes[key] = brush = CreateBarBrush(percent, accent);
+        if (accent == WindowAccent.ClaudeAndOpenAi) return ClaudeToOpenAiGradient(0x88);
+        if (!_timeBrushes.TryGetValue(accent, out var brush)) _timeBrushes[accent] = brush = CreateTimeBrush(accent);
         return brush;
     }
+
+    // Brushes are owned per-control (never cached statically across windows, since Brush is a DependencyObject
+    // tied to its visual tree / compositor).
+    internal static Brush GetBarBrush(double percent, WindowAccent accent) => CreateBarBrush(percent, accent);
 
     private static Brush CreateBarBrush(double percent, WindowAccent accent)
     {
@@ -345,12 +384,7 @@ public sealed partial class UsageMeter : UserControl
     /// The translucent time-passed layer: lavender on the main bars, and a faded version of the provider's
     /// colour on the extra bars, so e.g. a Fable bar looks orange even before any usage fills it.
     /// </summary>
-    internal static Brush GetTimeBrush(WindowAccent accent)
-    {
-        if (accent == WindowAccent.ClaudeAndOpenAi) return ClaudeToOpenAiGradient(0x88);
-        if (!TimeBrushes.TryGetValue(accent, out var brush)) TimeBrushes[accent] = brush = CreateTimeBrush(accent);
-        return brush;
-    }
+    internal static Brush GetTimeBrush(WindowAccent accent) => CreateTimeBrush(accent);
 
     private static Brush CreateTimeBrush(WindowAccent accent)
     {
