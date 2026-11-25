@@ -21,6 +21,7 @@ public sealed class ProviderIncidentFetcher : IProviderIncidentFetcher, IDisposa
     public static readonly TimeSpan NegativeCacheTtl = TimeSpan.FromSeconds(60);
     public static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(5);
     public const int MaxFeedBytes = 2 * 1024 * 1024;
+    private const int MaxPooledBufferBytes = 512 * 1024;
     public const string UserAgent = "CodexBarWin/1.0 (+https://github.com/steipete/CodexBar)";
 
     private sealed record CachedEntry(
@@ -244,7 +245,7 @@ public sealed class ProviderIncidentFetcher : IProviderIncidentFetcher, IDisposa
                 ? (int)Math.Min(contentLength + 1, MaxFeedBytes + 1)
                 : 32 * 1024;
 
-            var buffer = ArrayPool<byte>.Shared.Rent(initialCapacity);
+            var buffer = RentBuffer(initialCapacity, out var isPooled);
             var totalRead = 0;
             try
             {
@@ -263,10 +264,14 @@ public sealed class ProviderIncidentFetcher : IProviderIncidentFetcher, IDisposa
                             return new CachedEntry(_timeProvider.GetUtcNow(), null);
                         }
 
-                        var next = ArrayPool<byte>.Shared.Rent(nextSize);
+                        var next = RentBuffer(nextSize, out var nextPooled);
                         Buffer.BlockCopy(buffer, 0, next, 0, totalRead);
-                        ArrayPool<byte>.Shared.Return(buffer);
+                        if (isPooled)
+                        {
+                            ArrayPool<byte>.Shared.Return(buffer);
+                        }
                         buffer = next;
+                        isPooled = nextPooled;
                     }
 
                     var toRead = Math.Min(buffer.Length - totalRead, MaxFeedBytes + 1 - totalRead);
@@ -315,7 +320,10 @@ public sealed class ProviderIncidentFetcher : IProviderIncidentFetcher, IDisposa
             }
             finally
             {
-                ArrayPool<byte>.Shared.Return(buffer);
+                if (isPooled)
+                {
+                    ArrayPool<byte>.Shared.Return(buffer);
+                }
             }
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -332,6 +340,17 @@ public sealed class ProviderIncidentFetcher : IProviderIncidentFetcher, IDisposa
             _logger?.LogWarning(ex, "Failed to fetch or parse {Provider} status incidents feed", provider);
             return new CachedEntry(_timeProvider.GetUtcNow(), null);
         }
+    }
+
+    private static byte[] RentBuffer(int size, out bool isPooled)
+    {
+        if (size <= MaxPooledBufferBytes)
+        {
+            isPooled = true;
+            return ArrayPool<byte>.Shared.Rent(size);
+        }
+        isPooled = false;
+        return new byte[size];
     }
 
     private static string? TryGetRawETag(HttpResponseMessage response) =>

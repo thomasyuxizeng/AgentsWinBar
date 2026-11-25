@@ -358,4 +358,24 @@ public class ProviderIncidentFetcherTests
         status.Should().NotBeNull();
         status!.IncidentTitle.Should().Be("Elevated errors on platform.claude.com");
     }
+
+    [TestMethod]
+    public async Task GetIncidentAsync_LargeBodyOver512KbPoolCap_StillParsesCleanly()
+    {
+        var padded = new string(' ', 600_000);
+        var payload = Encoding.UTF8.GetBytes(ClaudeJson + padded);
+
+        var handler = new DelegatingHandler((req, _) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StreamContent(new ChunkedStream(payload, 16_384))
+        }));
+
+        var clock = new TestClock(InitialTime);
+        using var fetcher = new ProviderIncidentFetcher(handler, clock);
+
+        var status = await fetcher.GetIncidentAsync("claude");
+
+        status.Should().NotBeNull();
+        status!.IncidentTitle.Should().Be("Elevated errors on platform.claude.com");
+    }
 }

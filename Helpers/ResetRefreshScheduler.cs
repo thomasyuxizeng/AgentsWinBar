@@ -35,4 +35,21 @@ public static class ResetRefreshScheduler
         }
         return result;
     }
+
+    public static int PruneExpiredAttempts(IDictionary<DateTime, ResetRefreshAttempt> attempts, DateTime nowUtc)
+    {
+        if (attempts.Count == 0) return 0;
+        var cutoff = DashboardValues.Utc(nowUtc) - TimeSpan.FromHours(1);
+        List<DateTime>? expired = null;
+        foreach (var (reset, attempt) in attempts)
+        {
+            if (DashboardValues.Utc(reset) < cutoff && DashboardValues.Utc(attempt.TriggeredAtUtc) < cutoff)
+            {
+                (expired ??= []).Add(reset);
+            }
+        }
+        if (expired == null) return 0;
+        foreach (var key in expired) attempts.Remove(key);
+        return expired.Count;
+    }
 }

@@ -117,30 +117,56 @@ public sealed class NativeCostService : INativeTypedCostService, IDisposable
         var plan = _watcher.TakePlan();
         // A deleted index is rebuilt by a listing now; the changed paths alone would leave it empty.
         if (!plan.FullListing && !_scanner.IndexExists) plan = new(true, []);
-        UpdateIndex(plan, ct);
-
         var pricing = _prices.GetPricing();
         try
         {
-            return ReadReports(providers, pricing, asOf, ct);
+            return UpdateAndBuildReports(plan, providers, pricing, asOf, ct);
         }
         catch (CostIndexDatabase.SqliteException ex) when (ex.InvalidIndex)
         {
             // A damaged index is replaced now (opening it for an update validates it), not at the next listing.
             _logger.LogInformation("Native cost index is damaged; rebuilding it");
             _watcher.NotifyLost();
-            UpdateIndex(_watcher.TakePlan(), ct);
-            return ReadReports(providers, pricing, asOf, ct);
+            return UpdateAndBuildReports(_watcher.TakePlan(), providers, pricing, asOf, ct);
         }
     }
 
-    private void UpdateIndex(CostScanPlan plan, CancellationToken ct)
+    private IReadOnlyDictionary<string, CostDataDto?> UpdateAndBuildReports(
+        CostScanPlan plan,
+        string[] providers,
+        CostPricing pricing,
+        DateTimeOffset asOf,
+        CancellationToken ct)
     {
+        var reportProviders = new List<CostProvider>(2);
+        foreach (var provider in providers)
+        {
+            CostProvider? source = provider switch
+            {
+                "claude" => CostProvider.Claude,
+                "codex" => CostProvider.Codex,
+                _ => null
+            };
+            if (source is { } known && !reportProviders.Contains(known))
+            {
+                reportProviders.Add(known);
+            }
+        }
+
         CostScanResult result;
+        IReadOnlyDictionary<CostProvider, CostDataDto> scanned;
         try
         {
             // Two readers only when the folders are listed in full (the first scan reads every log once).
-            result = _scanner.Update(_roots, plan.FullListing ? 2 : 1, ct, plan.FullListing ? null : plan.ChangedPaths);
+            (result, scanned) = _scanner.UpdateAndReadReports(
+                _roots,
+                plan.FullListing ? 2 : 1,
+                reportProviders,
+                pricing,
+                asOf,
+                HistoryDays,
+                ct,
+                plan.FullListing ? null : plan.ChangedPaths);
             _watcher.Complete(plan, succeeded: true);
             _logger.LogDebug("Native cost update ({Mode}): checked {Checked} files, read {Files} files and {Bytes} bytes",
                 plan.FullListing ? "full listing" : "changed files", result.DiscoveredFiles, result.FilesRead, result.BytesRead);
@@ -162,11 +188,7 @@ public sealed class NativeCostService : INativeTypedCostService, IDisposable
             _watcher.Retry(path);
         }
         _skipRetries = retries;
-    }
 
-    private IReadOnlyDictionary<string, CostDataDto?> ReadReports(string[] providers, CostPricing pricing,
-        DateTimeOffset asOf, CancellationToken ct)
-    {
         var reports = new Dictionary<string, CostDataDto?>(providers.Length, StringComparer.Ordinal);
         foreach (var provider in providers)
         {
@@ -180,7 +202,7 @@ public sealed class NativeCostService : INativeTypedCostService, IDisposable
             // The CLI reports Gemini (its "antigravity" provider) as a successful reading without any usage; there
             // are no local Gemini logs to scan, so the native report says the same.
             reports[provider] = source is { } known
-                ? _scanner.ReadReport(known, pricing, asOf, HistoryDays, ct)
+                ? scanned[known]
                 : provider == "gemini" ? EmptyReport("antigravity") : null;
         }
         return reports;

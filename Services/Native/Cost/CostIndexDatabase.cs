@@ -72,6 +72,8 @@ internal sealed class CostIndexDatabase : IDisposable
             Check(Native.sqlite3_reset(Handle));
         }
 
+        internal void Reset() => Check(Native.sqlite3_reset(Handle));
+
         /// <summary>Finalizes the native statement exactly once, however often it is called.</summary>
         public void Dispose()
         {
