@@ -1,4 +1,5 @@
 using AwesomeAssertions;
+using CodexBarWin.Helpers;
 using CodexBarWin.Models;
 using CodexBarWin.Services.Native;
 using static CodexBarWin.Tests.Unit.Services.Native.NativeTestSupport;
@@ -41,7 +42,7 @@ public class NativeUsageDtoMapperTests
     }
 
     [TestMethod]
-    public void ToDto_WhenSignInExpiredWithoutReading_FlagsAuthRequired()
+    public void ToDto_WhenSignInExpiredWithoutReading_ReturnsQuietNonAuthError()
     {
         var result = new NativeUsageResult
         {
@@ -49,12 +50,102 @@ public class NativeUsageDtoMapperTests
             ExpiredFor = TimeSpan.FromMinutes(12)
         };
 
-        var usage = NativeUsageDtoMapper.ToDto(result).ToUsageData(Now.UtcDateTime);
+        var dto = NativeUsageDtoMapper.ToDto(result);
+        var usage = dto.ToUsageData(Now.UtcDateTime);
 
-        usage.AuthRequired.Should().BeTrue();
-        usage.AuthMessage.Should().Contain("expired 12 minutes ago");
+        dto.AuthRequired.Should().BeFalse();
+        dto.AuthError.Should().BeNull();
+        dto.Error.GetProperty("kind").GetString().Should().Be("provider");
+        dto.Error.TryGetProperty("code", out _).Should().BeFalse();
+        dto.Error.GetProperty("message").GetString().Should().Be("Sign-in expired; waiting for the provider's own app to renew it");
+        usage.AuthRequired.Should().BeFalse();
+        usage.AuthMessage.Should().BeNull();
+        usage.Error.Should().Be("Sign-in expired; waiting for the provider's own app to renew it");
         usage.UsageFetchOutcome.Should().Be(FetchOutcome.Failed);
         usage.HasUsage.Should().BeFalse();
+    }
+
+    [TestMethod]
+    [DataRow("claude")]
+    [DataRow("codex")]
+    [DataRow("gemini")]
+    public void ToDto_WhenSignInExpiredWithoutReading_DoesNotTripAuthFailureDetector(string provider)
+    {
+        var dto = NativeUsageDtoMapper.ToDto(new NativeUsageResult { Provider = provider, Status = NativeUsageStatus.SignInExpired, Message = "Sign-in expired" });
+
+        var kind = dto.Error.GetProperty("kind").GetString();
+        var message = dto.Error.GetProperty("message").GetString();
+
+        AuthFailureDetector.IsAuthFailure(provider, null, kind, message).Should().BeFalse();
+        AuthFailureDetector.IsAuthFailure(provider, null, null, NativeUsageDtoMapper.SignInExpiredMessage).Should().BeFalse();
+    }
+
+    [TestMethod]
+    public void ToDto_WhenSignInExpiredWithReading_EmitsCachedRowWithoutErrorOrAuth()
+    {
+        var readingTime = Now.AddMinutes(-20);
+        var expired = Gemini() with
+        {
+            Status = NativeUsageStatus.SignInExpired, Message = "Antigravity sign-in expired 5 minutes ago.", UpdatedAt = readingTime,
+            Cached = true, CacheUpdatedAt = readingTime
+        };
+
+        var dto = NativeUsageDtoMapper.ToDto(expired);
+        var usage = dto.ToUsageData(Now.UtcDateTime);
+
+        dto.Cached.Should().BeTrue();
+        dto.CacheUpdatedAt.Should().Be(readingTime.UtcDateTime);
+        dto.AuthRequired.Should().BeFalse();
+        dto.AuthError.Should().BeNull();
+        dto.Error.ValueKind.Should().Be(System.Text.Json.JsonValueKind.Undefined);
+        usage.AuthRequired.Should().BeFalse();
+        usage.Error.Should().BeNull();
+        usage.UsageIsCached.Should().BeTrue();
+        usage.Session!.Percent.Should().Be(80);
+        usage.UsageFetchOutcome.Should().Be(FetchOutcome.Success);
+    }
+
+    [TestMethod]
+    public void ToDto_WhenSignInExpiredWithReadingNotMarkedCached_StillEmitsCachedRowAtReadingTime()
+    {
+        var expired = Gemini() with { Status = NativeUsageStatus.SignInExpired, UpdatedAt = Now.AddMinutes(-7) };
+
+        var dto = NativeUsageDtoMapper.ToDto(expired);
+
+        dto.Cached.Should().BeTrue();
+        dto.CacheUpdatedAt.Should().Be(Now.AddMinutes(-7).UtcDateTime);
+        dto.AuthRequired.Should().BeFalse();
+    }
+
+    [TestMethod]
+    [DataRow(NativeUsageStatus.SignInMissing, "Not signed in to Claude on Windows.")]
+    [DataRow(NativeUsageStatus.Unauthorized, "Claude rejected the Windows sign-in (HTTP 401).")]
+    public void ToDto_WhenSignedOutOrRejectedWithoutReading_FlagsAuthRequired(NativeUsageStatus status, string message)
+    {
+        var dto = NativeUsageDtoMapper.ToDto(new NativeUsageResult { Provider = "claude", Status = status, Message = message });
+        var usage = dto.ToUsageData(Now.UtcDateTime);
+
+        dto.AuthRequired.Should().BeTrue();
+        dto.AuthError.Should().Be(message);
+        dto.Error.GetProperty("kind").GetString().Should().Be("auth");
+        usage.AuthRequired.Should().BeTrue();
+        usage.UsageFetchOutcome.Should().Be(FetchOutcome.Failed);
+        usage.HasUsage.Should().BeFalse();
+    }
+
+    [TestMethod]
+    [DataRow(NativeUsageStatus.SignInMissing)]
+    [DataRow(NativeUsageStatus.Unauthorized)]
+    public void ToDto_WhenSignedOutOrRejectedWithCachedReading_KeepsReadingAndFlagsAuthRequired(NativeUsageStatus status)
+    {
+        var cached = Gemini() with { Status = status, Message = "Sign in again.", Cached = true, CacheUpdatedAt = Now };
+
+        var dto = NativeUsageDtoMapper.ToDto(cached);
+
+        dto.AuthRequired.Should().BeTrue();
+        dto.AuthError.Should().Be("Sign in again.");
+        dto.Usage.Should().NotBeNull();
+        dto.Cached.Should().BeTrue();
     }
 
     [TestMethod]

@@ -51,10 +51,174 @@ public class CodexNativeClientTests
         }
         """;
 
-    private (CodexNativeClient Client, RecordingHandler Handler) Create(Func<HttpRequestMessage, HttpResponseMessage>? respond = null)
+    private (CodexNativeClient Client, RecordingHandler Handler) Create(Func<HttpRequestMessage, HttpResponseMessage>? respond = null, TestClock? clock = null)
     {
         var handler = new RecordingHandler(respond ?? (_ => Json(UsageJson)));
-        return (new CodexNativeClient(handler.Client(), new ListLogger<CodexNativeClient>(), new CodexNativeOptions { AuthPath = _path }, new TestClock(Now)), handler);
+        return (new CodexNativeClient(handler.Client(), new ListLogger<CodexNativeClient>(), new CodexNativeOptions { AuthPath = _path }, clock ?? new TestClock(Now)), handler);
+    }
+
+    /// <summary>wham/usage with a 5-hour window resetting in an hour and a weekly window that reset an hour ago.</summary>
+    private static string UsageWithOneStaleWindow() => $$"""
+        {"plan_type": "team", "rate_limit": {
+          "primary_window": {"used_percent": 23, "limit_window_seconds": 18000, "reset_at": {{Now.AddHours(1).ToUnixTimeSeconds()}}},
+          "secondary_window": {"used_percent": 61, "limit_window_seconds": 604800, "reset_at": {{Now.AddHours(-1).ToUnixTimeSeconds()}} }
+        }
+        }
+        """;
+
+    [TestMethod]
+    public void ToString_WhenCredentialsHaveTokens_OmitsEveryTokenValue()
+    {
+        var credentials = new CodexCredentials("synthetic-codex-access-token", "synthetic-account-id", Now, Now.AddDays(-1));
+
+        var text = credentials.ToString();
+
+        text.Should().NotContain("synthetic-codex-access-token").And.NotContain("synthetic-account-id");
+        text.Should().Contain("ExpiresAt");
+    }
+
+    [TestMethod]
+    public void ResolveAuthPath_WhenCodexHomeSet_IgnoresIt()
+    {
+        var previous = Environment.GetEnvironmentVariable("CODEX_HOME");
+        try
+        {
+            Environment.SetEnvironmentVariable("CODEX_HOME", Path.Combine(Path.GetTempPath(), "synthetic-codex-home"));
+
+            new CodexNativeOptions().ResolveAuthPath().Should().Be(
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".codex", "auth.json"));
+        }
+        finally { Environment.SetEnvironmentVariable("CODEX_HOME", previous); }
+    }
+
+    [TestMethod]
+    public void ResolveAuthPath_WhenExplicitPathGiven_UsesIt()
+    {
+        var previous = Environment.GetEnvironmentVariable("CODEX_HOME");
+        try
+        {
+            Environment.SetEnvironmentVariable("CODEX_HOME", Path.Combine(Path.GetTempPath(), "synthetic-codex-home"));
+            var explicitPath = Path.Combine(Path.GetTempPath(), "synthetic-explicit", "auth.json");
+
+            new CodexNativeOptions { AuthPath = explicitPath }.ResolveAuthPath().Should().Be(explicitPath);
+        }
+        finally { Environment.SetEnvironmentVariable("CODEX_HOME", previous); }
+    }
+
+    [TestMethod]
+    public async Task FetchAsync_WhenTokenExpiredAfterGoodReading_ServesLastGoodReadingAsCached()
+    {
+        var (client, handler) = Create();
+        await client.FetchAsync();
+        File.WriteAllText(_path, Auth(Now.AddHours(-3)));
+
+        var result = await client.FetchAsync();
+
+        result.Status.Should().Be(NativeUsageStatus.SignInExpired);
+        result.Cached.Should().BeTrue();
+        result.CacheUpdatedAt.Should().Be(Now);
+        result.ExpiredFor.Should().Be(TimeSpan.FromHours(3));
+        result.Primary!.UsedPercent.Should().Be(0, "the recorded 5-hour window's reset time is long past");
+        result.Secondary.Should().NotBeNull();
+        result.NetworkCalls.Should().Be(0);
+        handler.Requests.Should().ContainSingle();
+    }
+
+    [TestMethod]
+    [DataRow(HttpStatusCode.InternalServerError, NativeUsageStatus.Failed)]
+    [DataRow(HttpStatusCode.BadGateway, NativeUsageStatus.Failed)]
+    [DataRow(HttpStatusCode.TooManyRequests, NativeUsageStatus.RateLimited)]
+    public async Task FetchAsync_WhenTransientHttpFailureAfterGoodReading_ServesLastGoodReadingAsCached(HttpStatusCode status, NativeUsageStatus expected)
+    {
+        var failing = false;
+        var (client, _) = Create(_ => failing ? new HttpResponseMessage(status) : Json(UsageWithOneStaleWindow()));
+        await client.FetchAsync();
+
+        failing = true;
+        var result = await client.FetchAsync();
+
+        result.Status.Should().Be(expected);
+        result.HttpStatus.Should().Be((int)status);
+        result.Cached.Should().BeTrue();
+        result.CacheUpdatedAt.Should().Be(Now);
+        result.Primary!.UsedPercent.Should().Be(23);
+        result.Primary.ResetsAt.Should().Be(Now.AddHours(1));
+    }
+
+    [TestMethod]
+    public async Task FetchAsync_WhenNetworkErrorAfterGoodReading_ServesLastGoodReadingAsCached()
+    {
+        var failing = false;
+        var (client, _) = Create(_ => failing ? throw new HttpRequestException("synthetic network failure") : Json(UsageWithOneStaleWindow()));
+        await client.FetchAsync();
+
+        failing = true;
+        var result = await client.FetchAsync();
+
+        result.Status.Should().Be(NativeUsageStatus.Failed);
+        result.Cached.Should().BeTrue();
+        result.Primary!.UsedPercent.Should().Be(23);
+    }
+
+    [TestMethod]
+    public async Task FetchAsync_WhenTimeoutAfterGoodReading_ServesLastGoodReadingAsCached()
+    {
+        var failing = false;
+        var (client, _) = Create(_ => failing ? throw new TaskCanceledException("synthetic timeout") : Json(UsageWithOneStaleWindow()));
+        await client.FetchAsync();
+
+        failing = true;
+        var result = await client.FetchAsync();
+
+        result.Status.Should().Be(NativeUsageStatus.Failed);
+        result.Message.Should().Contain("timed out");
+        result.Cached.Should().BeTrue();
+        result.Primary!.UsedPercent.Should().Be(23);
+    }
+
+    [TestMethod]
+    public async Task FetchAsync_WhenUnauthorizedAfterGoodReading_DoesNotServeLastGoodReading()
+    {
+        var failing = false;
+        var (client, _) = Create(_ => failing ? new HttpResponseMessage(HttpStatusCode.Unauthorized) : Json(UsageWithOneStaleWindow()));
+        await client.FetchAsync();
+
+        failing = true;
+        var result = await client.FetchAsync();
+
+        result.Status.Should().Be(NativeUsageStatus.Unauthorized);
+        result.Cached.Should().BeFalse();
+        result.HasUsage.Should().BeFalse();
+    }
+
+    [TestMethod]
+    public async Task FetchAsync_WhenFailureBeforeAnyGoodReading_ReturnsFailureWithoutCachedRow()
+    {
+        var (client, _) = Create(_ => new HttpResponseMessage(HttpStatusCode.InternalServerError));
+
+        var result = await client.FetchAsync();
+
+        result.Status.Should().Be(NativeUsageStatus.Failed);
+        result.Cached.Should().BeFalse();
+        result.HasUsage.Should().BeFalse();
+    }
+
+    [TestMethod]
+    public async Task FetchAsync_WhenServedLastGoodHasPastReset_ReportsThatWindowAsUnused()
+    {
+        var failing = false;
+        var (client, _) = Create(_ => failing ? new HttpResponseMessage(HttpStatusCode.BadGateway) : Json(UsageWithOneStaleWindow()));
+        var fresh = await client.FetchAsync();
+
+        failing = true;
+        var cached = await client.FetchAsync();
+
+        fresh.Secondary!.UsedPercent.Should().Be(61, "a fresh reading is passed through untouched");
+        cached.Cached.Should().BeTrue();
+        cached.Secondary!.UsedPercent.Should().Be(0);
+        cached.Secondary.ResetsAt.Should().BeNull();
+        cached.Primary!.UsedPercent.Should().Be(23, "the 5-hour window has not reset yet");
+        cached.Primary.ResetsAt.Should().Be(Now.AddHours(1));
     }
 
     [TestMethod]

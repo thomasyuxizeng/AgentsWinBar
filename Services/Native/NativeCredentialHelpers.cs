@@ -44,11 +44,44 @@ public static class NativeCredentialFile
     /// <summary>Refuse absurd files rather than reading them whole (the Claude file is about 36 KB).</summary>
     public const int MaxBytes = 4 * 1024 * 1024;
 
+    /// <summary>How long to wait before the single retry when the owner was caught mid-rewrite.</summary>
+    public static readonly TimeSpan RetryDelay = TimeSpan.FromMilliseconds(75);
+
     /// <summary>
     /// Reads a whole file opened with <c>FileShare.ReadWrite | FileShare.Delete</c>. Returns null when the file does not
-    /// exist. Never writes, never locks out the owner.
+    /// exist. Never writes, never locks out the owner. The owning app may be rewriting the file at that moment, so
+    /// content that is empty or not valid JSON is read once more after <see cref="RetryDelay"/>; whatever the second
+    /// read holds is returned. <paramref name="delayBeforeRetry"/> replaces the wait (for tests).
     /// </summary>
-    public static async Task<SensitiveBuffer?> ReadAsync(string path, CancellationToken ct)
+    public static async Task<SensitiveBuffer?> ReadAsync(string path, CancellationToken ct, Func<CancellationToken, Task>? delayBeforeRetry = null)
+    {
+        var first = await ReadOnceAsync(path, ct).ConfigureAwait(false);
+        if (first == null) return null;
+        if (IsCompleteJson(first.Span)) return first;
+
+        first.Dispose(); // zeroes the half-written content before waiting
+        await (delayBeforeRetry?.Invoke(ct) ?? Task.Delay(RetryDelay, ct)).ConfigureAwait(false);
+        return await ReadOnceAsync(path, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>True for exactly one complete JSON document (empty content or a truncated document is not).</summary>
+    private static bool IsCompleteJson(ReadOnlySpan<byte> bytes)
+    {
+        var content = WithoutBom(bytes);
+        if (content.IsEmpty) return false;
+        try
+        {
+            var reader = new Utf8JsonReader(content, ReaderOptions);
+            while (reader.Read()) { }
+            return true;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    private static async Task<SensitiveBuffer?> ReadOnceAsync(string path, CancellationToken ct)
     {
         FileStream stream;
         try

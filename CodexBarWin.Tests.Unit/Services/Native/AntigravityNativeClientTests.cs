@@ -38,11 +38,11 @@ public class AntigravityNativeClientTests
         """;
 
     private static (AntigravityNativeClient Client, RecordingHandler Handler) Create(string? blob, Func<HttpRequestMessage, HttpResponseMessage>? respond = null,
-        AntigravityNativeOptions? options = null, AntigravityTokenRefresher? refresher = null)
+        AntigravityNativeOptions? options = null, TimeProvider? clock = null)
     {
         var handler = new RecordingHandler(respond ?? Default);
         var client = new AntigravityNativeClient(handler.Client(), new ListLogger<AntigravityNativeClient>(), new FakeCredentialSource(blob),
-            options, new TestClock(Now), refresher);
+            options, clock ?? new TestClock(Now));
         return (client, handler);
     }
 
@@ -99,7 +99,7 @@ public class AntigravityNativeClientTests
     }
 
     [TestMethod]
-    public async Task FetchAsync_WhenTokenExpiredAndRefreshOff_ReturnsSignInExpiredWithoutCalling()
+    public async Task FetchAsync_WhenTokenExpired_ReturnsSignInExpiredWithoutCalling()
     {
         var (client, handler) = Create(Blob(Now.AddMinutes(-6)));
 
@@ -137,51 +137,131 @@ public class AntigravityNativeClientTests
     }
 
     [TestMethod]
-    public async Task FetchAsync_WhenRefreshOnAndExpired_RefreshesInMemoryOnce()
-    {
-        var refreshCalls = 0;
-        var (client, handler) = Create(Blob(Now.AddMinutes(-6)), request =>
-        {
-            if (request.RequestUri!.Host == "oauth2.googleapis.com")
-            {
-                refreshCalls++;
-                return Json("""{"access_token": "synthetic-refreshed-token", "expires_in": 3599, "token_type": "Bearer"}""");
-            }
-            return Default(request);
-        }, new AntigravityNativeOptions { AllowInMemoryRefresh = true });
-        // A refresher whose client comes from a synthetic resolver, never from the installed binary.
-        var refresher = new AntigravityTokenRefresher(handler.Client(), new ListLogger<AntigravityTokenRefresher>(),
-            () => new AntigravityOAuthClient("123-synthetic.apps.googleusercontent.com", "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0"), new TestClock(Now));
-        client = new AntigravityNativeClient(handler.Client(), new ListLogger<AntigravityNativeClient>(),
-            new FakeCredentialSource(Blob(Now.AddMinutes(-6))), new AntigravityNativeOptions { AllowInMemoryRefresh = true }, new TestClock(Now), refresher);
-
-        var first = await client.FetchAsync();
-        var second = await client.FetchAsync();
-
-        first.Status.Should().Be(NativeUsageStatus.Ok);
-        first.NetworkCalls.Should().Be(3);
-        second.NetworkCalls.Should().Be(2, "the refreshed token is reused from memory");
-        refreshCalls.Should().Be(1);
-        handler.Bodies[0].Should().Contain("grant_type=refresh_token").And.Contain("client_id=123-synthetic");
-        handler.Requests.Where(r => r.RequestUri!.Host != "oauth2.googleapis.com")
-            .Should().AllSatisfy(r => r.Headers.Authorization!.Parameter.Should().Be("synthetic-refreshed-token"));
-    }
+    public void Options_WhenInspected_HasNoRefreshSwitch() =>
+        typeof(AntigravityNativeOptions).GetProperty("AllowInMemoryRefresh").Should().BeNull("the opt-in Google token refresh was removed");
 
     [TestMethod]
-    public async Task FetchAsync_WhenRefreshRefused_ReturnsSignInExpired()
+    public async Task FetchAsync_WhenTokenExpiredAfterGoodReading_ServesLastGoodReadingAsCached()
     {
-        var handler = new RecordingHandler(request => request.RequestUri!.Host == "oauth2.googleapis.com"
-            ? Json("""{"error": "invalid_grant"}""", HttpStatusCode.BadRequest) : Default(request));
-        var refresher = new AntigravityTokenRefresher(handler.Client(), new ListLogger<AntigravityTokenRefresher>(),
-            () => new AntigravityOAuthClient("123-synthetic.apps.googleusercontent.com", "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0"), new TestClock(Now));
-        var client = new AntigravityNativeClient(handler.Client(), new ListLogger<AntigravityNativeClient>(),
-            new FakeCredentialSource(Blob(Now.AddMinutes(-6))), new AntigravityNativeOptions { AllowInMemoryRefresh = true }, new TestClock(Now), refresher);
+        var clock = new TestClock(Now);
+        var (client, handler) = Create(Blob(Now.AddMinutes(30)), clock: clock);
+        await client.FetchAsync();
 
+        clock.Now = Now.AddMinutes(45);
         var result = await client.FetchAsync();
 
         result.Status.Should().Be(NativeUsageStatus.SignInExpired);
-        result.NetworkCalls.Should().Be(1);
-        handler.Requests.Should().ContainSingle();
+        result.Cached.Should().BeTrue();
+        result.CacheUpdatedAt.Should().Be(Now);
+        result.Primary!.UsedPercent.Should().BeApproximately(80, 1e-9);
+        result.ExpiredFor.Should().NotBeNull();
+        result.NetworkCalls.Should().Be(0);
+        handler.Requests.Should().HaveCount(2, "the expired read makes no call");
+    }
+
+    [TestMethod]
+    [DataRow(HttpStatusCode.InternalServerError, NativeUsageStatus.Failed)]
+    [DataRow(HttpStatusCode.BadGateway, NativeUsageStatus.Failed)]
+    [DataRow(HttpStatusCode.TooManyRequests, NativeUsageStatus.RateLimited)]
+    public async Task FetchAsync_WhenTransientHttpFailureAfterGoodReading_ServesLastGoodReadingAsCached(HttpStatusCode status, NativeUsageStatus expected)
+    {
+        var failing = false;
+        var clock = new TestClock(Now);
+        var (client, _) = Create(Blob(Now.AddHours(12)), request => failing ? new HttpResponseMessage(status) : Default(request), clock: clock);
+        await client.FetchAsync();
+
+        failing = true;
+        clock.Now = Now.AddMinutes(1);
+        var result = await client.FetchAsync();
+
+        result.Status.Should().Be(expected);
+        result.HttpStatus.Should().Be((int)status);
+        result.Cached.Should().BeTrue();
+        result.CacheUpdatedAt.Should().Be(Now);
+        result.Primary!.UsedPercent.Should().BeApproximately(80, 1e-9);
+        result.Secondary!.UsedPercent.Should().BeApproximately(39, 1e-9);
+    }
+
+    [TestMethod]
+    public async Task FetchAsync_WhenNetworkErrorAfterGoodReading_ServesLastGoodReadingAsCached()
+    {
+        var failing = false;
+        var (client, _) = Create(Blob(Now.AddHours(12)), request => failing ? throw new HttpRequestException("synthetic network failure") : Default(request));
+        await client.FetchAsync();
+
+        failing = true;
+        var result = await client.FetchAsync();
+
+        result.Status.Should().Be(NativeUsageStatus.Failed);
+        result.Cached.Should().BeTrue();
+        result.Primary.Should().NotBeNull();
+    }
+
+    [TestMethod]
+    public async Task FetchAsync_WhenTimeoutAfterGoodReading_ServesLastGoodReadingAsCached()
+    {
+        var failing = false;
+        var (client, _) = Create(Blob(Now.AddHours(12)), request => failing ? throw new TaskCanceledException("synthetic timeout") : Default(request));
+        await client.FetchAsync();
+
+        failing = true;
+        var result = await client.FetchAsync();
+
+        result.Status.Should().Be(NativeUsageStatus.Failed);
+        result.Message.Should().Contain("timed out");
+        result.Cached.Should().BeTrue();
+        result.Primary.Should().NotBeNull();
+    }
+
+    [TestMethod]
+    public async Task FetchAsync_WhenUnauthorizedAfterGoodReading_DoesNotServeLastGoodReading()
+    {
+        var failing = false;
+        var (client, _) = Create(Blob(Now.AddHours(12)), request => failing ? new HttpResponseMessage(HttpStatusCode.Unauthorized) : Default(request));
+        await client.FetchAsync();
+
+        failing = true;
+        var result = await client.FetchAsync();
+
+        result.Status.Should().Be(NativeUsageStatus.Unauthorized);
+        result.Cached.Should().BeFalse();
+        result.HasUsage.Should().BeFalse();
+    }
+
+    [TestMethod]
+    public async Task FetchAsync_WhenFailureBeforeAnyGoodReading_ReturnsFailureWithoutCachedRow()
+    {
+        var (client, _) = Create(Blob(Now.AddHours(12)), _ => new HttpResponseMessage(HttpStatusCode.InternalServerError));
+
+        var result = await client.FetchAsync();
+
+        result.Status.Should().Be(NativeUsageStatus.Failed);
+        result.Cached.Should().BeFalse();
+        result.HasUsage.Should().BeFalse();
+    }
+
+    [TestMethod]
+    public async Task FetchAsync_WhenServedLastGoodHasPastReset_ReportsThatWindowAsUnused()
+    {
+        var failing = false;
+        var clock = new TestClock(Now);
+        var (client, _) = Create(Blob(Now.AddHours(12)), request => failing ? new HttpResponseMessage(HttpStatusCode.InternalServerError) : Default(request), clock: clock);
+        await client.FetchAsync();
+
+        // 10:00: the Gemini 5-hour window (09:38) and the Claude/GPT 5-hour window (09:00) have reset; the weekly ones have not.
+        failing = true;
+        clock.Now = Now.AddHours(4);
+        var result = await client.FetchAsync();
+
+        result.Cached.Should().BeTrue();
+        result.Primary!.UsedPercent.Should().Be(0);
+        result.Primary.ResetsAt.Should().BeNull();
+        result.Secondary!.UsedPercent.Should().BeApproximately(39, 1e-9);
+        result.Secondary.ResetsAt.Should().NotBeNull();
+        result.ExtraWindows[0].Window.UsedPercent.Should().Be(0);
+        result.ExtraWindows[0].Window.ResetsAt.Should().BeNull();
+        result.ExtraWindows[1].Window.UsedPercent.Should().BeApproximately(25, 1e-9);
+        result.ExtraWindows[1].Window.ResetsAt.Should().NotBeNull();
     }
 
     [TestMethod]

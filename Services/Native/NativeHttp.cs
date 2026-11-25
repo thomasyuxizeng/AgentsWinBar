@@ -15,7 +15,6 @@ public static class NativeHttp
     {
         "api.anthropic.com",
         "chatgpt.com",
-        "oauth2.googleapis.com",
         "cloudcode-pa.googleapis.com",
         "daily-cloudcode-pa.googleapis.com"
     };

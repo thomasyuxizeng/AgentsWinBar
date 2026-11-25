@@ -9,11 +9,6 @@ namespace CodexBarWin.Services.Native;
 
 public sealed record AntigravityNativeOptions
 {
-    /// <summary>
-    /// Off by default. When on, an expired access token is refreshed in memory with the OAuth client found in the
-    /// installed Antigravity binary (see <see cref="AntigravityTokenRefresher"/>); nothing is written back.
-    /// </summary>
-    public bool AllowInMemoryRefresh { get; init; }
     public TimeSpan RequestTimeout { get; init; } = TimeSpan.FromSeconds(10);
     /// <summary>Upstream allows the quota summary 2 s; a cold TLS handshake can take longer, so 5 s here.</summary>
     public TimeSpan QuotaSummaryTimeout { get; init; } = TimeSpan.FromSeconds(5);
@@ -31,8 +26,9 @@ public sealed record AntigravityNativeOptions
 /// Gemini provider exactly as the WSL shim reshapes it: primary = Gemini 5-hour, secondary = Gemini weekly, extra
 /// windows "Claude and GPT 5-hour" / "Claude and GPT weekly". Port of upstream CodexBar's
 /// AntigravityRemoteUsageFetcher (loadCodeAssist, retrieveUserQuotaSummary, fetchAvailableModels fallback).
-/// Differences from upstream: never onboards an account (onboardUser is a write), never persists credentials,
-/// and refreshes only in memory and only when <see cref="AntigravityNativeOptions.AllowInMemoryRefresh"/> is on.
+/// Differences from upstream: never onboards an account (onboardUser is a write), never persists credentials and never
+/// refreshes the token: an expired access token yields <see cref="NativeUsageStatus.SignInExpired"/> until agy renews
+/// it. An expired sign-in and transient failures (network, timeout, 5xx, 429) serve the last good reading as cached.
 /// </summary>
 public sealed class AntigravityNativeClient : INativeUsageClient
 {
@@ -52,37 +48,37 @@ public sealed class AntigravityNativeClient : INativeUsageClient
     private readonly IAntigravityCredentialSource _source;
     private readonly AntigravityNativeOptions _options;
     private readonly TimeProvider _clock;
-    private readonly AntigravityTokenRefresher? _refresher;
-    private AntigravityRefreshedToken? _refreshed;
+    private readonly NativeLastGoodStore _lastGood = new();
 
     public AntigravityNativeClient(
         HttpClient http,
         ILogger<AntigravityNativeClient> logger,
         IAntigravityCredentialSource? source = null,
         AntigravityNativeOptions? options = null,
-        TimeProvider? clock = null,
-        AntigravityTokenRefresher? refresher = null)
+        TimeProvider? clock = null)
     {
         _http = http;
         _logger = logger;
         _source = source ?? new WindowsCredentialManagerSource();
         _options = options ?? new AntigravityNativeOptions();
         _clock = clock ?? TimeProvider.System;
-        _refresher = _options.AllowInMemoryRefresh ? refresher ?? new AntigravityTokenRefresher(http, logger, clock: _clock) : null;
         ProviderId = ProviderConstants.ValidateAndNormalize("gemini");
     }
 
     /// <summary>"gemini": Antigravity quota is shown as the app's Gemini provider.</summary>
     public string ProviderId { get; }
 
-    public async Task<NativeUsageResult> FetchAsync(CancellationToken ct = default)
+    public async Task<NativeUsageResult> FetchAsync(CancellationToken ct = default) =>
+        _lastGood.Apply(await FetchCoreAsync(ct).ConfigureAwait(false), _clock.GetUtcNow());
+
+    private async Task<NativeUsageResult> FetchCoreAsync(CancellationToken ct)
     {
         var now = _clock.GetUtcNow();
         AntigravityCredentials? credentials;
         try
         {
             using var blob = _source.ReadBlob();
-            credentials = blob == null ? null : AntigravityCredentialParser.Parse(blob.Span, includeRefreshFields: _options.AllowInMemoryRefresh);
+            credentials = blob == null ? null : AntigravityCredentialParser.Parse(blob.Span);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -96,35 +92,11 @@ public sealed class AntigravityNativeClient : INativeUsageClient
         var accessToken = credentials.AccessToken;
         if (credentials.Expiry is { } expiry && expiry - _options.ExpirySafetyWindow <= now)
         {
-            if (_refreshed is { } cached && cached.ExpiresAt - _options.ExpirySafetyWindow > now)
-                accessToken = cached.AccessToken;
-            else if (_refresher == null)
-            {
-                var ago = now - expiry;
-                _logger.LogInformation("Antigravity access token expired {Ago} ago; refresh is off (read-only)", NativeParse.Ago(ago));
-                return Fail(NativeUsageStatus.SignInExpired, null, ago > TimeSpan.Zero
-                    ? $"Antigravity sign-in expired {NativeParse.Ago(ago)} ago. Run agy on Windows to renew it."
-                    : "Antigravity sign-in expires in under a minute. Run agy on Windows to renew it.") with { ExpiredFor = ago };
-            }
-            else
-            {
-                AntigravityRefreshedToken? refreshed;
-                try
-                {
-                    calls++;
-                    refreshed = await _refresher.RefreshAsync(credentials, _options.RequestTimeout, ct).ConfigureAwait(false);
-                }
-                catch (Exception ex) when (ex is HttpRequestException or JsonException or IOException or OperationCanceledException && !ct.IsCancellationRequested)
-                {
-                    _logger.LogWarning("Antigravity token refresh failed ({Type})", ex.GetType().Name);
-                    refreshed = null;
-                }
-                if (refreshed == null)
-                    return Fail(NativeUsageStatus.SignInExpired, null,
-                        "Antigravity sign-in expired and could not be renewed in memory. Run agy on Windows.") with { ExpiredFor = now - expiry, NetworkCalls = calls };
-                _refreshed = refreshed;
-                accessToken = refreshed.AccessToken;
-            }
+            var ago = now - expiry;
+            _logger.LogInformation("Antigravity access token expired {Ago} ago; not refreshing (read-only)", NativeParse.Ago(ago));
+            return Fail(NativeUsageStatus.SignInExpired, null, ago > TimeSpan.Zero
+                ? $"Antigravity sign-in expired {NativeParse.Ago(ago)} ago. Run agy on Windows to renew it."
+                : "Antigravity sign-in expires in under a minute. Run agy on Windows to renew it.") with { ExpiredFor = ago };
         }
 
         try

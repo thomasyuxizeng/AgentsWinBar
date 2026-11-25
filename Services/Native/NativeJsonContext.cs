@@ -17,7 +17,6 @@ namespace CodexBarWin.Services.Native;
 [JsonSerializable(typeof(CodeAssistResponse))]
 [JsonSerializable(typeof(QuotaSummaryResponse))]
 [JsonSerializable(typeof(AvailableModelsResponse))]
-[JsonSerializable(typeof(GoogleTokenResponse))]
 public sealed partial class NativeJsonContext : JsonSerializerContext
 {
 }
@@ -230,12 +229,4 @@ public sealed class AvailableModelQuota
 {
     [JsonPropertyName("remainingFraction")] public double? RemainingFraction { get; set; }
     [JsonPropertyName("resetTime")] public string? ResetTime { get; set; }
-}
-
-// ---- Google OAuth token refresh (only with the opt-in refresh flag) ----
-
-public sealed class GoogleTokenResponse
-{
-    [JsonPropertyName("access_token")] public string? AccessToken { get; set; }
-    [JsonPropertyName("expires_in")] public double? ExpiresIn { get; set; }
 }

@@ -268,6 +268,104 @@ public class ClaudeNativeClientTests
     }
 
     [TestMethod]
+    public void ToString_WhenCredentialsHaveToken_OmitsTokenValue()
+    {
+        var credentials = new ClaudeCredentials(SyntheticToken, Now, "team", "default_claude_max_20x");
+
+        var text = credentials.ToString();
+
+        text.Should().NotContain(SyntheticToken);
+        text.Should().Contain("ExpiresAt").And.Contain("team");
+    }
+
+    [TestMethod]
+    public void ToString_WhenParsedFromFile_OmitsEveryTokenInTheFile()
+    {
+        var credentials = ClaudeNativeClient.ParseCredentials(System.Text.Encoding.UTF8.GetBytes(Credentials(Now)))!;
+
+        credentials.ToString().Should().NotContain("synthetic-claude");
+    }
+
+    [TestMethod]
+    public void ResolveCredentialsPath_WhenClaudeConfigDirSet_IgnoresIt()
+    {
+        var previous = Environment.GetEnvironmentVariable("CLAUDE_CONFIG_DIR");
+        try
+        {
+            Environment.SetEnvironmentVariable("CLAUDE_CONFIG_DIR", Path.Combine(Path.GetTempPath(), "synthetic-claude-config"));
+
+            new ClaudeNativeOptions().ResolveCredentialsPath().Should().Be(
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude", ".credentials.json"));
+        }
+        finally { Environment.SetEnvironmentVariable("CLAUDE_CONFIG_DIR", previous); }
+    }
+
+    [TestMethod]
+    public void ResolveCredentialsPath_WhenExplicitPathGiven_UsesIt()
+    {
+        var previous = Environment.GetEnvironmentVariable("CLAUDE_CONFIG_DIR");
+        try
+        {
+            Environment.SetEnvironmentVariable("CLAUDE_CONFIG_DIR", Path.Combine(Path.GetTempPath(), "synthetic-claude-config"));
+            var explicitPath = Path.Combine(Path.GetTempPath(), "synthetic-explicit", ".credentials.json");
+
+            new ClaudeNativeOptions { CredentialsPath = explicitPath }.ResolveCredentialsPath().Should().Be(explicitPath);
+        }
+        finally { Environment.SetEnvironmentVariable("CLAUDE_CONFIG_DIR", previous); }
+    }
+
+    [TestMethod]
+    public async Task FetchAsync_WhenTokenExpiredAfterGoodReading_ServesLastGoodReadingAsCached()
+    {
+        var (client, handler, clock) = Create();
+        await client.FetchAsync();
+        File.WriteAllText(_path, Credentials(Now.AddMinutes(1)));
+        clock.Now = Now.AddMinutes(11);
+
+        var result = await client.FetchAsync();
+
+        result.Status.Should().Be(NativeUsageStatus.SignInExpired);
+        result.Cached.Should().BeTrue();
+        result.CacheUpdatedAt.Should().Be(Now);
+        result.Primary!.UsedPercent.Should().Be(37);
+        result.NetworkCalls.Should().Be(0);
+        handler.Requests.Should().ContainSingle();
+    }
+
+    [TestMethod]
+    public async Task FetchAsync_WhenServedLastGoodHasPastReset_ReportsThatWindowAsUnused()
+    {
+        // The 5-hour window resets at 08:29:59; the failure happens at 08:40, the weekly windows reset on 11-30.
+        var calls = 0;
+        var (client, _, clock) = Create(_ => ++calls == 1 ? Json(UsageJson) : new HttpResponseMessage(HttpStatusCode.BadGateway));
+        var fresh = await client.FetchAsync();
+        clock.Now = new DateTimeOffset(2026, 11, 25, 8, 40, 0, TimeSpan.Zero);
+
+        var result = await client.FetchAsync();
+
+        fresh.Primary!.UsedPercent.Should().Be(37, "a fresh reading is passed through untouched");
+        result.Cached.Should().BeTrue();
+        result.Primary!.UsedPercent.Should().Be(0);
+        result.Primary.ResetsAt.Should().BeNull();
+        result.Secondary!.UsedPercent.Should().Be(12.5);
+        result.Secondary.ResetsAt.Should().NotBeNull();
+        result.ExtraWindows[0].Window.UsedPercent.Should().Be(18);
+    }
+
+    [TestMethod]
+    public async Task FetchAsync_WhenTokenExpiredWithoutGoodReading_ReturnsSignInExpiredOnly()
+    {
+        File.WriteAllText(_path, Credentials(Now.AddMinutes(-5)));
+        var (client, _, _) = Create();
+
+        var result = await client.FetchAsync();
+
+        result.Status.Should().Be(NativeUsageStatus.SignInExpired);
+        result.Cached.Should().BeFalse();
+        result.HasUsage.Should().BeFalse();
+    }
+
+    [TestMethod]
     public void ParseCredentials_WhenOtherKeysPresent_ReadsOnlyClaudeObject()
     {
         var credentials = ClaudeNativeClient.ParseCredentials(System.Text.Encoding.UTF8.GetBytes(Credentials(Now)));
