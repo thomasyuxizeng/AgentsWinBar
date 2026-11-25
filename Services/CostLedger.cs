@@ -107,12 +107,27 @@ public sealed class CostLedger : ICostLedger
             return;
         }
 
-        string rawJson;
+        CostLedgerFile? deserialized = null;
         try
         {
-            rawJson = await File.ReadAllTextAsync(FilePath, ct).ConfigureAwait(false);
+            await using var stream = new FileStream(FilePath, FileMode.Open, FileAccess.Read, FileShare.Read,
+                bufferSize: 16 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
+            if (stream.Length == 0)
+            {
+                _logger.LogWarning("Cost ledger file at {Path} is empty; renaming to corrupt", FilePath);
+                RenameToCorrupt(FilePath, nowUtc);
+                await TryRecoverFromBackupAsync(nowUtc, ct).ConfigureAwait(false);
+                _isLoaded = true;
+                return;
+            }
+            deserialized = await JsonSerializer.DeserializeAsync(stream, AppJsonSerializerContext.Default.CostLedgerFile, ct)
+                .ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (JsonException ex)
+        {
+            _logger.LogWarning(ex, "Failed to parse cost ledger JSON at {Path}; renaming to corrupt", FilePath);
+        }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Could not read cost ledger file at {Path}", FilePath);
@@ -120,25 +135,6 @@ public sealed class CostLedger : ICostLedger
             await TryRecoverFromBackupAsync(nowUtc, ct).ConfigureAwait(false);
             _isLoaded = true;
             return;
-        }
-
-        if (string.IsNullOrWhiteSpace(rawJson))
-        {
-            _logger.LogWarning("Cost ledger file at {Path} is empty; renaming to corrupt", FilePath);
-            RenameToCorrupt(FilePath, nowUtc);
-            await TryRecoverFromBackupAsync(nowUtc, ct).ConfigureAwait(false);
-            _isLoaded = true;
-            return;
-        }
-
-        CostLedgerFile? deserialized = null;
-        try
-        {
-            deserialized = JsonSerializer.Deserialize(rawJson, AppJsonSerializerContext.Default.CostLedgerFile);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Failed to parse cost ledger JSON at {Path}; renaming to corrupt", FilePath);
         }
 
         if (!TryNormalizeFile(deserialized, out var normalized))
@@ -164,10 +160,12 @@ public sealed class CostLedger : ICostLedger
         {
             try
             {
-                var bakJson = await File.ReadAllTextAsync(_bakPath, ct).ConfigureAwait(false);
-                if (!string.IsNullOrWhiteSpace(bakJson))
+                await using var stream = new FileStream(_bakPath, FileMode.Open, FileAccess.Read, FileShare.Read,
+                    bufferSize: 16 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
+                if (stream.Length > 0)
                 {
-                    var recovered = JsonSerializer.Deserialize(bakJson, AppJsonSerializerContext.Default.CostLedgerFile);
+                    var recovered = await JsonSerializer.DeserializeAsync(stream, AppJsonSerializerContext.Default.CostLedgerFile, ct)
+                        .ConfigureAwait(false);
                     if (TryNormalizeFile(recovered, out var normalized))
                     {
                         lock (_stateLock) { _file = normalized; }
@@ -198,9 +196,11 @@ public sealed class CostLedger : ICostLedger
         if (!File.Exists(_costCachePath)) return false;
         try
         {
-            var json = await File.ReadAllTextAsync(_costCachePath, ct).ConfigureAwait(false);
-            if (string.IsNullOrWhiteSpace(json)) return false;
-            var cacheFile = JsonSerializer.Deserialize(json, AppJsonSerializerContext.Default.CostCacheFile);
+            await using var stream = new FileStream(_costCachePath, FileMode.Open, FileAccess.Read, FileShare.Read,
+                bufferSize: 16 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
+            if (stream.Length == 0) return false;
+            var cacheFile = await JsonSerializer.DeserializeAsync(stream, AppJsonSerializerContext.Default.CostCacheFile, ct)
+                .ConfigureAwait(false);
             if (cacheFile?.Items == null || cacheFile.Items.Count == 0) return false;
 
             var changed = false;
@@ -329,36 +329,26 @@ public sealed class CostLedger : ICostLedger
 
             var now = nowUtc ?? _clock.GetUtcNow().UtcDateTime;
 
-            CostLedgerFile backup;
-            lock (_stateLock)
-            {
-                backup = CloneFile(_file);
-            }
-
+            var undo = new List<LedgerUndoEntry>();
             bool saved;
             try
             {
                 foreach (var scan in validScans)
                 {
-                    MergeScanUnlocked(NormalizeScan(scan), now);
+                    MergeScanUnlocked(NormalizeScan(scan), now, undo);
                 }
+                if (undo.Count == 0 && File.Exists(FilePath)) return;
                 saved = await SaveCoreAsync(now, ct).ConfigureAwait(false);
             }
             catch
             {
-                lock (_stateLock)
-                {
-                    _file = backup;
-                }
+                RollbackUnlocked(undo);
                 throw;
             }
 
             if (!saved)
             {
-                lock (_stateLock)
-                {
-                    _file = backup;
-                }
+                RollbackUnlocked(undo);
             }
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
@@ -372,33 +362,40 @@ public sealed class CostLedger : ICostLedger
         }
     }
 
-    private static CostLedgerFile CloneFile(CostLedgerFile file)
+    private readonly record struct LedgerUndoEntry(
+        string Provider,
+        string DateKey,
+        CostLedgerDayEntry? PreviousEntry,
+        bool ProviderExisted);
+
+    private void RollbackUnlocked(List<LedgerUndoEntry> undo)
     {
-        var clone = new CostLedgerFile { SchemaVersion = file.SchemaVersion };
-        if (file.Providers != null)
+        if (undo.Count == 0) return;
+        lock (_stateLock)
         {
-            foreach (var (provider, days) in file.Providers)
+            for (var i = undo.Count - 1; i >= 0; i--)
             {
-                clone.Providers[provider] = days != null
-                    ? new Dictionary<string, CostLedgerDayEntry>(days, StringComparer.OrdinalIgnoreCase)
-                    : new Dictionary<string, CostLedgerDayEntry>(StringComparer.OrdinalIgnoreCase);
+                var entry = undo[i];
+                if (!entry.ProviderExisted)
+                {
+                    _file.Providers.Remove(entry.Provider);
+                    continue;
+                }
+                if (!_file.Providers.TryGetValue(entry.Provider, out var providerDays)) continue;
+                if (entry.PreviousEntry == null) providerDays.Remove(entry.DateKey);
+                else providerDays[entry.DateKey] = entry.PreviousEntry;
             }
         }
-        return clone;
     }
 
-    private void MergeScanUnlocked(CostData scan, DateTime nowUtc)
+    private void MergeScanUnlocked(CostData scan, DateTime nowUtc, IList<LedgerUndoEntry>? undo = null)
     {
         var provider = ProviderConstants.ValidateAndNormalize(scan.Provider);
         var today = DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(DashboardValues.Utc(nowUtc), _clock.LocalTimeZone));
 
         lock (_stateLock)
         {
-            if (!_file.Providers.TryGetValue(provider, out var providerDays))
-            {
-                providerDays = new Dictionary<string, CostLedgerDayEntry>(StringComparer.OrdinalIgnoreCase);
-                _file.Providers[provider] = providerDays;
-            }
+            var providerExisted = _file.Providers.TryGetValue(provider, out var providerDays);
 
             // Group scan daily entries by date
             var scanDays = (scan.Daily ?? []).OfType<DailyCost>().GroupBy(d => d.Date).ToDictionary(g => g.Key, g =>
@@ -432,7 +429,8 @@ public sealed class CostLedger : ICostLedger
             foreach (var (date, scanDay) in scanDays)
             {
                 var dateKey = date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
-                providerDays.TryGetValue(dateKey, out var existing);
+                CostLedgerDayEntry? existing = null;
+                providerDays?.TryGetValue(dateKey, out existing);
 
                 var existingHasData = existing != null && existing.HasData;
                 var scanHasData = scanDay.TotalCost > 0 || scanDay.TotalTokens > 0 ||
@@ -447,12 +445,13 @@ public sealed class CostLedger : ICostLedger
                     continue;
                 }
 
+                CostLedgerDayEntry nextEntry;
                 if (date == today || (existing != null && !existing.HasSameTokenCoverage(scanDay)))
                 {
                     // Without unchanged token coverage a lower total may reflect rotated logs, not repricing.
                     if (existing == null)
                     {
-                        providerDays[dateKey] = new CostLedgerDayEntry
+                        nextEntry = new CostLedgerDayEntry
                         {
                             Date = date,
                             CostUSD = scanDay.TotalCost,
@@ -474,7 +473,7 @@ public sealed class CostLedger : ICostLedger
                     else
                     {
                         var mergedModels = MergeModelsUpward(existing.Models, scanDay.ModelBreakdowns);
-                        providerDays[dateKey] = existing with
+                        nextEntry = existing with
                         {
                             CostUSD = Math.Max(existing.CostUSD, scanDay.TotalCost),
                             TotalTokens = Math.Max(existing.TotalTokens, scanDay.TotalTokens),
@@ -491,7 +490,7 @@ public sealed class CostLedger : ICostLedger
                 else
                 {
                     // A past day's unchanged token coverage permits a price correction in either direction.
-                    providerDays[dateKey] = new CostLedgerDayEntry
+                    nextEntry = new CostLedgerDayEntry
                     {
                         Date = date,
                         CostUSD = scanDay.TotalCost,
@@ -510,8 +509,52 @@ public sealed class CostLedger : ICostLedger
                         LastUpdatedUtc = nowUtc
                     };
                 }
+
+                if (existing != null && DayEntryMatchesValues(existing, nextEntry))
+                {
+                    continue;
+                }
+
+                undo?.Add(new LedgerUndoEntry(provider, dateKey, existing, providerExisted));
+                if (providerDays == null)
+                {
+                    providerDays = new Dictionary<string, CostLedgerDayEntry>(StringComparer.OrdinalIgnoreCase);
+                    _file.Providers[provider] = providerDays;
+                    providerExisted = true;
+                }
+                providerDays[dateKey] = nextEntry;
             }
         }
+    }
+
+    private static bool DayEntryMatchesValues(CostLedgerDayEntry existing, CostLedgerDayEntry candidate)
+    {
+        if (existing.Date != candidate.Date ||
+            existing.CostUSD != candidate.CostUSD ||
+            existing.TotalTokens != candidate.TotalTokens ||
+            existing.InputTokens != candidate.InputTokens ||
+            existing.OutputTokens != candidate.OutputTokens ||
+            existing.CacheReadTokens != candidate.CacheReadTokens ||
+            existing.CacheWriteTokens != candidate.CacheWriteTokens ||
+            existing.ReasoningTokens != candidate.ReasoningTokens)
+        {
+            return false;
+        }
+
+        var a = existing.Models;
+        var b = candidate.Models;
+        if (ReferenceEquals(a, b)) return true;
+        if (a == null || b == null || a.Count != b.Count) return false;
+        for (var i = 0; i < a.Count; i++)
+        {
+            if (!string.Equals(a[i].ModelName, b[i].ModelName, StringComparison.OrdinalIgnoreCase) ||
+                a[i].TotalTokens != b[i].TotalTokens ||
+                a[i].CostUSD != b[i].CostUSD)
+            {
+                return false;
+            }
+        }
+        return true;
     }
 
     private static IReadOnlyList<CostLedgerModelEntry> MergeModelsUpward(
@@ -575,9 +618,13 @@ public sealed class CostLedger : ICostLedger
                 snapshot = _file;
             }
 
-            var json = JsonSerializer.Serialize(snapshot, AppJsonSerializerContext.Default.CostLedgerFile);
-
-            await File.WriteAllTextAsync(_tmpPath, json, ct).ConfigureAwait(false);
+            await using (var stream = new FileStream(_tmpPath, FileMode.Create, FileAccess.Write, FileShare.None,
+                bufferSize: 16 * 1024, FileOptions.Asynchronous))
+            {
+                await JsonSerializer.SerializeAsync(stream, snapshot, AppJsonSerializerContext.Default.CostLedgerFile, ct)
+                    .ConfigureAwait(false);
+                await stream.FlushAsync(ct).ConfigureAwait(false);
+            }
             File.Move(_tmpPath, FilePath, overwrite: true);
             return true;
         }

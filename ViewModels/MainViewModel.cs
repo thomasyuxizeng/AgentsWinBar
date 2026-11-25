@@ -376,14 +376,20 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         var locked = QuerySessionLocked();
         var now = DateTime.UtcNow;
-        foreach (var window in new[] { data.Session, data.Weekly, data.Tertiary }.Concat(data.ExtraWindows.Select(e => e.Window)))
-        {
-            if (window?.ResetDetectedAtUtc is not { } stamp) continue;
-            // A stamp is the detection time, so only a fresh one can have been detected on this locked screen
-            if (_knownResetStamps.Add(stamp) && locked && now - stamp.ToUniversalTime() <= TimeSpan.FromMinutes(5))
-                _resetVisibility.NoteUnseen(stamp);
-        }
+        NoteWindowResetStamp(data.Session, locked, now);
+        NoteWindowResetStamp(data.Weekly, locked, now);
+        NoteWindowResetStamp(data.Tertiary, locked, now);
+        foreach (var extra in data.ExtraWindows)
+            NoteWindowResetStamp(extra.Window, locked, now);
         if (_knownResetStamps.Count > 64) _knownResetStamps.Clear();
+    }
+
+    private void NoteWindowResetStamp(UsageWindow? window, bool locked, DateTime nowUtc)
+    {
+        if (window?.ResetDetectedAtUtc is not { } stamp) return;
+        // A stamp is the detection time, so only a fresh one can have been detected on this locked screen
+        if (_knownResetStamps.Add(stamp) && locked && nowUtc - stamp.ToUniversalTime() <= TimeSpan.FromMinutes(5))
+            _resetVisibility.NoteUnseen(stamp);
     }
 
     private void OnSessionLocked(object? sender, EventArgs e)
@@ -539,7 +545,15 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     if (_disposed || _stopped || _exiting || ct.IsCancellationRequested ||
                         !ReferenceEquals(backgroundScan ? _backgroundCostRefreshCts : _costRefreshCts, scanCts) ||
                         !_settingsService.Settings.ShowCostTotals || _settingsService.Settings.DeveloperModeEnabled) return;
-                    var index = Providers.ToList().FindIndex(p => p.Provider.Equals(provider, StringComparison.OrdinalIgnoreCase));
+                    var index = -1;
+                    for (var i = 0; i < Providers.Count; i++)
+                    {
+                        if (Providers[i].Provider.Equals(provider, StringComparison.OrdinalIgnoreCase))
+                        {
+                            index = i;
+                            break;
+                        }
+                    }
                     if (index >= 0) Providers[index] = Providers[index] with { Cost = cost };
                 }
                 catch (Exception ex) { published.TrySetException(ex); }
@@ -1007,6 +1021,16 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
     }
 
+    private bool IsProviderEnabled(string providerId)
+    {
+        foreach (var provider in _settingsService.Settings.Providers)
+        {
+            if (provider.IsEnabled && provider.Id.Equals(providerId, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+        return false;
+    }
+
     /// <summary>
     /// Recreates the periodic timer with the current refresh interval from settings.
     /// </summary>
@@ -1025,11 +1049,18 @@ public partial class MainViewModel : ObservableObject, IDisposable
             var lockedInterval = TimeSpan.FromMinutes(_settingsService.Settings.LockedRefreshIntervalMinutes);
             if (lockedInterval > normalDelay) normalDelay = lockedInterval;
         }
-        var enabled = _settingsService.Settings.Providers.Where(p => p.IsEnabled).Select(p => p.Id)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var resetTimes = Providers.Where(p => enabled.Contains(p.Provider))
-            .SelectMany(p => new[] { p.Session, p.Weekly, p.Tertiary }
-                .Concat(p.ExtraWindows.Select(e => e.Window))).Select(w => w?.ResetAt);
+        var resetTimes = new List<DateTime?>(Providers.Count * 4);
+        foreach (var provider in Providers)
+        {
+            if (!IsProviderEnabled(provider.Provider)) continue;
+            if (provider.Session?.ResetAt is { } sessionReset) resetTimes.Add(sessionReset);
+            if (provider.Weekly?.ResetAt is { } weeklyReset) resetTimes.Add(weeklyReset);
+            if (provider.Tertiary?.ResetAt is { } tertiaryReset) resetTimes.Add(tertiaryReset);
+            foreach (var extra in provider.ExtraWindows)
+            {
+                if (extra.Window?.ResetAt is { } extraReset) resetTimes.Add(extraReset);
+            }
+        }
         var schedule = locked ? new ResetRefreshSchedule(normalDelay)
             : ResetRefreshScheduler.GetSchedule(resetTimes, now, normalDelay, _resetRefreshAttempts);
         EffectiveRefreshInterval = schedule.Delay;

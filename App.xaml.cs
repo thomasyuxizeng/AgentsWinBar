@@ -108,16 +108,22 @@ public partial class App : Application
                 return;
             }
 
-            // Load cache
+            // Load cache and persistent stores concurrently before setup validation.
             var cacheService = Services.GetRequiredService<ICacheService>();
-            await cacheService.LoadAsync();
+            var historyPersistence = Services.GetRequiredService<UsageHistoryPersistence>();
+            var costLedger = Services.GetRequiredService<ICostLedger>();
+            var earlyResetStore = Services.GetRequiredService<IEarlyResetStore>();
+            var setupMemoTask = Services.GetRequiredService<ISetupMemoService>().IsValidAsync();
 
-            await Services.GetRequiredService<UsageHistoryPersistence>().LoadAsync();
-            await Services.GetRequiredService<ICostLedger>().LoadAsync();
-            await Services.GetRequiredService<IEarlyResetStore>().LoadAsync();
+            await Task.WhenAll(
+                cacheService.LoadAsync(),
+                historyPersistence.LoadAsync(),
+                costLedger.LoadAsync(),
+                earlyResetStore.LoadAsync(),
+                setupMemoTask);
 
             // A recent successful setup avoids waking WSL solely for launch validation.
-            if (await Services.GetRequiredService<ISetupMemoService>().IsValidAsync())
+            if (await setupMemoTask)
             {
                 StartMainWindow();
                 return;

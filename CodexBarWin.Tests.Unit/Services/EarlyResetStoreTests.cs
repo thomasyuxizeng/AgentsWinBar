@@ -328,4 +328,17 @@ public class EarlyResetStoreTests
         restarted.GetActive(Now.UtcDateTime).Should().ContainSingle();
         restarted.Record(reset).Should().BeFalse();
     }
+
+    [TestMethod]
+    public async Task LoadAsync_EmptyOrCorruptFile_RenamesCorruptWithoutThrowing()
+    {
+        var store = CreateStore();
+        Directory.CreateDirectory(Path.GetDirectoryName(store.FilePath)!);
+        await File.WriteAllTextAsync(store.FilePath, "");
+
+        await store.LoadAsync();
+
+        store.GetActive(Now.UtcDateTime).Should().BeEmpty();
+        File.Exists(store.FilePath).Should().BeFalse();
+    }
 }

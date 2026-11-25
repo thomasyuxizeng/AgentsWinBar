@@ -891,4 +891,22 @@ public class CostLedgerTests
         ledger.GetLifetime("claude").TotalCostUSD.Should().Be(7.5m);
         ledger.GetLifetime("claude").TotalTokens.Should().Be(7500);
     }
+
+    [TestMethod]
+    public async Task RecordScansAsync_IdenticalScanReRecorded_SkipsDiskRewrite()
+    {
+        var ledger = CreateLedger();
+        var date = new DateOnly(2026, 10, 1);
+        var claudeScan = SampleScan("claude", date, 5.0m, 5000);
+
+        await ledger.RecordScansAsync([claudeScan]);
+        var marker = new DateTime(2026, 10, 1, 0, 0, 0, DateTimeKind.Utc);
+        File.SetLastWriteTimeUtc(_ledgerPath, marker);
+
+        await ledger.RecordScansAsync([claudeScan]);
+
+        File.GetLastWriteTimeUtc(_ledgerPath).Should().Be(marker);
+        ledger.GetLifetime("claude").TotalCostUSD.Should().Be(5.0m);
+        ledger.GetLifetime("claude").TotalTokens.Should().Be(5000);
+    }
 }

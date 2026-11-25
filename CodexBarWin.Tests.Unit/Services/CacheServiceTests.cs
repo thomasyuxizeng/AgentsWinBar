@@ -429,4 +429,36 @@ public class CacheServiceTests
         var rawJson = await File.ReadAllTextAsync(_cachePath);
         rawJson.Should().Contain("\"claude\"").And.NotContain("\"codex\"");
     }
+
+    [TestMethod]
+    public async Task LoadAsync_Utf8BomWithCorruptSibling_LoadsValidEntriesOnly()
+    {
+        var timestamp = DateTime.UtcNow.ToString("O");
+        var json = $$"""
+            {
+              "timestamp": "{{timestamp}}",
+              "items": {
+                "claude": {
+                  "provider": "claude",
+                  "fetchedAt": "{{timestamp}}",
+                  "session": { "reportedPercent": 42 },
+                  "usageFetchOutcome": 0
+                },
+                "codex": {
+                  "provider": "codex",
+                  "fetchedAt": "{{timestamp}}",
+                  "session": "not-an-object"
+                }
+              }
+            }
+            """;
+        Directory.CreateDirectory(Path.GetDirectoryName(_cachePath)!);
+        await File.WriteAllBytesAsync(_cachePath, [0xEF, 0xBB, 0xBF, .. System.Text.Encoding.UTF8.GetBytes(json)]);
+
+        await _cacheService.LoadAsync();
+
+        _cacheService.Get("claude").Should().NotBeNull();
+        _cacheService.Get("claude")!.Session!.Percent.Should().Be(42);
+        _cacheService.Get("codex").Should().BeNull();
+    }
 }

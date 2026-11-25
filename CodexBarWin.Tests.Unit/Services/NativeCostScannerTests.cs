@@ -497,6 +497,32 @@ public sealed partial class NativeCostScannerTests
         {"type":"assistant","timestamp":"{{{{timestamp}}}}","requestId":"request-{{{{id}}}}","message":{"id":"message-{{{{id}}}}","model":"claude-sonnet-4-6","usage":{"input_tokens":{{{{input}}}}}}}
         """;
 
+    [TestMethod]
+    public void UpdateAndReadReports_AlternatingModelsInSameFile_ResolvesAllModelBreakdowns()
+    {
+        var logPath = Path.Combine(Claude, "alternating.jsonl");
+        var lines = new[]
+        {
+            ClaudeLine("1", 100),
+            ClaudeLine("2", 200).Replace("claude-sonnet-4-6", "claude-haiku-4-5", StringComparison.Ordinal),
+            ClaudeLine("3", 300).Replace("claude-sonnet-4-6", "claude-opus-4-6", StringComparison.Ordinal),
+            ClaudeLine("4", 400),
+            ClaudeLine("5", 500).Replace("claude-sonnet-4-6", "claude-haiku-4-5", StringComparison.Ordinal)
+        };
+        File.WriteAllLines(logPath, lines);
+
+        var scanner = Scanner();
+        var result = scanner.UpdateAndReadReports(
+            [new(CostProvider.Claude, Claude)], workers: 1, [CostProvider.Claude], null, Today, 30, CancellationToken.None);
+
+        var claude = result.Reports[CostProvider.Claude];
+        claude.SessionTokens.Should().Be(1500);
+        var breakdowns = claude.Daily!.Single().ModelBreakdowns!;
+        breakdowns.Should().Contain(m => m.ModelName == "claude-sonnet-4-6" && m.TotalTokens == 500);
+        breakdowns.Should().Contain(m => m.ModelName == "claude-haiku-4-5" && m.TotalTokens == 700);
+        breakdowns.Should().Contain(m => m.ModelName == "claude-opus-4-6" && m.TotalTokens == 300);
+    }
+
     private sealed class DoubleRates : CostPricing
     {
         public override CostRates? GetRates(CostProvider provider, string model, bool above200K, bool above272K,
