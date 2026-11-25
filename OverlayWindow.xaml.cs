@@ -112,6 +112,7 @@ public sealed partial class OverlayWindow : Window
     private System.Threading.Timer? _pollTimer;
     private bool _pollEnabled;
     private int _pollBusy;
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> _loggedPollFailures = new();
     private int _tickCount;
     private int _lockPollCount;
     private volatile bool _hiddenForFullscreen;
@@ -306,7 +307,7 @@ public sealed partial class OverlayWindow : Window
                     DispatcherQueue.TryEnqueue(() =>
                     {
                         try { if (!_closed) SyncResetGate(); }
-                        catch { }
+                        catch (Exception ex) { LogPollFailure(ex, "lock sync"); }
                     });
                 }
                 ReschedulePoll(LockedTick);
@@ -318,7 +319,7 @@ public sealed partial class OverlayWindow : Window
                 DispatcherQueue.TryEnqueue(() =>
                 {
                     try { ResumeAfterLock(); }
-                    catch { }
+                    catch (Exception ex) { LogPollFailure(ex, "resume after lock"); }
                 });
                 ReschedulePoll(ActiveTick);
                 return;
@@ -330,7 +331,7 @@ public sealed partial class OverlayWindow : Window
                 DispatcherQueue.TryEnqueue(() =>
                 {
                     try { if (!_closed && !_sessionState.IsLocked) UpdateFullscreenVisibility(); }
-                    catch { }
+                    catch (Exception ex) { LogPollFailure(ex, "fullscreen check"); }
                 });
                 ReschedulePoll(fullscreen ? HiddenTick : ActiveTick);
                 return;
@@ -372,14 +373,27 @@ public sealed partial class OverlayWindow : Window
                 DispatcherQueue.TryEnqueue(() =>
                 {
                     try { RunActiveMaintenance(timeTick); }
-                    catch { }
+                    catch (Exception ex) { LogPollFailure(ex, "reposition"); }
                 });
             }
 
             ReschedulePoll(ActiveTick);
         }
-        catch { ReschedulePoll(ActiveTick); }
+        catch (Exception ex)
+        {
+            LogPollFailure(ex, "poll");
+            ReschedulePoll(ActiveTick);
+        }
         finally { Volatile.Write(ref _pollBusy, 0); }
+    }
+
+    /// <summary>
+    /// Release builds have no logging provider, so poll failures go to crash.log. The poll runs every 2 s: each step is
+    /// recorded once per run, so a failure that repeats cannot fill the file.
+    /// </summary>
+    private void LogPollFailure(Exception ex, string step)
+    {
+        if (_loggedPollFailures.TryAdd(step, 0)) App.LogHandled($"Overlay {step} failed", ex);
     }
 
     private void RunActiveMaintenance(bool timeTick)
@@ -459,7 +473,7 @@ public sealed partial class OverlayWindow : Window
                 SyncResetGate();
                 SetTickInterval(LockedTick);
             }
-            catch { }
+            catch (Exception ex) { LogPollFailure(ex, "lock"); }
         });
     }
 
@@ -471,7 +485,7 @@ public sealed partial class OverlayWindow : Window
             {
                 ResumeAfterLock();
             }
-            catch { }
+            catch (Exception ex) { LogPollFailure(ex, "unlock"); }
         });
     }
 
