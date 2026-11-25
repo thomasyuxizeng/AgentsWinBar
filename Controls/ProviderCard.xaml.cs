@@ -9,7 +9,7 @@ namespace CodexBarWin.Controls;
 /// <summary>
 /// One extra usage window on a provider card (e.g. "Fable only").
 /// </summary>
-public sealed class CardExtraRow
+public sealed record CardExtraRow
 {
     public string Title { get; set; } = string.Empty;
     public Helpers.WindowAccent Accent { get; set; }
@@ -45,6 +45,9 @@ public sealed partial class ProviderCard : UserControl
 
     public event EventHandler<UsageData>? DetailRequested;
 
+    private string? _iconProvider;
+    private List<CardExtraRow>? _extraRows;
+
     public ProviderCard()
     {
         InitializeComponent();
@@ -73,8 +76,12 @@ public sealed partial class ProviderCard : UserControl
             return;
         }
 
-        // Provider icon
-        ProviderIcon.Data = GetProviderIconGeometry(Data.Provider);
+        // Provider icon (parsed once per provider: the card is updated in place on every refresh)
+        if (!string.Equals(_iconProvider, Data.Provider, StringComparison.Ordinal))
+        {
+            ProviderIcon.Data = GetProviderIconGeometry(Data.Provider);
+            _iconProvider = Data.Provider;
+        }
 
         // Provider name
         ProviderName.Text = FormatProviderName(Data.Provider);
@@ -108,6 +115,8 @@ public sealed partial class ProviderCard : UserControl
         {
             StatusNormal.Visibility = Visibility.Visible;
         }
+        // Spin only while visible: a collapsed ring that stays active keeps the compositor drawing frames
+        if (StatusLoading.IsActive != isLoading) StatusLoading.IsActive = isLoading;
 
         // Show data if available (even during loading/refresh)
         var hasSessionData = Data.Session != null;
@@ -120,7 +129,7 @@ public sealed partial class ProviderCard : UserControl
         // Right-aligned labels share one width, so the bars of session, weekly and the extras line up
         var labelWidth = LabelColumnWidth(extras.Select(x => x.Title).Prepend(Data.WeeklyLabel).Prepend(Data.SessionLabel));
         SessionLabelText.MinWidth = WeeklyLabelText.MinWidth = labelWidth;
-        ExtraList.ItemsSource = extras.Select(x => new CardExtraRow
+        var extraRows = extras.Select(x => new CardExtraRow
         {
             Title = x.Title,
             LabelWidth = labelWidth,
@@ -133,6 +142,12 @@ public sealed partial class ProviderCard : UserControl
             ResetDetectedAtUtc = x.Window.ResetDetectedAtUtc,
             ResetFromUsedPercent = x.Window.ResetFromUsedPercent
         }).ToList();
+        // Unchanged extra rows keep their bars; only a change recreates them
+        if (_extraRows == null || !_extraRows.SequenceEqual(extraRows))
+        {
+            _extraRows = extraRows;
+            ExtraList.ItemsSource = extraRows;
+        }
         ExtraList.Visibility = extras.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
 
         if (hasAnyData)

@@ -112,6 +112,16 @@
     <HasPackageAndPublishMenu>true</HasPackageAndPublishMenu>
   </PropertyGroup>
 
+  <!-- Runtime settings (measured on the owner's laptop, see SUMMARY-native-slim.md). The app runs for days and is idle
+       nearly all the time: without tiered compilation every method is compiled once, fully optimized, instead of being
+       recompiled in the background as it gets warm (tiered PGO adds a second recompile). That took app work per refresh
+       from about 1.2 to 0.2 CPU-s and idle from about 12 to 3 CPU-s per hour, for about 1 CPU-s more at startup.
+       Not kept, because they did not lower memory or CPU here: ConcurrentGarbageCollection=false, GCConserveMemory,
+       and ReadyToRun on top of this (4-7 MB more private bytes, no CPU gain). -->
+  <PropertyGroup Condition="'$(Configuration)' != 'Debug'">
+    <TieredCompilation>false</TieredCompilation>
+  </PropertyGroup>
+
   <!-- Publish Properties -->
   <PropertyGroup>
     <PublishReadyToRun Condition="'$(Configuration)' == 'Debug'">False</PublishReadyToRun>

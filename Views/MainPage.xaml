@@ -19,15 +19,15 @@
 
         <!-- Provider list -->
         <ScrollViewer Grid.Row="0" Padding="14,14,14,4">
-            <ItemsControl x:Name="ProvidersItemsControl" ItemsSource="{x:Bind ViewModel.Providers, Mode=OneWay}">
+            <ItemsControl x:Name="ProvidersItemsControl" ItemsSource="{x:Bind Slots}">
                 <ItemsControl.ItemsPanel>
                     <ItemsPanelTemplate>
                         <StackPanel Spacing="8"/>
                     </ItemsPanelTemplate>
                 </ItemsControl.ItemsPanel>
                 <ItemsControl.ItemTemplate>
-                    <DataTemplate x:DataType="models:UsageData">
-                        <controls:ProviderCard Data="{x:Bind Mode=OneWay}" Loaded="OnProviderCardLoaded"/>
+                    <DataTemplate x:DataType="local:ProviderSlot">
+                        <controls:ProviderCard Data="{x:Bind Data, Mode=OneWay}" Loaded="OnProviderCardLoaded"/>
                     </DataTemplate>
                 </ItemsControl.ItemTemplate>
             </ItemsControl>

@@ -48,7 +48,7 @@
                 </ItemsPanelTemplate>
             </ItemsControl.ItemsPanel>
             <ItemsControl.ItemTemplate>
-                <DataTemplate x:DataType="local:TaskbarItem">
+                <DataTemplate x:DataType="local:TaskbarItem" x:DefaultBindMode="OneWay">
                     <Grid
                         ColumnSpacing="10"
                         VerticalAlignment="Center"

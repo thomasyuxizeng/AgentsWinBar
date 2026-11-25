@@ -45,6 +45,8 @@
     <Compile Include="..\Helpers\BarResetGhost.cs" Link="Linked\BarResetGhost.cs" />
     <Compile Include="..\Helpers\UsageFingerprint.cs" Link="Linked\UsageFingerprint.cs" />
     <Compile Include="..\Helpers\WorkingSetTrimmer.cs" Link="Linked\WorkingSetTrimmer.cs" />
+    <Compile Include="..\Helpers\InPlaceRow.cs" Link="Linked\InPlaceRow.cs" />
+    <Compile Include="..\Helpers\ZOrderCoverage.cs" Link="Linked\ZOrderCoverage.cs" />
     <Compile Include="..\Models\ApiCreditsInfo.cs" Link="Linked\ApiCreditsInfo.cs" />
     <Compile Include="..\Models\ApiCreditsContributor.cs" Link="Linked\ApiCreditsContributor.cs" />
     <Compile Include="..\Helpers\ApiCreditsAttribution.cs" Link="Linked\ApiCreditsAttribution.cs" />
