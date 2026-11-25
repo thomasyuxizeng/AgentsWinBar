@@ -76,7 +76,7 @@ public class CostPricing
             if (start > 0 && model[start - 1] is '.' or '/') model = model[start..];
             var version = model.LastIndexOf("-v", StringComparison.Ordinal);
             if (version > 0 && IsVersionSuffix(model.AsSpan(version + 2))) model = model[..version];
-            if (model.Length > 9 && model[^9] == '-' && int.TryParse(model.AsSpan(model.Length - 8), out _))
+            if (model.Length > 9 && model[^9] == '-' && AllDigits(model.AsSpan(model.Length - 8)))
                 model = model[..^9];
         }
         else
@@ -89,7 +89,10 @@ public class CostPricing
                 "gpt-daybreak-red-latest" => "gpt-5.6-cyber",
                 _ => model
             };
-            if (model.Length > 11 && model[^11] == '-' && model[^6] == '-' && model[^3] == '-')
+            // Only a real "-YYYY-MM-DD" snapshot date is cut, not any suffix with hyphens in the same places.
+            if (model.Length > 11 && model[^11] == '-' && model[^6] == '-' && model[^3] == '-' &&
+                AllDigits(model.AsSpan(model.Length - 10, 4)) && AllDigits(model.AsSpan(model.Length - 5, 2)) &&
+                AllDigits(model.AsSpan(model.Length - 2)))
                 model = model[..^11];
         }
         // Retain bounded model identifiers for repricing, including unpriced future models and other vendors'
@@ -98,6 +101,8 @@ public class CostPricing
                model.All(c => char.IsAsciiLetterOrDigit(c) || c is '.' or '-' or '_' or '/' or ':' or '@')
             ? model : UnattributedModel;
     }
+
+    private static bool AllDigits(ReadOnlySpan<char> text) => !text.IsEmpty && text.IndexOfAnyExceptInRange('0', '9') < 0;
 
     /// <summary>The "1:0" of a Bedrock-style "-v1:0" suffix: digits, a colon, digits.</summary>
     private static bool IsVersionSuffix(ReadOnlySpan<char> text)

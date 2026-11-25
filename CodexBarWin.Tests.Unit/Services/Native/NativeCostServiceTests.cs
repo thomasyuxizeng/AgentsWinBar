@@ -171,6 +171,70 @@ public sealed class NativeCostServiceTests
         tokens.Should().Be(150);
     }
 
+    // Review finding 3: a changed log that could not be read is retried at the next scan, not six hours later.
+    [TestMethod]
+    public async Task FetchCostJsonAsync_WhenWatchedFileIsTemporarilyLocked_RetriesItOnNextScan()
+    {
+        var log = Path.Combine(Claude, "session.jsonl");
+        File.WriteAllText(log, Lines(ClaudeLine("1", 100)));
+        using var service = Service();
+        await service.FetchCostJsonAsync(["claude"], Now);
+
+        long? whileLocked;
+        using (var writer = new FileStream(log, FileMode.Append, FileAccess.Write, FileShare.None))
+        {
+            writer.Write(System.Text.Encoding.UTF8.GetBytes(Lines(ClaudeLine("2", 50))));
+            writer.Flush();
+            service.Watcher.NotifyChanged(CostProvider.Claude, log, created: false);
+            whileLocked = Read((await service.FetchCostJsonAsync(["claude"], Now))["claude"]).SessionTokens;
+        }
+        var afterUnlock = Read((await service.FetchCostJsonAsync(["claude"], Now))["claude"]).SessionTokens;
+
+        whileLocked.Should().Be(100);
+        afterUnlock.Should().Be(150, "the skipped file is queued again without a new write");
+    }
+
+    [TestMethod]
+    public async Task FetchCostJsonAsync_WhenChangedFileStaysUnreadable_StopsRetryingAfterAFewScans()
+    {
+        var log = Path.Combine(Claude, "session.jsonl");
+        File.WriteAllText(log, Lines(ClaudeLine("1", 100)));
+        using var service = Service();
+        await service.FetchCostJsonAsync(["claude"], Now);
+
+        using var writer = new FileStream(log, FileMode.Append, FileAccess.Write, FileShare.None);
+        writer.Write(System.Text.Encoding.UTF8.GetBytes(Lines(ClaudeLine("2", 50))));
+        writer.Flush();
+        service.Watcher.NotifyChanged(CostProvider.Claude, log, created: false);
+        var pending = new List<int>();
+        for (var scan = 0; scan < 6; scan++)
+        {
+            await service.FetchCostJsonAsync(["claude"], Now);
+            pending.Add(service.Watcher.PendingPaths.Count);
+        }
+
+        pending[0].Should().Be(1, "the first failure is retried");
+        pending[^1].Should().Be(0, "a file that never becomes readable is left to the periodic listing");
+    }
+
+    // Review finding 4: a deleted or damaged index is rebuilt at once, not after the six-hour listing.
+    [TestMethod]
+    [DataRow("deleted")]
+    [DataRow("corrupt")]
+    public async Task FetchCostJsonAsync_WhenIndexIsDeletedOrCorruptedBetweenScans_RebuildsImmediately(string damage)
+    {
+        File.WriteAllText(Path.Combine(Claude, "session.jsonl"), Lines(ClaudeLine("1", 100)));
+        using var service = Service();
+        await service.FetchCostJsonAsync(["claude"], Now);
+        var index = Path.Combine(Data, NativeCostService.IndexFolderName, "index.sqlite");
+        if (damage == "deleted") File.Delete(index);
+        else File.WriteAllText(index, "not sqlite");
+
+        var report = Read((await service.FetchCostJsonAsync(["claude"], Now))["claude"]);
+
+        report.SessionTokens.Should().Be(100);
+    }
+
     [TestMethod]
     public void DefaultRoots_WhenGivenAProfile_CoversClaudeProjectsAndBothCodexFolders()
     {

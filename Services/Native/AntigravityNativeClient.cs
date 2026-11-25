@@ -19,6 +19,10 @@ public sealed record AntigravityNativeOptions
     /// Linux variant is what the working WSL route sends today.
     /// </summary>
     public string UserAgent { get; init; } = "antigravity/hub/2.9.1 linux/amd64";
+    /// <summary>The endpoints (a Debug build's test hooks point them at the fake provider server).</summary>
+    public Uri LoadCodeAssistUri { get; init; } = AntigravityNativeClient.LoadCodeAssistUri;
+    public Uri QuotaSummaryUri { get; init; } = AntigravityNativeClient.QuotaSummaryUri;
+    public Uri AvailableModelsUri { get; init; } = AntigravityNativeClient.AvailableModelsUri;
 }
 
 /// <summary>
@@ -80,8 +84,9 @@ public sealed class AntigravityNativeClient : INativeUsageClient
             using var blob = _source.ReadBlob();
             credentials = blob == null ? null : AntigravityCredentialParser.Parse(blob.Span);
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
         {
+            // A corrupt credential is a read failure (last good reading kept), not a sign-out.
             _logger.LogWarning("Antigravity credential could not be read ({Type})", ex.GetType().Name);
             return Fail(NativeUsageStatus.Failed, null, "The Antigravity sign-in could not be read.");
         }
@@ -103,7 +108,7 @@ public sealed class AntigravityNativeClient : INativeUsageClient
         {
             // 1. loadCodeAssist: plan and Cloud Code project.
             calls++;
-            var (codeStatus, codeAssist) = await PostAsync(LoadCodeAssistUri, accessToken, LoadCodeAssistBody,
+            var (codeStatus, codeAssist) = await PostAsync(_options.LoadCodeAssistUri, accessToken, LoadCodeAssistBody,
                 _options.RequestTimeout, NativeJsonContext.Default.CodeAssistResponse, ct).ConfigureAwait(false);
             if (codeStatus != HttpStatusCode.OK || codeAssist == null) return HttpFailure(codeStatus, calls, "loadCodeAssist");
             var projectId = credentials.ProjectId ?? codeAssist.ProjectId;
@@ -120,7 +125,7 @@ public sealed class AntigravityNativeClient : INativeUsageClient
             try
             {
                 calls++;
-                var (summaryStatus, summary) = await PostAsync(QuotaSummaryUri, accessToken, body,
+                var (summaryStatus, summary) = await PostAsync(_options.QuotaSummaryUri, accessToken, body,
                     _options.QuotaSummaryTimeout, NativeJsonContext.Default.QuotaSummaryResponse, ct).ConfigureAwait(false);
                 if (summaryStatus == HttpStatusCode.Unauthorized) return HttpFailure(summaryStatus, calls, "retrieveUserQuotaSummary");
                 if (summaryStatus == HttpStatusCode.OK && summary is { CodeIsError: false } &&
@@ -135,7 +140,7 @@ public sealed class AntigravityNativeClient : INativeUsageClient
 
             // 3. Fallback: per-model quotas.
             calls++;
-            var (modelsStatus, models) = await PostAsync(AvailableModelsUri, accessToken, body,
+            var (modelsStatus, models) = await PostAsync(_options.AvailableModelsUri, accessToken, body,
                 _options.RequestTimeout, NativeJsonContext.Default.AvailableModelsResponse, ct).ConfigureAwait(false);
             if (modelsStatus != HttpStatusCode.OK || models == null) return HttpFailure(modelsStatus, calls, "fetchAvailableModels");
             return (MapAvailableModels(models, plan, _clock.GetUtcNow())
@@ -163,8 +168,7 @@ public sealed class AntigravityNativeClient : INativeUsageClient
         using var deadline = NativeHttp.Deadline(ct, timeout);
         using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, deadline.Token).ConfigureAwait(false);
         if (response.StatusCode != HttpStatusCode.OK) return (response.StatusCode, null);
-        await using var stream = await response.Content.ReadAsStreamAsync(deadline.Token).ConfigureAwait(false);
-        return (response.StatusCode, await JsonSerializer.DeserializeAsync(stream, type, deadline.Token).ConfigureAwait(false));
+        return (response.StatusCode, await NativeHttp.ReadJsonAsync(response, type, deadline.Token).ConfigureAwait(false));
     }
 
     private NativeUsageResult HttpFailure(HttpStatusCode status, int calls, string step)
@@ -236,8 +240,9 @@ public sealed class AntigravityNativeClient : INativeUsageClient
         primary = WithResetsIn(primary, now);
         secondary = WithResetsIn(secondary, now);
 
+        var extraIds = new HashSet<string>(StringComparer.Ordinal);
         var extras = known
-            .Where(n => !n.Id.StartsWith(WindowIdPrefix + "gemini", StringComparison.Ordinal))
+            .Where(n => !n.Id.StartsWith(WindowIdPrefix + "gemini", StringComparison.Ordinal) && extraIds.Add(n.Id))
             .Select(n => new NativeExtraWindow(n.Id, n.Id switch
             {
                 WindowIdPrefix + "3p-5h" => "Claude and GPT 5-hour",

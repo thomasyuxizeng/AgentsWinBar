@@ -228,6 +228,84 @@ public sealed partial class NativeCostScannerTests
         scanner.Update(Claude, Codex).FilesRead.Should().Be(0);
     }
 
+    // Review finding 10: a timestamp at the edge of the calendar is skipped instead of failing the whole scan.
+    [TestMethod]
+    [DataRow(9.0, "9999-12-31T20:00:00Z")]
+    [DataRow(-8.0, "0001-01-01T01:00:00Z")]
+    public void Update_WhenLogContainsExtremeYearTimestamp_SkipsLineWithoutCrashing(double offsetHours, string timestamp)
+    {
+        var zone = TimeZoneInfo.CreateCustomTimeZone("synthetic-zone", TimeSpan.FromHours(offsetHours), "synthetic", "synthetic");
+        var scanner = Scanner(zone);
+        File.WriteAllText(Path.Combine(Claude, "edge.jsonl"),
+            ClaudeLine("1", 10, timestamp) + "\n" + ClaudeLine("2", 20, "2026-11-25T01:00:00Z") + "\n");
+
+        var act = () => scanner.Update(Claude, Codex);
+
+        act.Should().NotThrow();
+        scanner.ReadReport(CostProvider.Claude, asOf: Today).Last30DaysTokens.Should().Be(20);
+    }
+
+    // Review finding 11: a change of the system time zone re-buckets the days even when no log changed.
+    [TestMethod]
+    public void Update_WhenChangedPathsIsEmptyAndZoneChanged_RebucketsStoredUsage()
+    {
+        var zone = TimeZoneInfo.FindSystemTimeZoneById("Korea Standard Time");
+        var scanner = new NativeCostScanner(IndexDirectory, Mock.Of<ILogger<NativeCostScanner>>()) { SystemZone = () => zone };
+        File.WriteAllText(Path.Combine(Claude, "travel.jsonl"), ClaudeLine("1", 10, "2026-11-24T12:59:59Z") + "\n" +
+            ClaudeLine("2", 20, "2026-11-24T13:00:00Z") + "\n");
+        scanner.Update([new(CostProvider.Claude, Claude)]);
+        scanner.ReadReport(CostProvider.Claude, asOf: Today).Daily.Should().ContainSingle();
+
+        zone = TimeZoneInfo.FindSystemTimeZoneById("AUS Eastern Standard Time");
+        var scan = scanner.Update([new(CostProvider.Claude, Claude)], changedPaths: []);
+
+        scan.FilesRead.Should().Be(0);
+        var daily = scanner.ReadReport(CostProvider.Claude, asOf: Today).Daily!;
+        daily.Select(day => day.Date).Should().Equal(new DateOnly(2026, 11, 24), new DateOnly(2026, 11, 25));
+        daily.Select(day => day.TotalTokens).Should().Equal(10, 20);
+    }
+
+    // Review finding 13: winsqlite3 uses the stdcall convention on x86 (the same as cdecl on x64 and ARM64).
+    [TestMethod]
+    public void CostIndexDatabase_NativeImports_UseStdCallForWinSqlite3()
+    {
+        var native = typeof(CostIndexDatabase).GetNestedType("Native", System.Reflection.BindingFlags.NonPublic)!;
+        var imports = native.GetMethods(System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)
+            .Select(method => (method.Name, Import: method.GetCustomAttributes(typeof(DllImportAttribute), false)
+                .Cast<DllImportAttribute>().SingleOrDefault()))
+            .Where(entry => entry.Import != null)
+            .ToList();
+
+        imports.Should().HaveCount(12);
+        imports.Should().OnlyContain(entry => entry.Import!.CallingConvention == CallingConvention.StdCall, "{0}",
+            string.Join(", ", imports.Select(entry => entry.Name)));
+    }
+
+    // Review finding 18: disposing twice never finalizes a native statement twice.
+    [TestMethod]
+    public void CostIndex_DisposeTwice_DoesNotFinalizeTwice()
+    {
+        Directory.CreateDirectory(IndexDirectory);
+        using var database = new CostIndexDatabase(IndexPath);
+        database.Execute(CostIndex.Schema);
+        var statement = database.Prepare("SELECT COUNT(*) FROM files");
+        statement.Step().Should().BeTrue();
+        var index = new CostIndex(database);
+        index.ReadFiles();
+        index.RemoveOffsetUsage(CostProvider.Claude, default, 0);
+
+        var act = () =>
+        {
+            statement.Dispose();
+            statement.Dispose();
+            index.Dispose();
+            index.Dispose();
+        };
+
+        act.Should().NotThrow();
+        statement.IsDisposed.Should().BeTrue();
+    }
+
     [TestMethod]
     public void ReadReport_WhenIndexIsMissing_ReturnsEmptyWithoutCreatingDirectory()
     {

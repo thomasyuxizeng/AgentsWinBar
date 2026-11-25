@@ -244,6 +244,89 @@ public sealed class NativeCostScannerArchiveTests
         listing.FilesRead.Should().Be(0);
     }
 
+    // Review finding 12: the plain log wins over its archive also when only the archive is named in a notification.
+    [TestMethod]
+    public void Update_WhenChangedPathsNamesArchiveWhilePlainLogExists_PrefersPlainLog()
+    {
+        var plain = Path.Combine(Codex, "rollout-a.jsonl");
+        File.WriteAllText(plain, Log(100));
+        var scanner = Scanner();
+        scanner.Update(Roots);
+        File.WriteAllBytes(plain + ".zst", Compress(Log(40)));
+
+        scanner.Update(Roots, changedPaths: [plain + ".zst"]);
+        var listing = scanner.Update(Roots);
+
+        Tokens(scanner).Should().Be(100);
+        listing.FilesRead.Should().Be(0);
+    }
+
+    // Review finding 12: an archive replaced by a different one is not resumed mid-line with the old cursor.
+    [TestMethod]
+    public void Update_WhenArchiveIsReplacedByDifferentArchive_IndexesItFromTheStart()
+    {
+        var archive = Path.Combine(Codex, "rollout-a.jsonl.zst");
+        File.WriteAllBytes(archive, Compress(Log(100, 50)));
+        var scanner = Scanner();
+        scanner.Update(Roots);
+        var replacement = Lines(CodexContext("gpt-6.2-sol-with-a-much-longer-model-name-than-before"),
+            CodexCount(7, 7), CodexCount(9, 2), CodexCount(30, 21), CodexCount(41, 11));
+        File.WriteAllBytes(archive, Compress(replacement));
+
+        var result = scanner.Update(Roots);
+
+        Tokens(scanner).Should().Be(41);
+        result.MalformedLines.Should().Be(0);
+    }
+
+    // Review finding 12: decompression stops at a cap, so a damaged or hostile archive cannot run away.
+    [TestMethod]
+    public void Update_WhenArchiveDecompressesBeyondCap_CountsOnlyLinesWithinTheCap()
+    {
+        var text = Log(100, 50, 25);
+        var lines = text.Split('\n');
+        var withinCap = System.Text.Encoding.UTF8.GetByteCount(lines[0] + "\n" + lines[1] + "\n") + 5;
+        File.WriteAllBytes(Path.Combine(Codex, "rollout-a.jsonl.zst"), Compress(text));
+        var scanner = new NativeCostScanner(Path.Combine(_directory, "index"), NullLogger<NativeCostScanner>.Instance, TimeZoneInfo.Utc)
+        {
+            MaxArchiveBytes = withinCap
+        };
+
+        scanner.Update(Roots);
+
+        Tokens(scanner).Should().Be(100);
+    }
+
+    // Review finding 19: notifications about files that are not logs do not open the index.
+    [TestMethod]
+    public void Update_WhenChangedPathsContainsOnlyNonLogFiles_DoesNotOpenIndex()
+    {
+        var notes = Path.Combine(Claude, "notes.md");
+        var temp = Path.Combine(Codex, "temp.tmp");
+        File.WriteAllText(notes, "synthetic");
+        File.WriteAllText(temp, "synthetic");
+        var scanner = Scanner();
+
+        var result = scanner.Update(Roots, changedPaths: [notes, temp, Path.Combine(Codex, "gone.jsonl")]);
+
+        result.Should().Be(new CostScanResult(0, 0, 0, 0, 0, 0, 0));
+        Directory.Exists(Path.Combine(_directory, "index")).Should().BeFalse();
+    }
+
+    // Review finding 20.4: a changed path is normalized before the root check.
+    [TestMethod]
+    public void Update_WhenChangedPathUsesParentTraversal_IgnoresFileOutsideRoot()
+    {
+        File.WriteAllText(Path.Combine(_directory, "elsewhere.jsonl"), Log(100));
+        var scanner = Scanner();
+        scanner.Update(Roots);
+
+        var result = scanner.Update(Roots, changedPaths: [Path.Combine(Codex, "..", "elsewhere.jsonl")]);
+
+        result.DiscoveredFiles.Should().Be(0);
+        Tokens(scanner).Should().Be(0);
+    }
+
     [TestMethod]
     public void ReadReport_WhenModelHasNoPrice_ReportsItsTokensAsUnpriced()
     {

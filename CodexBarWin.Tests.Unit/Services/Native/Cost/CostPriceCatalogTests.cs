@@ -124,6 +124,37 @@ public sealed class CostPriceCatalogTests
         catalog.Find("other", "x").Should().BeNull();
     }
 
+    // Review finding 16: providers other than Anthropic and OpenAI are skipped unread, whatever shape they have.
+    [TestMethod]
+    public async Task ParseLiveAsync_WhenOtherProvidersContainInvalidOrHugePayloads_SkipsThem()
+    {
+        var json = "{\"meta\":[1,2,3],\"version\":7,\"other\":{\"models\":[\"not\",\"an\",\"object\"]}," +
+                   "\"anthropic\":{\"models\":{" + Model("claude-test-1", Flat) + "}}," +
+                   "\"big\":{\"models\":{\"x\":{\"cost\":{\"input\":1,\"output\":2},\"blob\":\"" + new string('x', 200_000) + "\"}}}," +
+                   "\"openai\":{\"models\":{" + Model("gpt-test", Flat) + "}}}";
+        using var stream = new MemoryStream(Encoding.UTF8.GetBytes(json));
+
+        var catalog = await CostPriceCatalog.ParseLiveAsync(stream, DateTimeOffset.UnixEpoch, CancellationToken.None);
+
+        catalog.Should().NotBeNull();
+        catalog!.IsPlausible.Should().BeTrue();
+        catalog.Find(CostPriceCatalog.Anthropic, "claude-test-1").Should().NotBeNull();
+        catalog.Find("big", "x").Should().BeNull();
+    }
+
+    // Review finding 20.5: among several dated snapshots of a model, the latest one prices it.
+    [TestMethod]
+    public void Find_WhenSeveralDatedSnapshotsMatch_PicksTheLatestDeterministically()
+    {
+        var catalog = Catalog(CatalogJson(
+            Model("claude-test-20250101", "\"input\":1,\"output\":2") + "," +
+            Model("claude-test-20260101", "\"input\":3,\"output\":4") + "," +
+            Model("claude-test-20251231", "\"input\":5,\"output\":6"),
+            Model("gpt-x", "\"input\":1,\"output\":2")));
+
+        catalog.Find(CostPriceCatalog.Anthropic, "claude-test")!.Input.Should().Be(3);
+    }
+
     [TestMethod]
     public async Task ParseLiveAsync_WhenBodyIsNotJson_ReturnsNull()
     {

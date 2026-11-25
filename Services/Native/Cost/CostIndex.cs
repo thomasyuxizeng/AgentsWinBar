@@ -253,5 +253,6 @@ internal sealed class CostIndex(CostIndexDatabase database) : IDisposable
         _save?.Dispose();
         _add?.Dispose();
         _remove?.Dispose();
+        _save = _add = _remove = null;
     }
 }

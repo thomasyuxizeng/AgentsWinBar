@@ -46,16 +46,22 @@ internal sealed class CostIndexDatabase : IDisposable
         _handle = IntPtr.Zero;
     }
 
-    internal sealed class Statement(IntPtr handle) : IDisposable
+    internal sealed class Statement(IntPtr statement) : IDisposable
     {
-        internal void Bind(int slot, long value) => Check(Native.sqlite3_bind_int64(handle, slot, value));
-        internal void BindNull(int slot) => Check(Native.sqlite3_bind_null(handle, slot));
-        internal void Bind(int slot, string value) => Check(Native.sqlite3_bind_text(handle, slot, value, -1, new IntPtr(-1)));
-        internal long Number(int column) => Native.sqlite3_column_int64(handle, column);
-        internal string Text(int column) => Marshal.PtrToStringUTF8(Native.sqlite3_column_text(handle, column)) ?? "";
+        private IntPtr _handle = statement;
+
+        /// <summary>The live native handle; a disposed statement refuses use instead of touching freed memory.</summary>
+        private IntPtr Handle => _handle != IntPtr.Zero ? _handle : throw new ObjectDisposedException(nameof(Statement));
+
+        internal bool IsDisposed => _handle == IntPtr.Zero;
+        internal void Bind(int slot, long value) => Check(Native.sqlite3_bind_int64(Handle, slot, value));
+        internal void BindNull(int slot) => Check(Native.sqlite3_bind_null(Handle, slot));
+        internal void Bind(int slot, string value) => Check(Native.sqlite3_bind_text(Handle, slot, value, -1, new IntPtr(-1)));
+        internal long Number(int column) => Native.sqlite3_column_int64(Handle, column);
+        internal string Text(int column) => Marshal.PtrToStringUTF8(Native.sqlite3_column_text(Handle, column)) ?? "";
         internal bool Step()
         {
-            var status = Native.sqlite3_step(handle);
+            var status = Native.sqlite3_step(Handle);
             if (status == 100) return true;
             if (status != 101) Check(status);
             return false;
@@ -63,38 +69,44 @@ internal sealed class CostIndexDatabase : IDisposable
         internal void Write()
         {
             Step();
-            Check(Native.sqlite3_reset(handle));
+            Check(Native.sqlite3_reset(Handle));
         }
-        public void Dispose() => Native.sqlite3_finalize(handle);
+
+        /// <summary>Finalizes the native statement exactly once, however often it is called.</summary>
+        public void Dispose()
+        {
+            var handle = Interlocked.Exchange(ref _handle, IntPtr.Zero);
+            if (handle != IntPtr.Zero) Native.sqlite3_finalize(handle);
+        }
     }
 
     private static class Native
     {
         private const string Library = "winsqlite3.dll";
 
-        [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
+        [DllImport(Library, CallingConvention = CallingConvention.StdCall)]
         internal static extern int sqlite3_open_v2([MarshalAs(UnmanagedType.LPUTF8Str)] string path, out IntPtr db, int flags, IntPtr vfs);
-        [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
+        [DllImport(Library, CallingConvention = CallingConvention.StdCall)]
         internal static extern int sqlite3_close(IntPtr db);
-        [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
+        [DllImport(Library, CallingConvention = CallingConvention.StdCall)]
         internal static extern int sqlite3_exec(IntPtr db, [MarshalAs(UnmanagedType.LPUTF8Str)] string sql, IntPtr callback, IntPtr state, IntPtr error);
-        [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
+        [DllImport(Library, CallingConvention = CallingConvention.StdCall)]
         internal static extern int sqlite3_prepare_v2(IntPtr db, [MarshalAs(UnmanagedType.LPUTF8Str)] string sql, int bytes, out IntPtr statement, IntPtr tail);
-        [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
+        [DllImport(Library, CallingConvention = CallingConvention.StdCall)]
         internal static extern int sqlite3_step(IntPtr statement);
-        [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
+        [DllImport(Library, CallingConvention = CallingConvention.StdCall)]
         internal static extern int sqlite3_reset(IntPtr statement);
-        [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
+        [DllImport(Library, CallingConvention = CallingConvention.StdCall)]
         internal static extern int sqlite3_finalize(IntPtr statement);
-        [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
+        [DllImport(Library, CallingConvention = CallingConvention.StdCall)]
         internal static extern int sqlite3_bind_int64(IntPtr statement, int index, long value);
-        [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
+        [DllImport(Library, CallingConvention = CallingConvention.StdCall)]
         internal static extern int sqlite3_bind_null(IntPtr statement, int index);
-        [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
+        [DllImport(Library, CallingConvention = CallingConvention.StdCall)]
         internal static extern int sqlite3_bind_text(IntPtr statement, int index, [MarshalAs(UnmanagedType.LPUTF8Str)] string value, int bytes, IntPtr destructor);
-        [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
+        [DllImport(Library, CallingConvention = CallingConvention.StdCall)]
         internal static extern long sqlite3_column_int64(IntPtr statement, int index);
-        [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
+        [DllImport(Library, CallingConvention = CallingConvention.StdCall)]
         internal static extern IntPtr sqlite3_column_text(IntPtr statement, int index);
     }
 }

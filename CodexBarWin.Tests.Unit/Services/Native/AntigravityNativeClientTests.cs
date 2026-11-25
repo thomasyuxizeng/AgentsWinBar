@@ -228,6 +228,66 @@ public class AntigravityNativeClientTests
         result.HasUsage.Should().BeFalse();
     }
 
+    // Review finding 6: the response body is read only up to a fixed cap.
+    [TestMethod]
+    public async Task FetchAsync_WhenResponseExceedsSizeLimit_FailsWithoutReadingWholeBody()
+    {
+        var body = new PaddedJsonStream("{\"currentTier\": {\"id\": \"free-tier\"}, \"cloudaicompanionProject\": \"synthetic-project-123\", \"padding\": \"",
+            HugePadding, "\"}");
+        var (client, _) = Create(Blob(Now.AddHours(12)), request =>
+            request.RequestUri!.AbsolutePath == "/v1internal:loadCodeAssist" ? Streamed(body) : Default(request));
+
+        var result = await client.FetchAsync();
+
+        result.Status.Should().Be(NativeUsageStatus.Failed);
+        body.Served.Should().BeLessThanOrEqualTo(NativeHttp.MaxResponseBytes + 1);
+    }
+
+    // Review finding 20.1: an unreadable (corrupt) credential is a read failure, not a sign-out.
+    [TestMethod]
+    public async Task FetchAsync_WhenCredentialBlobIsMalformedJson_ReturnsFailedAndPreservesLastGood()
+    {
+        var source = new SwitchableCredentialSource { Json = Blob(Now.AddHours(12)) };
+        var handler = new RecordingHandler(Default);
+        var client = new AntigravityNativeClient(handler.Client(), new ListLogger<AntigravityNativeClient>(), source, null, new TestClock(Now));
+        await client.FetchAsync();
+
+        source.Json = "{broken";
+        var result = await client.FetchAsync();
+
+        result.Status.Should().Be(NativeUsageStatus.Failed);
+        result.Cached.Should().BeTrue();
+        result.Primary.Should().NotBeNull();
+    }
+
+    // Review finding 20.6: one bucket id gives one extra window.
+    [TestMethod]
+    public void MapQuotaSummary_WhenDuplicateExtraBucketIdsReturned_DeduplicatesExtras()
+    {
+        var json = """
+            {"groups": [
+              {"displayName": "Claude and GPT models", "buckets": [
+                {"bucketId": "3p-5h", "window": "5h", "remainingFraction": 0.9, "resetTime": "2026-11-25T09:00:00Z"},
+                {"bucketId": "3p-5h", "window": "5h", "remainingFraction": 0.5, "resetTime": "2026-11-25T09:00:00Z"}
+              ]},
+              {"displayName": "Gemini models", "buckets": [
+                {"bucketId": "gemini-5h", "window": "5h", "remainingFraction": 0.2, "resetTime": "2026-11-25T09:38:00Z"}
+              ]}
+            ]}
+            """;
+        var summary = System.Text.Json.JsonSerializer.Deserialize(json, NativeJsonContext.Default.QuotaSummaryResponse)!;
+
+        var result = AntigravityNativeClient.MapQuotaSummary(summary, null, Now)!;
+
+        result.ExtraWindows.Select(e => e.Id).Should().Equal("antigravity-quota-summary-3p-5h");
+    }
+
+    private sealed class SwitchableCredentialSource : IAntigravityCredentialSource
+    {
+        public string? Json { get; set; }
+        public SensitiveBuffer? ReadBlob() => Json == null ? null : SensitiveBuffer.From(System.Text.Encoding.UTF8.GetBytes(Json));
+    }
+
     [TestMethod]
     public async Task FetchAsync_WhenFailureBeforeAnyGoodReading_ReturnsFailureWithoutCachedRow()
     {

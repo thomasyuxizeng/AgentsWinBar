@@ -198,6 +198,22 @@ public sealed class CostPriceStoreTests
         store.GetPricing().GetRates(CostProvider.Claude, "house-model", false, false, false, 0)!.Value.Input.Should().Be(10);
     }
 
+    // Review finding 14: a price file that is briefly locked is read again on the next call.
+    [TestMethod]
+    public void GetPricing_WhenCustomPricingFileIsTemporarilyLocked_RetriesOnNextCall()
+    {
+        var store = Store(StubHandler.Json("{}"));
+        File.WriteAllText(store.CustomPath, "{\"house-model\":{\"input\":1,\"output\":2,\"cacheRead\":3,\"cacheWrite\":4}}");
+
+        decimal? whileLocked;
+        using (new FileStream(store.CustomPath, FileMode.Open, FileAccess.Read, FileShare.None))
+            whileLocked = store.GetPricing().GetRates(CostProvider.Claude, "house-model", false, false, false, 0)?.Input;
+        var afterUnlock = store.GetPricing().GetRates(CostProvider.Claude, "house-model", false, false, false, 0)?.Input;
+
+        whileLocked.Should().BeNull();
+        afterUnlock.Should().Be(1);
+    }
+
     [TestMethod]
     public void GetPricing_WhenNothingChanged_ReturnsTheSameInstance()
     {

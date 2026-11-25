@@ -183,4 +183,14 @@ public class NativeUsageDtoMapperTests
 
         act.Should().Throw<ArgumentException>();
     }
+
+    // Review finding 20.3: an absurd percentage cannot wrap the whole-number copy into a negative value.
+    [TestMethod]
+    public void ToUsageWindow_WhenUsedPercentExceedsIntRange_DoesNotWrapNegative()
+    {
+        var window = new UsageWindowDto { UsedPercent = 1e20, WindowMinutes = 300 }.ToUsageWindow()!;
+
+        window.Used.Should().BeGreaterThanOrEqualTo(0);
+        window.Percent.Should().Be(1e20);
+    }
 }

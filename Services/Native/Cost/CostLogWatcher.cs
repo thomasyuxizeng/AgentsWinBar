@@ -73,16 +73,27 @@ public sealed class CostLogWatcher : IDisposable
         }
     }
 
+    /// <summary>The paths waiting for the next plan (a snapshot, for tests).</summary>
+    internal IReadOnlyCollection<string> PendingPaths { get { lock (_gate) return [.. _changed]; } }
+
     /// <summary>A file or directory was created, or a log was written to.</summary>
     internal void NotifyChanged(CostProvider provider, string path, bool created)
     {
         // A new directory can arrive with logs already inside (a move), so it is listed on the next update.
         // A write to a directory only says that something inside it changed, which has its own notification.
-        if (NativeCostScanner.IsLog(path, provider) || created) Mark(path);
+        // Other new files (notes, temporary files) are not logs and are not queued.
+        if (NativeCostScanner.IsLog(path, provider) || created && Directory.Exists(path)) Mark(path);
     }
 
     /// <summary>A rename moves a log, or a whole directory of logs, to a path the index has not seen.</summary>
-    internal void NotifyRenamed(string newPath) => Mark(newPath);
+    internal void NotifyRenamed(string newPath)
+    {
+        // Any provider's log name counts here; the scanner checks the name against the root's provider.
+        if (NativeCostScanner.IsLog(newPath, CostProvider.Codex) || Directory.Exists(newPath)) Mark(newPath);
+    }
+
+    /// <summary>A log that could not be read (locked, for example) is looked at again on the next update.</summary>
+    internal void Retry(string path) => Mark(path);
 
     /// <summary>Notifications were lost; only a listing can tell what changed.</summary>
     internal void NotifyLost()

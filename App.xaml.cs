@@ -2,6 +2,7 @@ using CodexBarWin.Helpers;
 using CodexBarWin.Models;
 using CodexBarWin.Services;
 using CodexBarWin.ViewModels;
+using NativeTestOverrides = CodexBarWin.Services.Native.NativeTestOverrides;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.UI.Xaml;
@@ -14,7 +15,13 @@ namespace CodexBarWin;
 public partial class App : Application
 {
     private static Mutex? _mutex;
+#if DEBUG
+    // A Debug instance running on the test hooks (CODEXBARWIN_TEST_*) can run beside the installed app.
+    private static string MutexName => NativeTestOverrides.Current is null
+        ? "CodexBarWin_SingleInstance" : "CodexBarWin_SingleInstance_Test";
+#else
     private const string MutexName = "CodexBarWin_SingleInstance";
+#endif
 
     private MainWindow? _mainWindow;
     private Window? _setupWindow;
@@ -61,7 +68,8 @@ public partial class App : Application
     {
         try
         {
-            var folder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CodexBarWin");
+            var folder = NativeTestOverrides.Current?.AppDataDirectory ??
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CodexBarWin");
             Directory.CreateDirectory(folder);
             File.AppendAllText(
                 Path.Combine(folder, "crash.log"),
@@ -257,25 +265,39 @@ public partial class App : Application
 #endif
         });
 
+        // Debug test hooks (CODEXBARWIN_TEST_*): a fake profile, data folder, credential and provider server. Always
+        // null in a Release build. A set but invalid variable throws here, so a Debug app never falls back silently.
+        var testOverrides = NativeTestOverrides.Current;
+        // A test run reads no admin key or spend-log setting from the environment; the spend log is the fake one.
+        Func<string, EnvironmentVariableTarget, string?>? testEnvironment = testOverrides is null ? null
+            : (name, _) => name == GeminiSpendService.SpendLogEnvironmentVariable && testOverrides.ProfileRoot is { } root
+                ? Path.Combine(root, ".claude", "gemini-api", "spend.jsonl") : null;
+
         // Services
         services.AddSingleton<IWslService, WslService>();
-        services.AddSingleton<ICacheService, CacheService>();
+        services.AddSingleton<ICacheService>(sp => new CacheService(sp.GetRequiredService<ILogger<CacheService>>(),
+            sp.GetRequiredService<ISettingsService>(),
+            testOverrides?.AppDataDirectory is { } cacheFolder ? Path.Combine(cacheFolder, "cache.json") : null));
         services.AddSingleton<ICostCacheStore, CostCacheStore>();
         services.AddSingleton<ICostLedger, CostLedger>();
         services.AddSingleton<IProviderIncidentFetcher, ProviderIncidentFetcher>();
         // Native usage readers (one pooled HttpClient). Registered with a factory so DI uses the production
         // constructor; CodexBarService routes providers whose usage source is "native" through it.
         services.AddSingleton<Services.Native.INativeUsageService>(sp =>
-            new Services.Native.NativeUsageService(sp.GetRequiredService<ILoggerFactory>()));
+            new Services.Native.NativeUsageService(sp.GetRequiredService<ILoggerFactory>(),
+                () => sp.GetRequiredService<ISettingsService>().Settings.RenewClaudeSignIn, testOverrides));
         // Native cost scanner: index and refreshed prices live beside settings.json. CodexBarService uses it while
         // the cost source is "native"; nothing is scanned or watched before the first cost request.
         services.AddSingleton<Services.Native.INativeCostService>(sp =>
             new Services.Native.NativeCostService(sp.GetRequiredService<ISettingsService>(),
-                sp.GetRequiredService<ILoggerFactory>()));
+                sp.GetRequiredService<ILoggerFactory>(), testOverrides));
         services.AddSingleton<ICodexBarService, CodexBarService>();
-        services.AddSingleton<ISettingsService, SettingsService>();
-        services.AddSingleton<IApiBillingService, ApiBillingService>();
-        services.AddSingleton<IGeminiSpendService, GeminiSpendService>();
+        services.AddSingleton<ISettingsService>(sp =>
+            new SettingsService(sp.GetRequiredService<ILogger<SettingsService>>(), testOverrides?.AppDataDirectory));
+        services.AddSingleton<IApiBillingService>(sp => new ApiBillingService(sp.GetRequiredService<ISettingsService>(),
+            sp.GetRequiredService<ILogger<ApiBillingService>>(), environmentReader: testEnvironment));
+        services.AddSingleton<IGeminiSpendService>(sp => new GeminiSpendService(sp.GetRequiredService<ISettingsService>(),
+            sp.GetRequiredService<ILogger<GeminiSpendService>>(), environmentReader: testEnvironment));
         services.AddSingleton<ISetupChecker, SetupChecker>();
         services.AddSingleton<ISetupMemoService, SetupMemoService>();
         services.AddSingleton<ISessionStateSource, SessionStateSource>();

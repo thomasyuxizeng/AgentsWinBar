@@ -30,6 +30,79 @@ internal static class NativeTestSupport
 
     public static HttpResponseMessage Json(string json, HttpStatusCode status = HttpStatusCode.OK) =>
         new(status) { Content = new StringContent(json, Encoding.UTF8, "application/json") };
+
+    /// <summary>A 200 answer whose body streams from <paramref name="body"/> (no Content-Length).</summary>
+    public static HttpResponseMessage Streamed(Stream body)
+    {
+        var response = new HttpResponseMessage(HttpStatusCode.OK) { Content = new StreamContent(body) };
+        response.Content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/json");
+        return response;
+    }
+
+    /// <summary>Eight MiB of padding: well past the clients' response cap.</summary>
+    public const long HugePadding = 8L * 1024 * 1024;
+}
+
+/// <summary>
+/// A JSON body of <c>prefix</c>, then <c>paddingBytes</c> of 'x', then <c>suffix</c>, generated on the fly.
+/// <see cref="Served"/> counts the bytes handed out, so a test can tell how much of the body a reader took.
+/// </summary>
+internal sealed class PaddedJsonStream(string prefix, long paddingBytes, string suffix) : Stream
+{
+    private readonly byte[] _prefix = Encoding.UTF8.GetBytes(prefix);
+    private readonly byte[] _suffix = Encoding.UTF8.GetBytes(suffix);
+    private long _served;
+
+    public long Served => Interlocked.Read(ref _served);
+    private long Total => _prefix.Length + paddingBytes + _suffix.Length;
+
+    public override bool CanRead => true;
+    public override bool CanSeek => false;
+    public override bool CanWrite => false;
+    public override long Length => throw new NotSupportedException();
+    public override long Position { get => Served; set => throw new NotSupportedException(); }
+
+    public override int Read(byte[] buffer, int offset, int count) => Read(buffer.AsSpan(offset, count));
+
+    public override int Read(Span<byte> buffer)
+    {
+        var written = 0;
+        while (written < buffer.Length && _served < Total)
+        {
+            var position = _served;
+            int take;
+            if (position < _prefix.Length)
+            {
+                take = (int)Math.Min(buffer.Length - written, _prefix.Length - position);
+                _prefix.AsSpan((int)position, take).CopyTo(buffer[written..]);
+            }
+            else if (position < _prefix.Length + paddingBytes)
+            {
+                take = (int)Math.Min(buffer.Length - written, _prefix.Length + paddingBytes - position);
+                buffer.Slice(written, take).Fill((byte)'x');
+            }
+            else
+            {
+                var start = (int)(position - _prefix.Length - paddingBytes);
+                take = Math.Min(buffer.Length - written, _suffix.Length - start);
+                _suffix.AsSpan(start, take).CopyTo(buffer[written..]);
+            }
+            written += take;
+            Interlocked.Add(ref _served, take);
+        }
+        return written;
+    }
+
+    public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default) =>
+        ValueTask.FromResult(Read(buffer.Span));
+
+    public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) =>
+        Task.FromResult(Read(buffer.AsSpan(offset, count)));
+
+    public override void Flush() { }
+    public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+    public override void SetLength(long value) => throw new NotSupportedException();
+    public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
 }
 
 internal sealed class TestClock(DateTimeOffset now) : TimeProvider

@@ -32,12 +32,25 @@ public sealed class ClaudeCooldownFile : IClaudeCooldownStore
 
     public string FilePath { get; }
 
+    /// <summary>The file holds one short timestamp; anything larger is damaged and is not read.</summary>
+    internal const int MaxBytes = 64 * 1024;
+
     public DateTimeOffset? Load()
     {
         try
         {
-            if (!File.Exists(FilePath)) return null;
-            using var document = JsonDocument.Parse(File.ReadAllBytes(FilePath));
+            var info = new FileInfo(FilePath);
+            if (!info.Exists) return null;
+            if (info.Length > MaxBytes)
+            {
+                _logger.LogDebug("Claude cooldown file is larger than expected; ignoring it");
+                return null;
+            }
+            using var stream = new FileStream(FilePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            var bytes = new byte[MaxBytes + 1];
+            var length = stream.ReadAtLeast(bytes, bytes.Length, throwOnEndOfStream: false);
+            if (length > MaxBytes) return null;
+            using var document = JsonDocument.Parse(bytes.AsMemory(0, length));
             if (document.RootElement.ValueKind == JsonValueKind.Object &&
                 document.RootElement.TryGetProperty("blockedUntil", out var value) &&
                 value.ValueKind == JsonValueKind.String && value.TryGetDateTimeOffset(out var blockedUntil))

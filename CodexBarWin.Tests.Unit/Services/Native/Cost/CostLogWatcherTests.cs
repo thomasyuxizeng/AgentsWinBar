@@ -88,12 +88,43 @@ public sealed class CostLogWatcherTests
         watcher.TakePlan().ChangedPaths.Should().BeEmpty();
     }
 
+    // Review finding 19: creating or renaming a file that is not a log queues nothing.
+    [TestMethod]
+    public void NotifyChanged_WhenNonLogFileIsCreatedOrRenamed_IsIgnored()
+    {
+        using var watcher = Settled();
+        var notes = Path.Combine(Claude, "project", "memory.md");
+        var temp = Path.Combine(Codex, "session.tmp");
+        Directory.CreateDirectory(Path.GetDirectoryName(notes)!);
+        File.WriteAllText(notes, "synthetic");
+        File.WriteAllText(temp, "synthetic");
+
+        watcher.NotifyChanged(CostProvider.Claude, notes, created: true);
+        watcher.NotifyRenamed(temp);
+
+        watcher.TakePlan().ChangedPaths.Should().BeEmpty();
+    }
+
+    [TestMethod]
+    public void NotifyRenamed_WhenFileIsRenamedToALog_QueuesIt()
+    {
+        using var watcher = Settled();
+        var log = Path.Combine(Codex, "rollout-a.jsonl");
+
+        watcher.NotifyRenamed(log);
+
+        watcher.TakePlan().ChangedPaths.Should().BeEquivalentTo([log]);
+    }
+
     [TestMethod]
     public void NotifyChanged_WhenDirectoryIsCreatedOrRenamed_QueuesItForListing()
     {
         using var watcher = Settled();
         var created = Path.Combine(Claude, "moved-in-project");
         var renamed = Path.Combine(Codex, "2026-renamed");
+        // The notification arrives once the directory exists.
+        Directory.CreateDirectory(created);
+        Directory.CreateDirectory(renamed);
 
         watcher.NotifyChanged(CostProvider.Claude, created, created: true);
         watcher.NotifyRenamed(renamed);

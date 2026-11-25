@@ -332,7 +332,41 @@ public class CodexBarServiceNativeRoutingTests
 
     private sealed class FixedClock(DateTimeOffset now) : TimeProvider
     {
-        public override DateTimeOffset GetUtcNow() => now;
+        public DateTimeOffset Now { get; set; } = now;
+        public override DateTimeOffset GetUtcNow() => Now;
+    }
+
+    // Review finding 2: a replayed last-good reading must not bring back a window that has reset since.
+    [TestMethod]
+    [DataRow(NativeUsageStatus.SignInExpired)]
+    [DataRow(NativeUsageStatus.RateLimited)]
+    [DataRow(NativeUsageStatus.Failed)]
+    public async Task GetAllUsageAsync_WhenNativeReturnsClearedPastResetReplay_PublishesZeroedWindow(NativeUsageStatus failure)
+    {
+        var readAt = new DateTimeOffset(2026, 11, 25, 8, 25, 0, TimeSpan.Zero);
+        var sessionReset = new DateTimeOffset(2026, 11, 25, 8, 30, 0, TimeSpan.Zero);
+        var reading = new NativeUsageResult
+        {
+            Provider = "claude", Source = "oauth", Status = NativeUsageStatus.Ok,
+            Primary = new(80, 300, sessionReset, "Nov 25 at 8:30AM"),
+            Secondary = new(40, 10080, readAt.AddDays(3), "Nov 28 at 8:25AM"),
+            UpdatedAt = readAt
+        };
+        var current = reading;
+        _settings.SetProviders([new() { Id = "claude", IsEnabled = true }]);
+        var service = Create(new Mock<IWslService>(MockBehavior.Strict).Object, new FakeNativeUsage(_ => current));
+        _clock.Now = readAt;
+        (await service.GetAllUsageAsync()).Single().Session!.Percent.Should().Be(80);
+
+        _clock.Now = readAt.AddMinutes(15);
+        current = NativeLastGood.FromCacheOr(reading,
+            new NativeUsageResult { Provider = "claude", Status = failure, Message = "synthetic failure" }, _clock.Now);
+        var result = (await service.GetAllUsageAsync()).Single();
+
+        result.Session!.Percent.Should().Be(0);
+        result.Session.ResetAt.Should().BeNull();
+        result.Weekly!.Percent.Should().Be(40, "the weekly window has not reset");
+        ((ICacheService)_cache).GetLastKnown("claude")!.Session!.Percent.Should().Be(0, "the cache must not keep the ended window either");
     }
 
     private sealed class FakeClient(string provider, NativeUsageResult result) : INativeUsageClient
