@@ -1,13 +1,14 @@
 <#
 .SYNOPSIS
-Installs CodexBarWin and its WSL tools as the original Windows user.
+Installs CodexBarWin as the original Windows user, using native Windows providers by default.
 .DESCRIPTION
 Run with a 30 minute timeout: powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1
-Exit codes: 0 = installed and selected providers have live or temporarily stale usage; 3010 = reboot, rerun;
+Use -WithWsl only for providers configured to use WSL. -Distro, -NoSignIn, and
+-NoWindowsSignIns apply only to -WithWsl. -SkipWsl is accepted for compatibility.
+Exit codes: 0 = setup complete; 3010 = reboot and rerun (only with -WithWsl);
 20 = sign-in pending; 30 = elevation declined/admin failed; 40 = release inaccessible;
-50 = hardware, virtualization, or network precondition; 1 = other failure.
-DryRun performs read-only probes, does not stage files, install, sign in, or fetch usage
-(the usage shim can write caches). Unknown prerequisites are explicitly reported.
+50 = Windows, hardware, or network precondition; 1 = other failure.
+DryRun performs read-only probes and skips staging, installation, launch, sign-in, and usage checks.
 No RunOnce entry is created. State remembers parameters, never credentials.
 #>
 [CmdletBinding()]
@@ -20,6 +21,7 @@ param(
     [switch] $NoSignIn,
     [switch] $NoWindowsSignIns,
     [switch] $SkipApp,
+    [switch] $WithWsl,
     [switch] $SkipWsl,
     [switch] $Resume,
     [switch] $DryRun
@@ -27,7 +29,6 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
-$env:WSL_UTF8 = '1'
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 $stage = Join-Path $env:LOCALAPPDATA 'CodexBarWin-Setup'
 $statePath = Join-Path $stage 'state.json'
@@ -63,7 +64,6 @@ function New-AdminCommand($Plan) {
     $planBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(($Plan | ConvertTo-Json -Compress)))
     $adminScript = @'
 $ErrorActionPreference = 'Stop'
-$env:WSL_UTF8 = '1'
 $env:PSModulePath = Join-Path $PSHOME 'Modules'
 $reboot = $false
 $protectedStage = $null
@@ -81,7 +81,10 @@ try {
             try { $store.Open('ReadWrite'); $store.Add($cert) } finally { $store.Dispose() }
         } finally { $cert.Dispose() }
     }
-    $wsl = Join-Path ([Environment]::GetFolderPath('System')) 'wsl.exe'
+    if ($plan.EnableWsl -or $plan.UpdateWsl) {
+        $env:WSL_UTF8 = '1'
+        $wsl = Join-Path ([Environment]::GetFolderPath('System')) 'wsl.exe'
+    }
     if ($plan.EnableWsl) {
         & $wsl --install --no-distribution
         if ($LASTEXITCODE -notin @(0, 3010)) { throw 'WSL enable failed.' }
@@ -268,8 +271,7 @@ function Test-Usage([string] $Provider) {
             $blocked = $result.Code -ne 0 -or [bool]$item.error
             $fresh = $result.Error -notmatch $rateLimitPattern
             if ($item.usage.updatedAt) {
-                $updated = [datetimeoffset]::MinValue
-                if (-not [datetimeoffset]::TryParse([string]$item.usage.updatedAt, [ref]$updated) -or $updated -lt [datetimeoffset]::UtcNow.AddMinutes(-30)) { $fresh = $false }
+                try { $fresh = $fresh -and [datetimeoffset]$item.usage.updatedAt -ge [datetimeoffset]::UtcNow.AddMinutes(-30) } catch { $fresh = $false }
             }
             $windows = @($item.usage.primary, $item.usage.secondary, $item.usage.tertiary)
             foreach ($extra in @($item.usage.extraRateWindows)) { if ($extra) { $windows += $extra.window } }
@@ -277,8 +279,7 @@ function Test-Usage([string] $Provider) {
                 if ($window -and $null -ne $window.usedPercent) {
                     $windowFresh = $fresh
                     if ($window.resetsAt) {
-                        $reset = [datetimeoffset]::MinValue
-                        if (-not [datetimeoffset]::TryParse([string]$window.resetsAt, [ref]$reset) -or $reset -lt [datetimeoffset]::UtcNow.AddMinutes(-5)) { $windowFresh = $false }
+                        try { $windowFresh = $windowFresh -and [datetimeoffset]$window.resetsAt -ge [datetimeoffset]::UtcNow.AddMinutes(-5) } catch { $windowFresh = $false }
                     }
                     $percent = 0.0
                     if ([double]::TryParse([string]$window.usedPercent, [Globalization.NumberStyles]::Float, [Globalization.CultureInfo]::InvariantCulture, [ref]$percent) -and $percent -ge 0 -and $percent -le 100) {
@@ -304,10 +305,62 @@ function Windows-CodexAvailable {
         return $mode -eq 'chatgpt'
     } catch { return $false }
 }
+function Test-WindowsSignIn([string] $Provider) {
+    switch ($Provider) {
+        'claude' { $path = Join-Path $env:USERPROFILE '.claude\.credentials.json' }
+        'codex' { $path = Join-Path $env:USERPROFILE '.codex\auth.json' }
+        'gemini' {
+            $target = Invoke-Native 'cmdkey.exe' @('/list:gemini:antigravity') 10
+            if ($target.Code -eq 0 -and $target.Output -match '(?m)^[ \t]*(?:[^:\r\n]+:[ \t]*LegacyGeneric:target=|Target:[ \t]*)gemini:antigravity[ \t]*\r?$') { return 'present' }
+            return 'missing'
+        }
+        default { return 'missing' }
+    }
+    if ((Test-Path -LiteralPath $path -PathType Leaf -ErrorAction SilentlyContinue) -and
+        (Get-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue).Length -gt 0) { return 'present' }
+    return 'missing'
+}
+function Get-AppUsageStatus([string] $Path, [string] $Provider, [datetimeoffset] $LaunchTime) {
+    try {
+        if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return 'none' }
+        $cache = Get-Content -Raw -Encoding UTF8 -LiteralPath $Path | ConvertFrom-Json
+        $entry = $cache.items.$Provider
+        if ($entry.provider -ne $Provider -or -not $entry.fetchedAt -or -not $cache.timestamp) { return 'none' }
+        $fetched = [datetimeoffset]$entry.fetchedAt
+        if ($fetched -lt $LaunchTime -or [datetimeoffset]$cache.timestamp -lt $LaunchTime) { return 'none' }
+
+        if ($entry.error -match 'rate[\s_-]*limit|too many requests|\b429\b') { return 'stale' }
+        if ($entry.error -or $entry.authRequired -or $entry.commandNotFound -or $entry.isLoading -or
+            $entry.status -eq 'offline' -or $entry.usageFetchOutcome -in @(2, 3, 'Unavailable', 'Failed')) { return 'none' }
+
+        $now = [datetimeoffset]::UtcNow
+        $fresh = -not $entry.usageIsStale -and $fetched -ge $now.AddMinutes(-30)
+        if ($entry.dataUpdatedAt) {
+            try { $fresh = $fresh -and [datetimeoffset]$entry.dataUpdatedAt -ge $now.AddMinutes(-30) } catch { $fresh = $false }
+        }
+        $windows = @($entry.session, $entry.weekly, $entry.tertiary)
+        foreach ($extra in $entry.extraWindows) { $windows += $extra.window }
+        $status = 'none'
+        foreach ($window in $windows) {
+            if ($null -eq $window) { continue }
+            $value = $window.reportedPercent
+            if ($null -eq $value -and $window.limit -gt 0) { $value = 100.0 * $window.used / $window.limit }
+            $percent = 0.0
+            if (-not ([double]::TryParse([string]$value, [Globalization.NumberStyles]::Float, [Globalization.CultureInfo]::InvariantCulture, [ref]$percent) -and $percent -ge 0 -and $percent -le 100)) { continue }
+            try {
+                if ($fresh -and (-not $window.resetAt -or [datetimeoffset]$window.resetAt -ge $now.AddMinutes(-5))) { return 'live' }
+            } catch { }
+            $status = 'stale'
+        }
+        return $status
+    } catch {
+        # A missing, unreadable, or malformed cache is retried without exposing its contents.
+        return 'none'
+    }
+}
 function Resolve-Release {
     if (Get-Command gh -ErrorAction SilentlyContinue) {
-        $auth = Invoke-Native 'gh' @('auth', 'status')
-        if ($auth.Code -eq 0) {
+        if ($DryRun -or (Invoke-Native 'gh' @('auth', 'status')).Code -eq 0) {
             $release = Invoke-Native 'gh' @('release', 'view', '--repo', $Repo, '--json', 'tagName,assets')
             if ($release.Code -eq 0) {
                 $script:ghRelease = $true
@@ -363,7 +416,7 @@ try {
         $saved = Get-Content -Raw -Encoding UTF8 -LiteralPath $statePath | ConvertFrom-Json
         $script:rememberedState = $saved
         $reloadNames = @('Repo', 'Providers', 'Distro', 'MsixPath', 'NoWindowsSignIns')
-        if ($Resume) { $reloadNames += @('NoSignIn', 'SkipApp', 'SkipWsl') }
+        if ($Resume) { $reloadNames += @('NoSignIn', 'SkipApp') }
         foreach ($name in $reloadNames) {
             if (-not $PSBoundParameters.ContainsKey($name)) {
                 $value = $saved.parameters.$name
@@ -371,6 +424,7 @@ try {
             }
         }
     }
+    # WSL requires an explicit opt-in on each invocation, including staged reruns and -Resume.
     # Ordinary reruns must also recognize this installer's interrupted provisioning.
     # Parameter reload still follows the explicit Resume/staged-script rules above.
     if (-not $script:rememberedState -and (Test-Path -LiteralPath $statePath)) {
@@ -394,7 +448,7 @@ try {
     }
     $Providers = @($Providers | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim().ToLowerInvariant() } | Select-Object -Unique)
     foreach ($provider in $Providers) { if (@('claude', 'codex', 'gemini') -notcontains $provider) { throw "Invalid provider: $provider. Allowed: claude, codex, gemini." } }
-    if ($Distro -and ($Distro -match '[\x00-\x1f]' -or $Distro.StartsWith('-'))) { throw 'Invalid distro name.' }
+    if ($WithWsl -and $Distro -and ($Distro -match '[\x00-\x1f]' -or $Distro.StartsWith('-'))) { throw 'Invalid distro name.' }
     if ($MsixPath) { $MsixPath = (Resolve-Path -LiteralPath $MsixPath).Path }
     if ($AllowDeveloperPackage -and -not $MsixPath) { throw 'AllowDeveloperPackage requires an explicit local MsixPath.' }
     $nativeArch = ''
@@ -405,59 +459,66 @@ try {
     switch ($nativeArch.ToUpperInvariant()) { 'AMD64' { $arch = 'x64' }; 'X64' { $arch = 'x64' }; 'ARM64' { $arch = 'ARM64' }; default { Fail 50 'CodexBarWin requires an x64 or ARM64 Windows OS.' } }
     $build = [int](Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion').CurrentBuildNumber
     if ($build -lt 22000) { Fail 50 'Install Windows 11 (build 22000 or newer), then rerun.' }
-    $distros = @(Get-Distros)
-    $preflightDistroNames = @($distros | ForEach-Object { $_.Name })
-    $default = @($distros | Where-Object { $_.Default } | Select-Object -First 1)
-    $defaultName = ''
-    if ($default.Count) { $defaultName = $default[0].Name }
-    $wslVersion = Invoke-Native 'wsl.exe' @('--version')
-    $wslModern = $false
-    if ($wslVersion.Code -eq 0 -and $wslVersion.Output -match '(\d+\.\d+\.\d+)') { $wslModern = [version]$Matches[1] -ge [version]'2.4.0' }
-    $wslStatus = Invoke-Native 'wsl.exe' @('--status')
-    $wslProbeBlocked = ($wslStatus.Output + $wslStatus.Error + $wslVersion.Output + $wslVersion.Error) -match 'E_ACCESSDENIED|Access is denied|access denied'
-    $featureErrors = @()
-    $features = @(Get-CimInstance Win32_OptionalFeature -ErrorAction SilentlyContinue -ErrorVariable +featureErrors | Where-Object { $_.Name -in @('Microsoft-Windows-Subsystem-Linux', 'VirtualMachinePlatform') })
-    # Win32_OptionalFeature.InstallState: 1 Enabled, 2 Disabled, 3 Absent (payload removed), 4 Unknown.
-    # A feature enabled but not yet active shows as 1 while Windows has a reboot pending.
-    $rebootPending = (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending') -or (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired')
-    $featurePending = $rebootPending -and $wslStatus.Code -ne 0 -and @($features | Where-Object { $_.InstallState -eq 1 }).Count -gt 0
-    # A rerun before the reboot that WSL's enablement needs goes straight to the reboot verdict, without a second UAC.
-    $enableWsl = (-not $SkipWsl) -and -not $featurePending -and (($wslStatus.Code -ne 0 -and -not $distros.Count) -or @($features | Where-Object { $_.InstallState -in @(2, 3) }).Count -gt 0)
-    $wslRuns = $false
-    $defaultRuns = $false
-    if ($defaultName) { $defaultRuns = (Invoke-Native 'wsl.exe' @('-d', $defaultName, '--exec', 'true')).Code -eq 0; $wslRuns = $defaultRuns }
-    if (-not $wslRuns) { foreach ($entry in $distros) { if ((Invoke-Native 'wsl.exe' @('-d', $entry.Name, '--exec', 'true')).Code -eq 0) { $wslRuns = $true; break } } }
-    if (-not $SkipWsl -and -not $wslRuns) {
-        $processors = @(Get-CimInstance Win32_Processor -ErrorAction SilentlyContinue)
-        $hypervisor = (Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue).HypervisorPresent
-        if (-not $processors.Count -and -not $hypervisor) { Write-Host 'Hardware virtualization could not be queried in this process; it remains unverified.' }
-        if (-not $hypervisor -and $processors.Count -gt 0 -and @($processors | Where-Object { $_.VirtualizationFirmwareEnabled }).Count -eq 0) { Fail 50 'Enable hardware virtualization (Intel VT-x / AMD-V) in firmware, then rerun.' }
-    }
     $installed = @(Get-AppxPackage -Name 'CodexBarWin' -ErrorAction SilentlyContinue | Sort-Object Version -Descending | Select-Object -First 1)
     $installedVersion = 'no current-user package visible'
     if ($installed.Count) { $installedVersion = [string]$installed[0].Version }
     $runtimePresent = Runtime-Installed
-    $wslDescription = "modern=$wslModern; features pending=$featurePending; default distro='$defaultName'; registered=$($distros.Name -join ', ')"
-    if ($wslProbeBlocked) { $wslDescription = "modern=$wslModern; distro state unverified: WSL returned E_ACCESSDENIED; registered/default distro queries may be hidden by the agent sandbox" }
-    $runtimeDescription = "matching current-user package visible=$runtimePresent"
-    if ($wslProbeBlocked -and -not $runtimePresent) { $runtimeDescription += ' (absence is inconclusive in this restricted process)' }
-    Phase 'Preflight' "Windows build $build; OS $arch; app $installedVersion; runtime $runtimeName $runtimeDescription; WSL $wslDescription; Windows reboot pending=$rebootPending."
-    if ($wslProbeBlocked -and -not $SkipWsl -and -not $DryRun) { Fail 50 'WSL access was denied in this process. Run the same command in ordinary Windows PowerShell outside the agent sandbox; no installation state has been changed.' }
-    # Select/probe an existing usable candidate before any administrator/system action,
-    # including when Docker is the default and Ubuntu is registered beside it.
-    $preflightCandidate = ''
-    if ($Distro -and $distros.Name -contains $Distro -and (Usable-Distro $Distro)) { $preflightCandidate = $Distro }
-    if (-not $preflightCandidate -and $defaultName -and $defaultRuns -and (Usable-Distro $defaultName)) { $preflightCandidate = $defaultName }
-    if (-not $preflightCandidate) {
-        foreach ($entry in $distros) { if (Usable-Distro $entry.Name) { $preflightCandidate = $entry.Name; break } }
-    }
-    if (-not $SkipWsl -and $preflightCandidate) {
-        $net = Wsl 'if command -v curl >/dev/null; then curl -sSfI --connect-timeout 10 --max-time 20 https://github.com >/dev/null; elif command -v python3 >/dev/null; then python3 -c "import urllib.request; urllib.request.urlopen(\"https://github.com\", timeout=20)" >/dev/null; else exit 77; fi' $preflightCandidate
-        if ($net.Code -eq 77) { Write-Host 'WSL network probe deferred until curl is installed; no HTTP client is present.' }
-        elseif ($net.Code -ne 0) { if ($DryRun) { Phase 'WSL network' 'GitHub network probe failed; fix the Windows/WSL network, proxy, or VPN before setup.' $false; $script:failureCode = 50 } else { Fail 50 'WSL cannot reach https://github.com. Check the Windows/WSL network, proxy, and VPN, then rerun.' } }
-    } elseif (-not $SkipWsl -and $defaultName -and -not $wslRuns) {
-        if (-not $DryRun -and -not $enableWsl -and -not $featurePending) { Fail 50 'The default WSL distro cannot run. Run wsl --status and wsl --exec true outside the agent sandbox, correct the reported WSL problem, then rerun.' }
-        Write-Host 'WSL execution is unavailable; distro packages, CLI state, network, and sign-ins cannot be verified in this process.'
+    $windowsDescription = "Windows build $build; OS $arch; app $installedVersion; runtime $runtimeName "
+    $enableWsl = $false
+    if ($WithWsl) {
+        $env:WSL_UTF8 = '1'
+        $distros = @(Get-Distros)
+        $preflightDistroNames = @($distros | ForEach-Object { $_.Name })
+        $default = @($distros | Where-Object { $_.Default } | Select-Object -First 1)
+        $defaultName = ''
+        if ($default.Count) { $defaultName = $default[0].Name }
+        $wslVersion = Invoke-Native 'wsl.exe' @('--version')
+        $wslModern = $false
+        if ($wslVersion.Code -eq 0 -and $wslVersion.Output -match '(\d+\.\d+\.\d+)') { $wslModern = [version]$Matches[1] -ge [version]'2.4.0' }
+        $wslStatus = Invoke-Native 'wsl.exe' @('--status')
+        $wslProbeBlocked = ($wslStatus.Output + $wslStatus.Error + $wslVersion.Output + $wslVersion.Error) -match 'E_ACCESSDENIED|Access is denied|access denied'
+        $featureErrors = @()
+        $features = @(Get-CimInstance Win32_OptionalFeature -ErrorAction SilentlyContinue -ErrorVariable +featureErrors | Where-Object { $_.Name -in @('Microsoft-Windows-Subsystem-Linux', 'VirtualMachinePlatform') })
+        # Win32_OptionalFeature.InstallState: 1 Enabled, 2 Disabled, 3 Absent (payload removed), 4 Unknown.
+        # A feature enabled but not yet active shows as 1 while Windows has a reboot pending.
+        $rebootPending = (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending') -or (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired')
+        $featurePending = $rebootPending -and $wslStatus.Code -ne 0 -and @($features | Where-Object { $_.InstallState -eq 1 }).Count -gt 0
+        # A rerun before the reboot that WSL's enablement needs goes straight to the reboot verdict, without a second UAC.
+        $enableWsl = -not $featurePending -and (($wslStatus.Code -ne 0 -and -not $distros.Count) -or @($features | Where-Object { $_.InstallState -in @(2, 3) }).Count -gt 0)
+        $wslRuns = $false
+        $defaultRuns = $false
+        if ($defaultName) { $defaultRuns = (Invoke-Native 'wsl.exe' @('-d', $defaultName, '--exec', 'true')).Code -eq 0; $wslRuns = $defaultRuns }
+        if (-not $wslRuns) { foreach ($entry in $distros) { if ((Invoke-Native 'wsl.exe' @('-d', $entry.Name, '--exec', 'true')).Code -eq 0) { $wslRuns = $true; break } } }
+        if (-not $wslRuns) {
+            $processors = @(Get-CimInstance Win32_Processor -ErrorAction SilentlyContinue)
+            $hypervisor = (Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue).HypervisorPresent
+            if (-not $processors.Count -and -not $hypervisor) { Write-Host 'Hardware virtualization could not be queried in this process; it remains unverified.' }
+            if (-not $hypervisor -and $processors.Count -gt 0 -and @($processors | Where-Object { $_.VirtualizationFirmwareEnabled }).Count -eq 0) { Fail 50 'Enable hardware virtualization (Intel VT-x / AMD-V) in firmware, then rerun.' }
+        }
+        $wslDescription = "modern=$wslModern; features pending=$featurePending; default distro='$defaultName'; registered=$($distros.Name -join ', ')"
+        if ($wslProbeBlocked) { $wslDescription = "modern=$wslModern; distro state unverified: WSL returned E_ACCESSDENIED; registered/default distro queries may be hidden by the agent sandbox" }
+        $runtimeDescription = "matching current-user package visible=$runtimePresent"
+        if ($wslProbeBlocked -and -not $runtimePresent) { $runtimeDescription += ' (absence is inconclusive in this restricted process)' }
+        Phase 'Preflight' "${windowsDescription}$runtimeDescription; WSL $wslDescription; Windows reboot pending=$rebootPending."
+        if ($wslProbeBlocked -and -not $DryRun) { Fail 50 'WSL access was denied in this process. Run the same command in ordinary Windows PowerShell outside the agent sandbox; no installation state has been changed.' }
+        # Select/probe an existing usable candidate before any administrator/system action,
+        # including when Docker is the default and Ubuntu is registered beside it.
+        $preflightCandidate = ''
+        if ($Distro -and $distros.Name -contains $Distro -and (Usable-Distro $Distro)) { $preflightCandidate = $Distro }
+        if (-not $preflightCandidate -and $defaultName -and $defaultRuns -and (Usable-Distro $defaultName)) { $preflightCandidate = $defaultName }
+        if (-not $preflightCandidate) {
+            foreach ($entry in $distros) { if (Usable-Distro $entry.Name) { $preflightCandidate = $entry.Name; break } }
+        }
+        if ($preflightCandidate) {
+            $net = Wsl 'if command -v curl >/dev/null; then curl -sSfI --connect-timeout 10 --max-time 20 https://github.com >/dev/null; elif command -v python3 >/dev/null; then python3 -c "import urllib.request; urllib.request.urlopen(\"https://github.com\", timeout=20)" >/dev/null; else exit 77; fi' $preflightCandidate
+            if ($net.Code -eq 77) { Write-Host 'WSL network probe deferred until curl is installed; no HTTP client is present.' }
+            elseif ($net.Code -ne 0) { if ($DryRun) { Phase 'WSL network' 'GitHub network probe failed; fix the Windows/WSL network, proxy, or VPN before setup.' $false; $script:failureCode = 50 } else { Fail 50 'WSL cannot reach https://github.com. Check the Windows/WSL network, proxy, and VPN, then rerun.' } }
+        } elseif ($defaultName -and -not $wslRuns) {
+            if (-not $DryRun -and -not $enableWsl -and -not $featurePending) { Fail 50 'The default WSL distro cannot run. Run wsl --status and wsl --exec true outside the agent sandbox, correct the reported WSL problem, then rerun.' }
+            Write-Host 'WSL execution is unavailable; distro packages, CLI state, network, and sign-ins cannot be verified in this process.'
+        }
+    } else {
+        Phase 'Preflight' "${windowsDescription}matching current-user package visible=$runtimePresent."
     }
 
     # Release access is established before staging or changing Windows/WSL state.
@@ -476,21 +537,23 @@ try {
     if ($releaseAccessible -and -not $SkipApp -and -not $MsixPath -and -not @($release.assets | Where-Object { $_.name -ceq $assetName }).Count) { Fail 40 "Latest release lacks $assetName." }
     if ($releaseAccessible) { Phase 'Release access' "Latest release $($release.tagName) is accessible in $Repo." }
 
-    $tools = Join-Path $PSScriptRoot 'tools\wsl'
-    $pinText = Get-Content -Raw -LiteralPath (Join-Path $tools 'install-wsl-shim.ps1')
-    if ($pinText -notmatch '\$CodexBarVersion\s*=\s*"(v\d+\.\d+\.\d+)"') { throw 'Cannot determine the pinned CodexBar version.' }
-    $pin = $Matches[1]
-    $shimText = (Get-Content -Raw -LiteralPath (Join-Path $tools 'codexbar-shim.sh')).Replace("`r", '')
-    $sha = [Security.Cryptography.SHA256]::Create()
-    try { $shimHash = ([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($shimText)))).Replace('-', '').ToLowerInvariant() } finally { $sha.Dispose() }
-    $chosen = $Distro
-    if (-not $chosen) { $chosen = $preflightCandidate }
-    if (-not $chosen) { $chosen = 'Ubuntu-24.04' }
-    $cliReady = $false
-    if (-not $SkipWsl -and $wslRuns -and $distros.Name -contains $chosen) {
-        $versionProbe = Wsl 'codexbar --version' $chosen -Interactive
-        $hashProbe = Wsl 'sha256sum /opt/codexbar/codexbar-shim' $chosen
-        $cliReady = $versionProbe.Code -eq 0 -and $versionProbe.Output -match ([regex]::Escape($pin.TrimStart('v')) + '(?!\d)') -and $hashProbe.Code -eq 0 -and $hashProbe.Output.StartsWith($shimHash)
+    if ($WithWsl) {
+        $tools = Join-Path $PSScriptRoot 'tools\wsl'
+        $pinText = Get-Content -Raw -LiteralPath (Join-Path $tools 'install-wsl-shim.ps1')
+        if ($pinText -notmatch '\$CodexBarVersion\s*=\s*"(v\d+\.\d+\.\d+)"') { throw 'Cannot determine the pinned CodexBar version.' }
+        $pin = $Matches[1]
+        $shimText = (Get-Content -Raw -LiteralPath (Join-Path $tools 'codexbar-shim.sh')).Replace("`r", '')
+        $sha = [Security.Cryptography.SHA256]::Create()
+        try { $shimHash = ([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($shimText)))).Replace('-', '').ToLowerInvariant() } finally { $sha.Dispose() }
+        $chosen = $Distro
+        if (-not $chosen) { $chosen = $preflightCandidate }
+        if (-not $chosen) { $chosen = 'Ubuntu-24.04' }
+        $cliReady = $false
+        if ($wslRuns -and $distros.Name -contains $chosen) {
+            $versionProbe = Wsl 'codexbar --version' $chosen -Interactive
+            $hashProbe = Wsl 'sha256sum /opt/codexbar/codexbar-shim' $chosen
+            $cliReady = $versionProbe.Code -eq 0 -and $versionProbe.Output -match ([regex]::Escape($pin.TrimStart('v')) + '(?!\d)') -and $hashProbe.Code -eq 0 -and $hashProbe.Output.StartsWith($shimHash)
+        }
     }
     if ($DryRun) {
         if (-not $releaseAccessible) { $assetName = "CodexBarWin-<latest-tag>-$arch.msix"; $checksumName = 'the versioned release checksums file (latest tag unverified)' }
@@ -502,39 +565,50 @@ try {
             if ($signature.SignerCertificate) { $trustPlan = 'present=' + [string](Test-Path ('Cert:\LocalMachine\TrustedPeople\' + $signature.SignerCertificate.Thumbprint)) + ' (package will be checksum/signature verified before use)' }
         }
         Phase 'Download / signer' "Would download/verify SHA256 for $assetName using $checksumName (local MSIX overrides download). Signer trust: $trustPlan."
-        $enablePlan = [string]$enableWsl; $updatePlan = [string](-not $SkipWsl -and -not $wslModern -and -not $enableWsl)
-        if ($wslProbeBlocked) { $enablePlan = 'unverified'; $updatePlan = 'unverified' }
-        Phase 'Elevation' "At most one UAC: certificate if untrusted; WSL enable=$enablePlan; WSL update=$updatePlan; runtime install only if absent (visible=$runtimePresent), first try verified redistributable unelevated. WinGet is used for download because its install command can open another UAC."
-        Phase 'Reboot' "Needed only if WSL enablement requires it; no auto-resume. Existing pending reboot=$rebootPending."
-        $defaultPlan = $defaultName
-        if ($wslProbeBlocked) { $defaultPlan = 'unverified'; $chosenPlan = 'unverified; prefer usable default, then existing Debian/Ubuntu, else Ubuntu-24.04' } else { $chosenPlan = $chosen }
-        Phase 'Distro' "Would use '$chosenPlan' as the default (current '$defaultPlan'); preserve an existing default user, including root. Only a distro installed by setup or interrupted setup provisioning receives a locked-password user. SkipWsl=$SkipWsl."
-        $cliPlan = [string]$cliReady
-        if (-not $wslRuns) { $cliPlan = 'unverified (WSL execution unavailable)' }
-        Phase 'WSL tools' "Pinned CLI $pin and exact shim already match=$cliPlan. Otherwise install only missing apt packages, then staged tools/wsl installer."
-        foreach ($provider in $Providers) {
-            $tool = $provider; if ($provider -eq 'gemini') { $tool = 'agy' }
-            $present = 'unverified (WSL execution unavailable)'
-            if ($wslRuns -and $distros.Name -contains $chosen) { $present = [string](Linux-Tool $tool $chosen) }
-            $bridge = $provider -eq 'codex' -and -not $NoWindowsSignIns -and (Windows-CodexAvailable)
-            Phase "Provider $provider" "Linux CLI present=$present; Windows Codex read-only bridge eligible=$bridge (enabled only if current WSL usage fails)."
+        if ($WithWsl) {
+            $enablePlan = [string]$enableWsl; $updatePlan = [string](-not $wslModern -and -not $enableWsl)
+            if ($wslProbeBlocked) { $enablePlan = 'unverified'; $updatePlan = 'unverified' }
+            Phase 'Elevation' "At most one UAC: certificate if untrusted; WSL enable=$enablePlan; WSL update=$updatePlan; runtime install only if absent (visible=$runtimePresent), first try verified redistributable unelevated. WinGet is used for download because its install command can open another UAC."
+            Phase 'Reboot' "Needed only if WSL enablement requires it; no auto-resume. Existing pending reboot=$rebootPending."
+            $defaultPlan = $defaultName
+            if ($wslProbeBlocked) { $defaultPlan = 'unverified'; $chosenPlan = 'unverified; prefer usable default, then existing Debian/Ubuntu, else Ubuntu-24.04' } else { $chosenPlan = $chosen }
+            Phase 'Distro' "Would use '$chosenPlan' as the default (current '$defaultPlan'); preserve an existing default user, including root. Only a distro installed by setup or interrupted setup provisioning receives a locked-password user."
+            $cliPlan = [string]$cliReady
+            if (-not $wslRuns) { $cliPlan = 'unverified (WSL execution unavailable)' }
+            Phase 'WSL tools' "Pinned CLI $pin and exact shim already match=$cliPlan. Otherwise install only missing apt packages, then staged tools/wsl installer."
+            foreach ($provider in $Providers) {
+                $tool = $provider; if ($provider -eq 'gemini') { $tool = 'agy' }
+                $present = 'unverified (WSL execution unavailable)'
+                if ($wslRuns -and $distros.Name -contains $chosen) { $present = [string](Linux-Tool $tool $chosen) }
+                $bridge = $provider -eq 'codex' -and -not $NoWindowsSignIns -and (Windows-CodexAvailable)
+                Phase "Provider $provider" "Linux CLI present=$present; Windows Codex read-only bridge eligible=$bridge (enabled only if current WSL usage fails)."
+            }
+        } else {
+            Phase 'Elevation' "At most one UAC for the package signer and Windows App Runtime. If the runtime is absent (visible=$runtimePresent), first try the verified redistributable unelevated."
         }
         $releasePlan = $release.tagName
         if (-not $releaseAccessible) { $releasePlan = 'the latest release (tag unverified)' }
         Phase 'App' "Would install/upgrade only if older than $releasePlan; current=$installedVersion; SkipApp=$SkipApp. Preseed only absent settings, then launch."
-        Phase 'Sign-ins' "Not probed in DryRun because usage probes can write shim caches. Real run classifies live, stale, or no usage; only no usage opens one sign-in console unless NoSignIn=$NoSignIn. Stale/rate-limit results need no sign-in. NoWindowsSignIns=$NoWindowsSignIns."
+        if ($WithWsl) {
+            Phase 'Sign-ins' "Not probed in DryRun because usage probes can write shim caches. Real run classifies live, stale, or no usage; only no usage opens one sign-in console unless NoSignIn=$NoSignIn. Stale/rate-limit results need no sign-in. NoWindowsSignIns=$NoWindowsSignIns."
+        } else {
+            Phase 'Sign-ins' "Would check Windows sign-in presence for $($Providers -join ', ')."
+            if (-not $SkipApp) { Phase 'Usage' "Would wait up to 120 seconds for readings after app launch for $($Providers -join ', ')." }
+        }
         $script:human.Add('DryRun changed nothing. Run the same command without -DryRun to perform verified installation and determine pending sign-ins.')
         if (-not $releaseAccessible) { Finish 40 'access' } elseif ($script:failureCode -eq 50) { Finish 50 'failed' } else { Finish 0 'ok' }
     } else {
         New-Item -ItemType Directory -Path $stage -Force | Out-Null
         $stagedScript = Join-Path $stage 'install.ps1'
         if ([IO.Path]::GetFullPath($PSCommandPath) -ne [IO.Path]::GetFullPath($stagedScript)) { Copy-Item -LiteralPath $PSCommandPath -Destination $stagedScript -Force }
-        $stagedTools = Join-Path $stage 'tools\wsl'
-        if ([IO.Path]::GetFullPath($tools) -ne [IO.Path]::GetFullPath($stagedTools)) {
-            New-Item -ItemType Directory -Path $stagedTools -Force | Out-Null
-            Get-ChildItem -LiteralPath $tools -File | Copy-Item -Destination $stagedTools -Force
+        if ($WithWsl) {
+            $stagedTools = Join-Path $stage 'tools\wsl'
+            if ([IO.Path]::GetFullPath($tools) -ne [IO.Path]::GetFullPath($stagedTools)) {
+                New-Item -ItemType Directory -Path $stagedTools -Force | Out-Null
+                Get-ChildItem -LiteralPath $tools -File | Copy-Item -Destination $stagedTools -Force
+            }
         }
-        $parameters = [ordered]@{ Repo = $Repo; Providers = $Providers; Distro = $Distro; MsixPath = $MsixPath; NoSignIn = [bool]$NoSignIn; NoWindowsSignIns = [bool]$NoWindowsSignIns; SkipApp = [bool]$SkipApp; SkipWsl = [bool]$SkipWsl }
+        $parameters = [ordered]@{ Repo = $Repo; Providers = $Providers; Distro = $Distro; MsixPath = $MsixPath; NoSignIn = [bool]$NoSignIn; NoWindowsSignIns = [bool]$NoWindowsSignIns; SkipApp = [bool]$SkipApp; WithWsl = [bool]$WithWsl }
         $managedDistro = ''; $managedUser = ''
         if ($script:rememberedState) { $managedDistro = [string]$script:rememberedState.managedDistro; $managedUser = [string]$script:rememberedState.managedUser }
         $script:state = [pscustomobject]@{ parameters = $parameters; completedPhases = @('Preflight', 'Release access'); release = $release.tagName; managedDistro = $managedDistro; managedUser = $managedUser; localExpectedSha256 = '' }
@@ -640,12 +714,13 @@ try {
         }
         # `wsl --install --no-distribution` already installs the current WSL; an update right after it can fail
         # until the reboot and would turn a reboot into an admin failure.
-        $updateWsl = -not $SkipWsl -and -not $wslModern -and -not $enableWsl
+        $updateWsl = $WithWsl -and -not $wslModern -and -not $enableWsl
         if ($trustNeeded -or $enableWsl -or $updateWsl -or $runtimeAdmin) {
             $adminPlan = [ordered]@{ CertificateBase64 = $certificateBase64; Thumbprint = $signerThumbprint; ExpectedThumbprint = $ExpectedReleaseCertificateThumbprint; AllowDeveloperPackage = [bool]$AllowDeveloperPackage; Trust = [bool]$trustNeeded; EnableWsl = [bool]$enableWsl; UpdateWsl = [bool]$updateWsl; Runtime = $runtimeInstaller; RuntimeSha256 = $runtimeSha256; InstallRuntime = [bool]$runtimeAdmin }
             $arguments = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand ' + (New-AdminCommand $adminPlan)
             if ($arguments.Length -gt 30000) { throw 'Administrator command exceeds the safe Windows command-line length.' }
-            Write-Host 'Approve one UAC prompt for the batched certificate, WSL, and runtime actions. Keep this command running; this can take several minutes.'
+            $adminActions = if ($WithWsl) { 'certificate, WSL, and runtime' } else { 'certificate and runtime' }
+            Write-Host "Approve one UAC prompt for the batched $adminActions actions. Keep this command running; this can take several minutes."
             try {
                 $powershell = Join-Path ([Environment]::GetFolderPath('System')) 'WindowsPowerShell\v1.0\powershell.exe'
                 $adminProcess = Start-Process -FilePath $powershell -Verb RunAs -ArgumentList $arguments -WorkingDirectory ([Environment]::GetFolderPath('System')) -WindowStyle Hidden -PassThru -Wait
@@ -655,24 +730,24 @@ try {
             Phase 'Elevation' 'Single batched elevation completed; subsequent operations remain in the original user account.'
         } else { $adminResult = [pscustomobject]@{ Reboot = $false }; Phase 'Elevation' 'No administrator actions needed; no UAC prompt.' }
         $enabledNeedsReboot = $false
-        if ($enableWsl) {
+        if ($WithWsl -and $enableWsl) {
             $afterStatus = Invoke-Native 'wsl.exe' @('--status')
             $afterRebootPending = Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending'
             $enabledNeedsReboot = $afterStatus.Code -ne 0 -or $afterRebootPending
         }
-        if ($runtimeAdmin -and -not ($runtimeReboot -or $adminResult.Reboot -or $enabledNeedsReboot -or ($featurePending -and -not $wslRuns)) -and -not (Runtime-Installed)) {
+        if ($runtimeAdmin -and -not ($WithWsl -and ($runtimeReboot -or $adminResult.Reboot -or $enabledNeedsReboot -or ($featurePending -and -not $wslRuns))) -and -not (Runtime-Installed)) {
             # Elevation may have used another account; register per-user runtime
             # packages again from the original process without permitting another UAC.
             $registerRuntime = Invoke-Native $runtimeInstaller @('--quiet') 900 -NoElevation
             if ($registerRuntime.Code -eq 3010) { $runtimeReboot = $true }
         }
-        if ($runtimeReboot -or $adminResult.Reboot -or $enabledNeedsReboot -or ($featurePending -and -not $wslRuns)) {
+        if ($WithWsl -and ($runtimeReboot -or $adminResult.Reboot -or $enabledNeedsReboot -or ($featurePending -and -not $wslRuns))) {
             Phase 'Reboot' 'Reboot, then run the same command again' $false
-            $script:human.Add('Reboot, then run the same command again. Staged alternative: powershell -NoProfile -ExecutionPolicy Bypass -File "$env:LOCALAPPDATA\CodexBarWin-Setup\install.ps1"')
+            $script:human.Add('Reboot, then run the same command again. Staged alternative: powershell -NoProfile -ExecutionPolicy Bypass -File "$env:LOCALAPPDATA\CodexBarWin-Setup\install.ps1" -WithWsl')
             Finish 3010 'reboot'
         } else {
-            Phase 'Reboot' 'No setup reboot required.'
-            if (-not $SkipWsl) {
+            if ($WithWsl) {
+                Phase 'Reboot' 'No setup reboot required.'
                 $distros = @(Get-Distros)
                 $installDistro = $distros.Name -notcontains $chosen
                 $resumeProvisioning = $script:state.managedDistro -eq $chosen
@@ -755,9 +830,8 @@ fi
                 $installedShim = Wsl 'sha256sum /opt/codexbar/codexbar-shim'
                 if ($installedCli.Output -notmatch ('(?<!\d)' + [regex]::Escape($pin.TrimStart('v')) + '(?!\d)') -or $installedShim.Code -ne 0 -or -not $installedShim.Output.StartsWith($shimHash)) { throw 'Installed CLI version or shim checksum does not match the staged installer.' }
                 Phase 'WSL tools' "Pinned CLI $pin and shim installed (already matched=$cliReady)."
-            } else { Phase 'Distro' 'WSL setup skipped; usage checks still use its current default distro.'; Phase 'WSL tools' 'Skipped by -SkipWsl.' }
 
-            $removeBridge = @'
+                $removeBridge = @'
 set -e
 p="$HOME/.config/codexbar/shim.env"
 if [ -f "$p" ]; then
@@ -767,41 +841,41 @@ if [ -f "$p" ]; then
   chmod 600 "$t"; mv "$t" "$p"
 fi
 '@
-            if ($NoWindowsSignIns) {
-                Require-Native (Wsl $removeBridge) 'Removing Windows sign-in bridge failed'
-            }
-            $bridgeUsed = -not $NoWindowsSignIns -and (Wsl 'test -f "$HOME/.config/codexbar/shim.env" && grep -q ''^CODEXBAR_CODEX_HOME='' "$HOME/.config/codexbar/shim.env"').Code -eq 0
-            $bridgeSafe = (Wsl 'PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; ! command -v codex >/dev/null 2>&1 && ! command -v codex.exe >/dev/null 2>&1').Code -eq 0
-            if ($Providers -contains 'codex' -and $bridgeUsed -and -not $bridgeSafe) {
-                Require-Native (Wsl $removeBridge) 'Removing unsafe Windows sign-in bridge failed'
-                $bridgeUsed = $false
-                Write-Host 'Codex: the minimal system PATH contains a Codex CLI, so the read-only Windows bridge cannot be used safely. Using a separate Linux sign-in.'
-            }
-            # Ubuntu prints a "use sudo" banner in every interactive shell of a sudo-group user who never ran sudo,
-            # ahead of the app's JSON. ~/.hushlogin silences it; root and users who have used sudo are unaffected.
-            [void](Wsl '[ "$(id -u)" -ne 0 ] && [ ! -e "$HOME/.sudo_as_admin_successful" ] && [ ! -e "$HOME/.hushlogin" ] && id -nG | grep -qwE "sudo|admin" && touch "$HOME/.hushlogin"; true')
-            foreach ($provider in $Providers) {
-                $working = Test-Usage $provider
-                if ($working -eq 'noise') {
-                    Fail 1 "Text is printed outside codexbar's JSON in the default WSL user's interactive shell (bash -ic), so the app cannot read $provider usage. Remove echo/printf output from ~/.bashrc (or move it under a check for an interactive terminal), then rerun."
+                if ($NoWindowsSignIns) {
+                    Require-Native (Wsl $removeBridge) 'Removing Windows sign-in bridge failed'
                 }
-                if ($working -ne 'none') {
-                    Phase "Provider $provider" "Usage is $working; provider CLI installation and sign-in skipped, existing sign-in preserved."
-                    continue
+                $bridgeUsed = -not $NoWindowsSignIns -and (Wsl 'test -f "$HOME/.config/codexbar/shim.env" && grep -q ''^CODEXBAR_CODEX_HOME='' "$HOME/.config/codexbar/shim.env"').Code -eq 0
+                $bridgeSafe = (Wsl 'PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; ! command -v codex >/dev/null 2>&1 && ! command -v codex.exe >/dev/null 2>&1').Code -eq 0
+                if ($Providers -contains 'codex' -and $bridgeUsed -and -not $bridgeSafe) {
+                    Require-Native (Wsl $removeBridge) 'Removing unsafe Windows sign-in bridge failed'
+                    $bridgeUsed = $false
+                    Write-Host 'Codex: the minimal system PATH contains a Codex CLI, so the read-only Windows bridge cannot be used safely. Using a separate Linux sign-in.'
                 }
-                $linuxHome = $null
-                if ($provider -eq 'codex' -and -not $NoWindowsSignIns -and $bridgeSafe -and (Windows-CodexAvailable)) {
-                    $linuxHome = Invoke-Native 'wsl.exe' @('--exec', 'wslpath', '-a', '-u', (Join-Path $env:USERPROFILE '.codex'))
-                    # A custom automount root (not /mnt/<drive>) is left alone: the bridge is an optimisation.
-                    if ($linuxHome.Code -ne 0 -or $linuxHome.Output -notmatch '^/mnt/[a-z]/[^\r\n]+$') {
-                        Write-Host 'Codex: the Windows Codex folder is not under /mnt/<drive> in WSL; using a separate Linux sign-in instead of the read-only bridge.'
-                        $linuxHome = $null
+                # Ubuntu prints a "use sudo" banner in every interactive shell of a sudo-group user who never ran sudo,
+                # ahead of the app's JSON. ~/.hushlogin silences it; root and users who have used sudo are unaffected.
+                [void](Wsl '[ "$(id -u)" -ne 0 ] && [ ! -e "$HOME/.sudo_as_admin_successful" ] && [ ! -e "$HOME/.hushlogin" ] && id -nG | grep -qwE "sudo|admin" && touch "$HOME/.hushlogin"; true')
+                foreach ($provider in $Providers) {
+                    $working = Test-Usage $provider
+                    if ($working -eq 'noise') {
+                        Fail 1 "Text is printed outside codexbar's JSON in the default WSL user's interactive shell (bash -ic), so the app cannot read $provider usage. Remove echo/printf output from ~/.bashrc (or move it under a check for an interactive terminal), then rerun."
                     }
-                }
-                if ($linuxHome) {
-                    $envValue = 'CODEXBAR_CODEX_HOME=' + $linuxHome.Output
-                    $encoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($envValue + "`n"))
-                    $writeBridge = @'
+                    if ($working -ne 'none') {
+                        Phase "Provider $provider" "Usage is $working; provider CLI installation and sign-in skipped, existing sign-in preserved."
+                        continue
+                    }
+                    $linuxHome = $null
+                    if ($provider -eq 'codex' -and -not $NoWindowsSignIns -and $bridgeSafe -and (Windows-CodexAvailable)) {
+                        $linuxHome = Invoke-Native 'wsl.exe' @('--exec', 'wslpath', '-a', '-u', (Join-Path $env:USERPROFILE '.codex'))
+                        # A custom automount root (not /mnt/<drive>) is left alone: the bridge is an optimisation.
+                        if ($linuxHome.Code -ne 0 -or $linuxHome.Output -notmatch '^/mnt/[a-z]/[^\r\n]+$') {
+                            Write-Host 'Codex: the Windows Codex folder is not under /mnt/<drive> in WSL; using a separate Linux sign-in instead of the read-only bridge.'
+                            $linuxHome = $null
+                        }
+                    }
+                    if ($linuxHome) {
+                        $envValue = 'CODEXBAR_CODEX_HOME=' + $linuxHome.Output
+                        $encoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($envValue + "`n"))
+                        $writeBridge = @'
 set -e
 umask 077
 mkdir -p "$HOME/.config/codexbar"
@@ -811,23 +885,22 @@ if [ -f "$p" ]; then grep -v '^CODEXBAR_CODEX_HOME=' "$p" > "$t" || [ $? -eq 1 ]
 printf '%s' ENCODED | base64 -d >> "$t"
 chmod 600 "$t"; mv "$t" "$p"
 '@
-                    Require-Native (Wsl $writeBridge.Replace('ENCODED', (Quote-Sh $encoded))) 'Configuring read-only Windows sign-in bridge failed'
-                    $bridged = Test-Usage 'codex'
-                    if ($bridged -eq 'live' -or $bridged -eq 'stale') {
-                        $bridgeUsed = $true
-                        Phase 'Provider codex' "Codex: using your Windows sign-in (read-only, usage $bridged); if usage goes stale, use Codex on Windows once or run install.ps1 -NoWindowsSignIns."
+                        Require-Native (Wsl $writeBridge.Replace('ENCODED', (Quote-Sh $encoded))) 'Configuring read-only Windows sign-in bridge failed'
+                        $bridged = Test-Usage 'codex'
+                        if ($bridged -eq 'live' -or $bridged -eq 'stale') {
+                            $bridgeUsed = $true
+                            Phase 'Provider codex' "Codex: using your Windows sign-in (read-only, usage $bridged); if usage goes stale, use Codex on Windows once or run install.ps1 -WithWsl -NoWindowsSignIns."
+                            continue
+                        }
+                        # The Windows sign-in didn't produce usage (expired, or a different setup): undo the bridge and
+                        # fall through to a Linux Codex install and sign-in.
+                        Require-Native (Wsl $removeBridge) 'Removing the non-working Windows sign-in bridge failed'
+                        Write-Host 'Codex: the Windows sign-in did not return usage through the bridge; using a separate Linux sign-in.'
+                    }
+                    if ($provider -eq 'codex' -and $bridgeUsed) {
+                        Phase 'Provider codex' 'Read-only Windows sign-in bridge is active; a Linux Codex install and login are skipped.'
                         continue
                     }
-                    # The Windows sign-in didn't produce usage (expired, or a different setup): undo the bridge and
-                    # fall through to a Linux Codex install and sign-in.
-                    Require-Native (Wsl $removeBridge) 'Removing the non-working Windows sign-in bridge failed'
-                    Write-Host 'Codex: the Windows sign-in did not return usage through the bridge; using a separate Linux sign-in.'
-                }
-                if ($provider -eq 'codex' -and $bridgeUsed) {
-                    Phase 'Provider codex' 'Read-only Windows sign-in bridge is active; a Linux Codex install and login are skipped.'
-                    continue
-                }
-                if (-not $SkipWsl) {
                     $tool = $provider; if ($provider -eq 'gemini') { $tool = 'agy' }
                     if (-not (Linux-Tool $tool $chosen)) {
                         switch ($provider) {
@@ -840,8 +913,8 @@ chmod 600 "$t"; mv "$t" "$p"
                         Require-Native (Wsl $providerInstall $chosen -Timeout 900) "$provider Linux CLI installation failed"
                     }
                     if (-not (Linux-Tool $tool $chosen)) { throw "$provider did not resolve to a Linux CLI under bash -ic." }
+                    Phase "Provider $provider" 'Linux CLI checked; usage unavailable, sign-in or provider recovery needed.'
                 }
-                Phase "Provider $provider" 'Linux CLI checked; usage unavailable, sign-in or provider recovery needed.'
             }
 
             if (-not $SkipApp) {
@@ -880,52 +953,97 @@ chmod 600 "$t"; mv "$t" "$p"
                 Phase 'App' "Installed version $($installed[0].Version); existing settings preserved."
             } else { Phase 'App' 'Skipped by -SkipApp.' }
 
-            $usageStates = @{}
-            foreach ($provider in $Providers) { $usageStates[$provider] = Test-Usage $provider }
-            $noisy = @($Providers | Where-Object { $usageStates[$_] -eq 'noise' })
-            if ($noisy.Count) { Fail 1 ("Text is printed outside codexbar's JSON for " + ($noisy -join ', ') + " in the default WSL user's interactive shell (bash -ic), so the app cannot read it. Remove echo/printf output from ~/.bashrc, then rerun.") }
-            $pending = @($Providers | Where-Object { $usageStates[$_] -notin @('live', 'stale') })
-            if ($pending.Count -gt 0 -and -not $NoSignIn) {
-                $loginLines = New-Object 'System.Collections.Generic.List[string]'
-                $loginLines.Add('set +e')
-                $loginLines.Add('umask 077; WORK=$(mktemp -d); trap ''rm -rf "$WORK"'' EXIT')
-                $loginLines.Add('printf ''#!/bin/sh\nexec /mnt/c/Windows/explorer.exe "$1"\n'' > "$WORK/browser"; chmod 700 "$WORK/browser"')
-                $loginLines.Add('if command -v wslview >/dev/null; then export BROWSER=wslview; else export BROWSER="$WORK/browser"; fi')
-                foreach ($provider in $pending) {
-                    $loginLines.Add('printf ''\n=== ' + $provider + ': approve the browser sign-in; never share passwords or tokens with your agent ===\n''')
-                    switch ($provider) {
-                        'codex' {
-                            if ($bridgeUsed) { $loginLines.Add('printf ''Windows sign-in bridge is active. Use Codex on Windows once to refresh it; no Linux login will be run.\n''') }
-                            else { $loginLines.Add('if codex login --help 2>&1 | grep -q -- ''--device-auth''; then codex login --device-auth; else codex login; fi') }
-                        }
-                        'claude' { $loginLines.Add('if claude auth --help 2>&1 | grep -q ''login''; then claude auth login; elif claude --help 2>&1 | grep -q ''login''; then claude login; else printf ''Sign in, then exit immediately. Do not ask this agent to do work.\n''; claude; fi') }
-                        'gemini' { $loginLines.Add('if agy --help 2>&1 | grep -Eq ''^[[:space:]]+login([[:space:]]|$)''; then agy login; else printf ''Sign in with Google, then exit immediately - it is an agent; do not type anything else.\n''; agy; fi') }
-                    }
-                }
-                $loginLines.Add('printf ''\nSign-in sequence finished. This window will close.\n''')
-                $loginScript = Join-Path $stage 'sign-in.sh'
-                Write-Utf8 $loginScript ($loginLines -join "`n")
-                $loginPath = Invoke-Native 'wsl.exe' @('--exec', 'wslpath', '-a', '-u', $loginScript)
-                Require-Native $loginPath 'Translating sign-in script path failed'
-                # Credentials and login output stay in this human-owned window, outside the transcript.
-                $argumentLine = '--exec bash -ic ' + (Quote-Native ('bash ' + (Quote-Sh $loginPath.Output)))
-                Start-Process -FilePath 'wsl.exe' -ArgumentList $argumentLine -Wait | Out-Null
+            if ($WithWsl) {
+                $usageStates = @{}
                 foreach ($provider in $Providers) { $usageStates[$provider] = Test-Usage $provider }
                 $noisy = @($Providers | Where-Object { $usageStates[$_] -eq 'noise' })
                 if ($noisy.Count) { Fail 1 ("Text is printed outside codexbar's JSON for " + ($noisy -join ', ') + " in the default WSL user's interactive shell (bash -ic), so the app cannot read it. Remove echo/printf output from ~/.bashrc, then rerun.") }
                 $pending = @($Providers | Where-Object { $usageStates[$_] -notin @('live', 'stale') })
+                if ($pending.Count -gt 0 -and -not $NoSignIn) {
+                    $loginLines = New-Object 'System.Collections.Generic.List[string]'
+                    $loginLines.Add('set +e')
+                    $loginLines.Add('umask 077; WORK=$(mktemp -d); trap ''rm -rf "$WORK"'' EXIT')
+                    $loginLines.Add('printf ''#!/bin/sh\nexec /mnt/c/Windows/explorer.exe "$1"\n'' > "$WORK/browser"; chmod 700 "$WORK/browser"')
+                    $loginLines.Add('if command -v wslview >/dev/null; then export BROWSER=wslview; else export BROWSER="$WORK/browser"; fi')
+                    foreach ($provider in $pending) {
+                        $loginLines.Add('printf ''\n=== ' + $provider + ': approve the browser sign-in; never share passwords or tokens with your agent ===\n''')
+                        switch ($provider) {
+                            'codex' {
+                                if ($bridgeUsed) { $loginLines.Add('printf ''Windows sign-in bridge is active. Use Codex on Windows once to refresh it; no Linux login will be run.\n''') }
+                                else { $loginLines.Add('if codex login --help 2>&1 | grep -q -- ''--device-auth''; then codex login --device-auth; else codex login; fi') }
+                            }
+                            'claude' { $loginLines.Add('if claude auth --help 2>&1 | grep -q ''login''; then claude auth login; elif claude --help 2>&1 | grep -q ''login''; then claude login; else printf ''Sign in, then exit immediately. Do not ask this agent to do work.\n''; claude; fi') }
+                            'gemini' { $loginLines.Add('if agy --help 2>&1 | grep -Eq ''^[[:space:]]+login([[:space:]]|$)''; then agy login; else printf ''Sign in with Google, then exit immediately - it is an agent; do not type anything else.\n''; agy; fi') }
+                        }
+                    }
+                    $loginLines.Add('printf ''\nSign-in sequence finished. This window will close.\n''')
+                    $loginScript = Join-Path $stage 'sign-in.sh'
+                    Write-Utf8 $loginScript ($loginLines -join "`n")
+                    $loginPath = Invoke-Native 'wsl.exe' @('--exec', 'wslpath', '-a', '-u', $loginScript)
+                    Require-Native $loginPath 'Translating sign-in script path failed'
+                    # Credentials and login output stay in this human-owned window, outside the transcript.
+                    $argumentLine = '--exec bash -ic ' + (Quote-Native ('bash ' + (Quote-Sh $loginPath.Output)))
+                    Start-Process -FilePath 'wsl.exe' -ArgumentList $argumentLine -Wait | Out-Null
+                    foreach ($provider in $Providers) { $usageStates[$provider] = Test-Usage $provider }
+                    $noisy = @($Providers | Where-Object { $usageStates[$_] -eq 'noise' })
+                    if ($noisy.Count) { Fail 1 ("Text is printed outside codexbar's JSON for " + ($noisy -join ', ') + " in the default WSL user's interactive shell (bash -ic), so the app cannot read it. Remove echo/printf output from ~/.bashrc, then rerun.") }
+                    $pending = @($Providers | Where-Object { $usageStates[$_] -notin @('live', 'stale') })
+                }
             }
+            $launched = $false
             if (-not $SkipApp) {
-                try { Start-Process -FilePath 'explorer.exe' -ArgumentList ('shell:AppsFolder\' + $installed[0].PackageFamilyName + '!' + $package.AppId) | Out-Null } catch { Write-Warning 'Automatic app launch failed; launch CodexBarWin from Start.' }
+                $launchTime = [datetimeoffset]::UtcNow
+                try {
+                    Start-Process -FilePath 'explorer.exe' -ArgumentList ('shell:AppsFolder\' + $installed[0].PackageFamilyName + '!' + $package.AppId) | Out-Null
+                    $launched = $true
+                } catch { Write-Warning 'Automatic app launch failed; launch CodexBarWin from Start.' }
             }
-            $stale = @($Providers | Where-Object { $usageStates[$_] -eq 'stale' })
-            if ($stale.Count) { Phase 'Stale usage' (($stale -join ', ') + ': temporarily stale (rate limit or provider issue), not a sign-in problem.') }
-            if ($pending.Count) {
-                Phase 'Sign-ins' ("Usage unavailable: " + ($pending -join ', ') + '. Sign-in or provider/network recovery may be needed.') $false
-                $script:human.Add('Approve pending browser sign-ins when setup is rerun: powershell -NoProfile -ExecutionPolicy Bypass -File "$env:LOCALAPPDATA\CodexBarWin-Setup\install.ps1"')
-                if ($bridgeUsed -and $pending -contains 'codex') { $script:human.Add('Use Codex on Windows once to refresh its sign-in, or rerun install.ps1 -NoWindowsSignIns for a separate Linux sign-in.') }
-                Finish 20 'signin'
-            } else { Phase 'Sign-ins' 'Every selected provider has live or temporarily stale usage; no sign-in needed.'; Finish 0 'ok' }
+            if ($WithWsl) {
+                $stale = @($Providers | Where-Object { $usageStates[$_] -eq 'stale' })
+                if ($stale.Count) { Phase 'Stale usage' (($stale -join ', ') + ': temporarily stale (rate limit or provider issue), not a sign-in problem.') }
+                if ($pending.Count) {
+                    Phase 'Sign-ins' ("Usage unavailable: " + ($pending -join ', ') + '. Sign-in or provider/network recovery may be needed.') $false
+                    $script:human.Add('Approve pending browser sign-ins when setup is rerun: powershell -NoProfile -ExecutionPolicy Bypass -File "$env:LOCALAPPDATA\CodexBarWin-Setup\install.ps1" -WithWsl')
+                    if ($bridgeUsed -and $pending -contains 'codex') { $script:human.Add('Use Codex on Windows once to refresh its sign-in, or rerun install.ps1 -WithWsl -NoWindowsSignIns for a separate Linux sign-in.') }
+                    Finish 20 'signin'
+                } else { Phase 'Sign-ins' 'Every selected provider has live or temporarily stale usage; no sign-in needed.'; Finish 0 'ok' }
+            } else {
+                $missingSignIns = @($Providers | Where-Object { (Test-WindowsSignIn $_) -eq 'missing' })
+                foreach ($provider in $missingSignIns) {
+                    switch ($provider) {
+                        'claude' { $script:human.Add('Claude: run claude in a Windows terminal once and sign in.') }
+                        'codex' { $script:human.Add('Codex: sign in to the Windows Codex app or run codex login in a Windows terminal once.') }
+                        'gemini' { $script:human.Add('Gemini: sign in to Antigravity on Windows once.') }
+                    }
+                }
+                if ($launched) {
+                    $cachePath = Join-Path $settingsDirectory 'cache.json'
+                    $usageStates = @{}
+                    $deadline = $launchTime.AddSeconds(120)
+                    do {
+                        foreach ($provider in $Providers) {
+                            if ($usageStates[$provider] -notin @('live', 'stale')) {
+                                $usageStates[$provider] = Get-AppUsageStatus $cachePath $provider $launchTime
+                            }
+                        }
+                        $unconfirmed = @($Providers | Where-Object { $usageStates[$_] -eq 'none' })
+                        $remaining = ($deadline - [datetimeoffset]::UtcNow).TotalMilliseconds
+                        if (-not $unconfirmed.Count -or $remaining -le 0) { break }
+                        Start-Sleep -Milliseconds ([int][Math]::Min(2000, $remaining))
+                    } while ([datetimeoffset]::UtcNow -lt $deadline)
+                    foreach ($provider in $Providers) { Phase "Usage $provider" $usageStates[$provider] }
+                    if ($unconfirmed.Count) {
+                        Phase 'Usage' (($unconfirmed -join ', ') + ': not confirmed yet (the app reads every few minutes).')
+                    }
+                }
+                if ($missingSignIns.Count) {
+                    Phase 'Sign-ins' ("Windows sign-in missing: " + ($missingSignIns -join ', ') + '.') $false
+                    Finish 20 'signin'
+                } else {
+                    Phase 'Sign-ins' 'Every selected provider has a Windows sign-in present.'
+                    Finish 0 'ok'
+                }
+            }
         }
     }
 } catch {
@@ -933,7 +1051,10 @@ chmod 600 "$t"; mv "$t" "$p"
     $script:human.Add($_.Exception.Message)
     switch ($script:failureCode) { 30 { Finish 30 'uac' }; 40 { Finish 40 'access' }; 50 { Finish 50 'failed' }; default { Finish 1 'failed' } }
 } finally {
-    foreach ($name in @('Preflight', 'Release access', 'Download / signer', 'Elevation', 'Reboot', 'Distro', 'WSL tools', 'App', 'Sign-ins')) {
+    $expectedPhases = @('Preflight', 'Release access', 'Download / signer', 'Elevation')
+    if ($WithWsl) { $expectedPhases += @('Reboot', 'Distro', 'WSL tools') }
+    $expectedPhases += @('App', 'Sign-ins')
+    foreach ($name in $expectedPhases) {
         if (-not $script:phases.Contains($name)) { $script:phases[$name] = [pscustomobject]@{ Good = $false; Message = 'Not reached; rerun after resolving the reported failure.' } }
     }
     Write-Host "`nSetup summary:"

@@ -1,16 +1,16 @@
-# Install CodexBarWin — instructions for an AI agent
+# Install CodexBarWin - instructions for an AI agent
 
-Run as the human's normal Windows user on Windows 11, x64 or ARM64. Do the work yourself; the human should only have to click.
+Run setup as the human's normal Windows user on Windows 11, x64 or ARM64. The default setup uses native Windows providers and requires no reboot.
 
 ## Before you start
 
-Tell the human once, up front, so they stay nearby: "This takes about 5–15 minutes. You may get one Windows admin (UAC) prompt, possibly a request to reboot, and one window where you approve browser sign-ins. I'll do everything else."
+Tell the human to stay nearby. They may need to approve one Windows admin (UAC) prompt for the app certificate or Windows App Runtime, and complete any missing sign-ins in the official Windows tools.
 
-Run the installer **outside your sandbox** (request full access or escalated permissions for this command). Sandboxed shells usually can't reach WSL (`E_ACCESSDENIED`) or show a UAC prompt; the installer stops with exit 50 and changes nothing if it detects that.
+Run the installer in ordinary Windows PowerShell, **outside your sandbox** (request full access or escalated permissions for this command), so it can register the app for the original user and display the UAC prompt if needed. Do not run the whole installer as administrator.
 
 ## Run
 
-Clone and run with a **30-minute timeout**, or run in the background and wait for exit. Keep the sign-in window visible. Do not kill a long-running elevated step.
+Clone the repository and allow up to 30 minutes for setup. Keep the command running through elevation.
 
 ```powershell
 git clone https://github.com/Wave-OCE/CodexBarWin.git
@@ -18,35 +18,35 @@ cd CodexBarWin
 powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1
 ```
 
-For private access, obtain access from the owner, have the human approve `gh auth login`, then use `gh repo clone Wave-OCE/CodexBarWin`.
+For private access, obtain access from the owner, have the human complete `gh auth login`, then use `gh repo clone Wave-OCE/CodexBarWin`. GitHub authentication is separate from setup's UAC prompt.
 
-Preview without making changes:
+Preview the install:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1 -DryRun
 ```
 
-The installer verifies checksums and the MSIX signer, uses the WSL default distro/user, installs missing dependencies and CLIs, installs the app and checks usage JSON. It preserves a pre-existing distro's default user, including root. It provisions a user only for a distro it installs or when its saved state records interrupted provisioning. Provider CLIs are installed only when usage is unavailable and the Linux CLI is missing; live or stale usage preserves the working setup. Scripts, downloads, parameter state and logs live in `%LOCALAPPDATA%\CodexBarWin-Setup`. Keep them through reboot. Reruns probe state and finish missing work.
+Setup verifies the release checksum and MSIX signer, installs or updates the app, and launches it. If the Windows App Runtime is missing, setup downloads a Microsoft-signed redistributable via WinGet or Microsoft and tries it unelevated first. Any required administrator actions share one UAC prompt.
 
-Runtime setup uses WinGet download or Microsoft's official download, verifies the Microsoft signature and tries unelevated installation. This avoids a separate `winget install` UAC prompt; required elevation joins the single batch.
+Setup detects providers from Windows tools and defaults to Claude and Codex when it detects none. Set the list explicitly with `-Providers claude,codex,gemini`. Other options include `-Repo owner/repo`, `-MsixPath <local-msix>`, and `-SkipApp` to check sign-ins without installing or launching the app. `-SkipWsl` remains accepted and has no effect.
 
-Providers are detected from Windows tools, falling back to Claude and Codex. Options: `-Providers claude,codex,gemini`, `-Repo owner/repo`, `-Distro Ubuntu-24.04`, `-MsixPath <local-msix>`, `-NoSignIn`, `-NoWindowsSignIns`, `-SkipApp`, `-SkipWsl`. Staged reruns remember choices; sign-in suppression and skip flags are transient. `-Resume` explicitly reloads all saved parameters. There is no auto-resume or RunOnce.
-
-Codex can reuse Windows ChatGPT sign-in read-only. If usage goes stale, have the human use Codex on Windows once, or rerun with `-NoWindowsSignIns` for Linux Codex. Claude uses its own WSL sign-in.
+Setup stages its script, downloads, settings for reruns, and logs in `%LOCALAPPDATA%\CodexBarWin-Setup`. It reuses saved selections when rerun from there. Use `-Resume` to reload saved selections from the clone and restore `-SkipApp` if previously set. Explicit arguments override remembered ones.
 
 ## Handle the result
 
-Read the summary, process exit code and last line `CODEXBARWIN_SETUP=<status>`.
+Read the summary, the process exit code, and the last line, `CODEXBARWIN_SETUP=<status>`.
 
 | Exit | Status | Next action |
 | --- | --- | --- |
-| `0` | `ok` | Installation is complete; each selected provider has live or temporarily stale usage. Stale providers are listed separately and do not need sign-in. |
-| `3010` | `reboot` | Ask the human to reboot, then run the same command again. No automatic resume is registered. |
-| `20` | `signin` | Installation is complete but listed providers have no usable usage and no rate-limit indication. Rerun without `-NoSignIn`; follow the printed instructions. Sign-in or provider/network recovery may be needed. |
-| `30` | `uac` | The single elevation was declined or an admin action failed. Read the setup log, resolve the reported cause, then rerun. |
-| `40` | `access` | Obtain repository access and have the human run `gh auth login`, or wait for the repository to become public. Rerun. |
-| `50` | `failed` | Resolve the reported Windows, hardware, virtualization or network precondition, then rerun. |
-| `1` | `failed` | Read the phase summary and setup log; fix the reported failure and rerun. |
+| `0` | `ok` | Setup found a sign-in for every selected provider. For usage marked `none`, allow the app a few minutes to refresh. |
+| `20` | `signin` | Give the human the printed sign-in instructions, then rerun after they finish. |
+| `30` | `uac` | Elevation was declined or an administrator action failed. Read the setup log, resolve the cause, and rerun. |
+| `40` | `access` | Confirm that the release is available. For a private repository, obtain access and have the human complete `gh auth login`, then rerun. |
+| `50` | `failed` | Resolve the reported Windows, hardware, or network precondition and rerun. |
+| `1` | `failed` | Read the phase summary and setup log, fix the reported failure, and rerun. |
+| `3010` | `reboot` | Applies only with `-WithWsl`. Ask the human to reboot, then rerun with `-WithWsl`. |
+
+Only the human signs in. For Claude, run `claude` in a Windows terminal once and sign in. For Codex, sign in to the Windows Codex app or run `codex login` once. For Gemini, sign in to Antigravity on Windows once.
 
 For a staged retry, run:
 
@@ -54,32 +54,24 @@ For a staged retry, run:
 powershell -NoProfile -ExecutionPolicy Bypass -File "$env:LOCALAPPDATA\CodexBarWin-Setup\install.ps1"
 ```
 
-The human approves **at most one UAC prompt**, reboots if WSL enablement requires it, and completes browser sign-ins through **one console window**. Private repository access requires separate approval.
-
 ## Safety
 
-- Never print, copy, upload or move credential files, handle passwords or tokens, or pass tokens on command lines.
-- Never type a task or prompt into `agy`. If its interactive login is required, tell the human to sign in with Google and exit immediately; it is an agent.
-- Leave sign-ins to the human. Do not start your own interactive `agy` or Claude session.
-- Do not change WSL defaults beyond the installer. Report its default-distro change to the human.
-- Do not rerun the whole installer as administrator. Per-user registration, app installation and sign-ins must belong to the original Windows user, even when UAC uses another admin account.
-- Do not bypass checksum or signer failures. Do not overwrite existing app settings or copy Windows Claude credentials into WSL.
+- Leave sign-ins to the human. Never start an interactive provider session for them or give an agent a task during sign-in.
+- Never read, print, copy, upload, or move provider credential files or blobs. Never handle passwords or tokens or pass tokens on command lines.
+- Run setup as the original Windows user. Approve elevation only for the batched administrator step so app registration stays with the original user.
+- Stop on checksum or signer failures. Preserve existing app settings.
 
 ## Verify
 
-Rerun the staged installer with `-NoSignIn`; require exit `0`, `CODEXBARWIN_SETUP=ok` and app launch. A dry run or skipped phase does not prove success.
+Confirm the app launched and setup returned exit `0` with `CODEXBARWIN_SETUP=ok` after all selected sign-ins were present. A dry run previews the steps. Setup waits up to 120 seconds after launching the app and reports only the usage status for each selected provider.
 
-For diagnostics, use the same command shape as the app, without `-d`, for each selected provider:
-
-```powershell
-wsl --exec bash -ic "codexbar usage --provider codex --source cli --format json"
-```
-
-Usage has three states: `live` means provider-matching, current usage windows; `stale` means usage older than the 30-minute freshness window, otherwise outdated usage, or a rate-limit error (including a temporarily cached Claude result); `none` means no usable usage and no rate-limit indication, including authentication errors. An explicit authentication failure means `none` even with cached windows; a rate-limit indication takes precedence and means `stale`. Stale providers are reported as "temporarily stale (rate limit or provider issue), not a sign-in problem". Only `none` opens sign-in and prevents exit `0`. Empty JSON or exit zero alone is insufficient. Repeat for `claude` and `gemini` if selected.
+- `live` means setup found a current provider reading after launch.
+- `stale` means setup found an outdated reading or a rate-limit indication.
+- `none` means setup has yet to confirm a usable reading. Let the app refresh for a few minutes, then check usage in the tray app.
 
 ## Update
 
-To update an existing install, update the clone and run the installer again:
+Update the clone and rerun setup. It installs the latest release over the current app and preserves existing settings and cost totals.
 
 ```powershell
 cd CodexBarWin
@@ -87,9 +79,7 @@ git pull
 powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1
 ```
 
-It installs the latest release over the current app (settings and cost totals are kept) and updates the WSL
-helper. It skips everything that is already current. Releases from 1.0.0 on are signed with the same
-certificate, so an update needs no UAC prompt. Handle the exit code exactly as for a first install.
+Handle the result as for a first install. Administrator approval is needed only if the package signer needs trust or Windows App Runtime needs elevation.
 
 ## Uninstall
 
@@ -99,6 +89,18 @@ Remove the Windows app as the original user:
 Get-AppxPackage -Name CodexBarWin | Remove-AppxPackage
 ```
 
-Keep WSL, its distro, shared runtimes, provider CLIs and sign-ins unless the human explicitly asks to remove them. To remove only the CodexBar CLI and shim, use `wsl -u root --exec bash -c 'rm -f /usr/local/bin/codexbar; rm -rf /opt/codexbar'`. To disable the Windows Codex bridge, remove only the `CODEXBAR_CODEX_HOME` line from the default user's `~/.config/codexbar/shim.env`.
+Keep shared runtimes, provider tools, and sign-ins. If the human requests cleanup, remove `%LOCALAPPDATA%\CodexBarWin-Setup` and any remaining app settings under `%LOCALAPPDATA%\CodexBarWin` or the package's `LocalCache`.
 
-Optionally remove `%LOCALAPPDATA%\CodexBarWin-Setup` and the app's `settings.json` under `%LOCALAPPDATA%\CodexBarWin` or packaged `LocalCache`. Never unregister a distro or delete provider credential directories as part of this app's uninstall.
+## Optional: WSL fallback
+
+Use `-WithWsl` only when a provider's usage source is set to `wsl` in `settings.json`. Pass it on every WSL setup run, including retries. This route may enable or update WSL, provision a distro, install the pinned CodexBar CLI and shim, and open a human sign-in console. Use `-Distro` to select a distro, `-NoSignIn` to skip the console, or `-NoWindowsSignIns` to use a separate Linux Codex sign-in. Keep the staged files through any requested reboot.
+
+For verification, rerun with `-WithWsl -NoSignIn` and require exit `0`. It means each selected provider returned live or temporarily stale usage. For diagnostics, use the default distro and user, matching the app:
+
+```powershell
+wsl --exec bash -ic "codexbar usage --provider codex --source cli --format json"
+```
+
+Repeat for the configured providers and keep raw usage output private. Report any WSL default-distro change to the human. Keep existing distro defaults beyond setup and leave Windows Claude credentials in Windows. If an interactive Antigravity login opens, have the human sign in and exit immediately.
+
+On uninstall, keep WSL and shared distro resources. If the human asks to remove the CodexBar CLI and shim, use `wsl -u root --exec bash -c 'rm -f /usr/local/bin/codexbar; rm -rf /opt/codexbar'`. To disable the Windows Codex bridge, remove only the `CODEXBAR_CODEX_HOME` line from the default user's `~/.config/codexbar/shim.env`. Leave distros registered and preserve provider credential directories.

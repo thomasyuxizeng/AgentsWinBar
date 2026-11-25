@@ -13,7 +13,7 @@ $parseErrors = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseFile($installerPath, [ref]$tokens, [ref]$parseErrors)
 if ($parseErrors.Count) { throw 'Installer has PowerShell syntax errors.' }
 
-$helperNames = @('Quote-Sh', 'Quote-Native', 'Test-Usage', 'Read-Package')
+$helperNames = @('Quote-Sh', 'Quote-Native', 'Test-Usage', 'Read-Package', 'Test-WindowsSignIn', 'Get-AppUsageStatus')
 $helpers = @($ast.FindAll({
     param($node)
     $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -in $helperNames
@@ -24,6 +24,114 @@ foreach ($helper in $helpers) { . ([scriptblock]::Create($helper.Extent.Text)) }
 
 function Assert-Equal($Actual, $Expected, [string] $Name) {
     if ($Actual -cne $Expected) { throw "Failed: $Name" }
+    $script:passedAssertions++
+}
+$script:passedAssertions = 0
+
+# Check the top-level call sites, including helpers that reach WSL indirectly.
+$wslCalls = @($ast.EndBlock.FindAll({
+    param($node)
+    if ($node -isnot [System.Management.Automation.Language.CommandAst]) { return $false }
+    $name = $node.GetCommandName()
+    $name -in @('Wsl', 'wsl.exe', 'Get-Distros', 'Usable-Distro', 'Linux-Tool', 'Test-Usage', 'Windows-CodexAvailable') -or
+        $node.Extent.Text -match "(?i)'(?:wsl\.exe|install-wsl-shim\.ps1)'"
+}, $false))
+Assert-Equal ($wslCalls.Count -gt 0) $true 'found WSL call sites in the installer body'
+foreach ($call in $wslCalls) {
+    $guarded = $false
+    for ($parent = $call.Parent; $parent; $parent = $parent.Parent) {
+        if ($parent -isnot [System.Management.Automation.Language.IfStatementAst]) { continue }
+        $condition, $body = $parent.Clauses[0].Item1, $parent.Clauses[0].Item2
+        if ($condition.Extent.Text -match '^\$WithWsl(?:$| -and )' -and
+            $call.Extent.StartOffset -ge $body.Extent.StartOffset -and $call.Extent.EndOffset -le $body.Extent.EndOffset) {
+            $guarded = $true
+            break
+        }
+    }
+    Assert-Equal $guarded $true "WSL call requires -WithWsl at line $($call.Extent.StartLineNumber)"
+}
+Write-Host "WSL opt-in AST check passed ($($wslCalls.Count) call sites)."
+
+$fixtureRoot = Join-Path $PSScriptRoot ('native-install-test-' + [Guid]::NewGuid().ToString('N'))
+$claudeFixture = Join-Path $fixtureRoot 'claude.json'
+$codexFixture = Join-Path $fixtureRoot 'codex.json'
+$cacheFixture = Join-Path $fixtureRoot 'cache.json'
+try {
+    [void][IO.Directory]::CreateDirectory($fixtureRoot)
+    & {
+        # Translate the metadata requests to synthetic files without touching the profile.
+        function Get-FixturePath([string] $LiteralPath) {
+            switch ($LiteralPath) {
+                (Join-Path $env:USERPROFILE '.claude\.credentials.json') { return $claudeFixture }
+                (Join-Path $env:USERPROFILE '.codex\auth.json') { return $codexFixture }
+                default { throw 'Unexpected sign-in file path.' }
+            }
+        }
+        function Test-Path([string] $LiteralPath, [string] $PathType, $ErrorAction) {
+            Assert-Equal $PathType 'Leaf' 'sign-in checks a file'
+            [IO.File]::Exists((Get-FixturePath $LiteralPath))
+        }
+        function Get-Item([string] $LiteralPath, [switch] $Force, $ErrorAction) {
+            [IO.FileInfo]::new((Get-FixturePath $LiteralPath))
+        }
+        function Get-Content { throw 'Sign-in presence checks must never read contents.' }
+        function Invoke-Native([string] $File, [string[]] $Arguments, [int] $Timeout) {
+            Assert-Equal $File 'cmdkey.exe' 'Gemini uses cmdkey'
+            Assert-Equal ($Arguments -join ' ') '/list:gemini:antigravity' 'cmdkey is scoped to one target'
+            $cmdkeyResult
+        }
+        foreach ($provider in @('claude', 'codex')) {
+            $file = if ($provider -eq 'claude') { $claudeFixture } else { $codexFixture }
+            Assert-Equal (Test-WindowsSignIn $provider) 'missing' "$provider absent file"
+            [IO.File]::WriteAllText($file, '')
+            Assert-Equal (Test-WindowsSignIn $provider) 'missing' "$provider empty file"
+            [IO.File]::WriteAllText($file, 'synthetic sign-in fixture')
+            Assert-Equal (@(& { Test-WindowsSignIn $provider } *>&1) -join ',') 'present' "$provider nonempty file emits only status"
+        }
+        foreach ($case in @(
+            @{ Code = 0; Output = "Target: LegacyGeneric:target=gemini:antigravity`r`nType: Generic`r`nUser: synthetic-user"; Expected = 'present' },
+            @{ Code = 0; Output = 'Target: gemini:antigravity'; Expected = 'present' },
+            @{ Code = 0; Output = 'Target: LegacyGeneric:target=gemini:antigravity-other'; Expected = 'missing' },
+            @{ Code = 0; Output = 'User: gemini:antigravity'; Expected = 'missing' },
+            @{ Code = 0; Output = 'No credentials found.'; Expected = 'missing' },
+            @{ Code = 1; Output = 'Target: LegacyGeneric:target=gemini:antigravity'; Expected = 'missing' }
+        )) {
+            $cmdkeyResult = $case
+            Assert-Equal (@(& { Test-WindowsSignIn 'gemini' } *>&1) -join ',') $case.Expected 'Gemini emits only presence for a successful exact target'
+        }
+    }
+
+    $now = [datetimeoffset]::UtcNow
+    $launch = $now.AddMinutes(-1)
+    Assert-Equal (Get-AppUsageStatus $cacheFixture 'codex' $launch) 'none' 'missing cache'
+    [IO.File]::WriteAllText($cacheFixture, '{invalid synthetic JSON')
+    Assert-Equal (@(& { Get-AppUsageStatus $cacheFixture 'codex' $launch } *>&1) -join ',') 'none' 'malformed cache emits only status'
+    $cache = @{ timestamp = $now.ToString('o'); items = @{} }
+    foreach ($case in @(
+        @{ Name = 'fresh zero'; Fields = @{ session = @{ reportedPercent = 0; resetAt = $now.AddHours(1).ToString('o') }; dataUpdatedAt = $now.ToString('o') }; Expected = 'live' },
+        @{ Name = 'limit-based percentage'; Fields = @{ weekly = @{ used = 1; limit = 3 } }; Expected = 'live' },
+        @{ Name = 'extra window'; Fields = @{ extraWindows = @(@{ window = @{ reportedPercent = 42 } }) }; Expected = 'live' },
+        @{ Name = 'stale flag'; Fields = @{ usageIsStale = $true; session = @{ reportedPercent = 1 } }; Expected = 'stale' },
+        @{ Name = 'old observation'; Fields = @{ dataUpdatedAt = $now.AddMinutes(-31).ToString('o'); session = @{ reportedPercent = 1 } }; Expected = 'stale' },
+        @{ Name = 'expired window'; Fields = @{ tertiary = @{ reportedPercent = 1; resetAt = $now.AddMinutes(-6).ToString('o') } }; Expected = 'stale' },
+        @{ Name = 'rate limit'; Fields = @{ error = 'Too many requests (429)' }; Expected = 'stale' },
+        @{ Name = 'no windows'; Fields = @{}; Expected = 'none' },
+        @{ Name = 'invalid percentage'; Fields = @{ session = @{ reportedPercent = 'synthetic-invalid-percent' } }; Expected = 'none' },
+        @{ Name = 'failed fetch'; Fields = @{ usageFetchOutcome = 3; session = @{ reportedPercent = 1 } }; Expected = 'none' },
+        @{ Name = 'authentication error'; Fields = @{ error = '401 unauthorized'; session = @{ reportedPercent = 1 } }; Expected = 'none' },
+        @{ Name = 'entry from before launch in a new save'; Fields = @{ fetchedAt = $launch.AddSeconds(-1).ToString('o'); session = @{ reportedPercent = 1 } }; Expected = 'none' },
+        @{ Name = 'wrong provider'; Fields = @{ provider = 'claude'; session = @{ reportedPercent = 1 } }; Expected = 'none' }
+    )) {
+        $entry = @{ provider = 'codex'; fetchedAt = $now.ToString('o') }
+        foreach ($key in $case.Fields.Keys) { $entry[$key] = $case.Fields[$key] }
+        $cache.items.codex = $entry
+        [IO.File]::WriteAllText($cacheFixture, (ConvertTo-Json $cache -Depth 8))
+        Assert-Equal (@(& { Get-AppUsageStatus $cacheFixture 'codex' $launch } *>&1) -join ',') $case.Expected $case.Name
+    }
+    Assert-Equal (Get-AppUsageStatus $cacheFixture 'gemini' $launch) 'none' 'provider missing from cache'
+} finally {
+    foreach ($path in @($claudeFixture, $codexFixture, $cacheFixture)) { [IO.File]::Delete($path) }
+    if ([IO.Directory]::Exists($fixtureRoot)) { [IO.Directory]::Delete($fixtureRoot) }
 }
 
 # A CRLF checkout must not hand bash carriage returns (bash rejects 'set -e\r' with exit 2).
@@ -171,7 +279,7 @@ foreach ($case in @(
 # Read-Package takes the Windows App Runtime dependency from the package's own manifest.
 Add-Type -AssemblyName System.IO.Compression, System.IO.Compression.FileSystem
 function New-TestPackage([string] $RuntimeName) {
-    $path = Join-Path ([IO.Path]::GetTempPath()) ('cbw-test-' + [Guid]::NewGuid().ToString('N') + '.msix')
+    $path = Join-Path $PSScriptRoot ('cbw-test-' + [Guid]::NewGuid().ToString('N') + '.msix')
     $zip = [IO.Compression.ZipFile]::Open($path, [IO.Compression.ZipArchiveMode]::Create)
     try {
         $writer = New-Object IO.StreamWriter($zip.CreateEntry('AppxManifest.xml').Open())
@@ -248,8 +356,9 @@ foreach ($check in $runtimeChecks) {
 $rebootDecision = $ast.Find({
     param($node)
     $node -is [System.Management.Automation.Language.IfStatementAst] -and
-    $node.Clauses[0].Item1.Extent.Text -like '$runtimeReboot -or *$enabledNeedsReboot*'
+    $node.Clauses[0].Item1.Extent.Text -like '$WithWsl -and ($runtimeReboot -or *$enabledNeedsReboot*'
 }, $true)
+$WithWsl = $true
 $runtimeReboot = $true; $adminResult = [pscustomobject]@{ Reboot = $false }
 $enabledNeedsReboot = $false; $featurePending = $false; $wslRuns = $true
 Assert-Equal (& ([scriptblock]::Create($rebootDecision.Clauses[0].Item1.Extent.Text))) $true 'original-user reboot reaches setup reboot decision'
@@ -275,6 +384,13 @@ foreach ($reason in @('none', 'runtime', 'admin', 'wsl', 'features')) {
     Assert-Equal $script:runtimeCalls ([int]($reason -eq 'none')) "registration skips known reboot: $reason"
     Assert-Equal (& ([scriptblock]::Create($rebootDecision.Clauses[0].Item1.Extent.Text))) $true "runtime registration or existing reboot reaches setup: $reason"
 }
+$WithWsl = $false
+$runtimeReboot = $true
+$adminResult = [pscustomobject]@{ Reboot = $true }
+$script:runtimeCalls = 0
+. ([scriptblock]::Create($registration.Extent.Text))
+Assert-Equal $script:runtimeCalls 1 'native mode can still register the runtime after a 3010'
+Assert-Equal (& ([scriptblock]::Create($rebootDecision.Clauses[0].Item1.Extent.Text))) $false 'native mode never issues a reboot verdict'
 
 # Exercise the actual pending filters and noise guards before and after the sign-in window.
 $pendingAssignments = @($ast.FindAll({
@@ -304,5 +420,5 @@ foreach ($guard in $noiseGuards) {
     try { . ([scriptblock]::Create($guard.Extent.Text)) } catch { $rejected = $_.Exception.Message -like 'setup-failure-1: *gemini*' }
     Assert-Equal $rejected $true 'shell noise fails setup before success reporting'
 }
-Write-Host 'Installer helper mock tests passed.'
+Write-Host "Installer helper mock tests passed ($script:passedAssertions assertions)."
 exit 0
