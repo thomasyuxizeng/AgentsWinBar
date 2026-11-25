@@ -825,6 +825,54 @@ public class MainViewModelTests
         _usage.Verify(s => s.GetCostAsync("claude", true, It.IsAny<CancellationToken>()), Times.Exactly(2));
     }
 
+    private Mock<ISignInWatcher> UseSignInWatcher()
+    {
+        var watcher = new Mock<ISignInWatcher>();
+        _viewModel.Dispose();
+        _viewModel = new(_usage.Object, _settings.Object, new UsageAlertEvaluator(), _toast.Object,
+            _logger.Object, _history, _persistence, _activity, _session, _cache.Object, _memo.Object, _earlyResets.Object,
+            _batterySaver.Object, signInWatcher: watcher.Object);
+        return watcher;
+    }
+
+    [TestMethod]
+    public async Task SignInRefreshRequested_WhenCredentialChanged_RefreshesAndEndsWatchOnceSignedIn()
+    {
+        var watcher = UseSignInWatcher();
+        var calls = 0;
+        var signedOut = true;
+        _usage.Setup(s => s.GetAllUsageStreamAsync(It.IsAny<CancellationToken>()))
+            .Returns((CancellationToken ct) => { calls++; return Stream(Task.CompletedTask, Data(20) with { AuthRequired = signedOut }, ct); });
+        await _viewModel.StartAsync();
+        _viewModel.IsSignedOut("claude").Should().BeTrue();
+        watcher.Verify(w => w.Cancel(It.IsAny<string>()), Times.Never);
+
+        signedOut = false;
+        watcher.Raise(w => w.RefreshRequested += null, watcher.Object, new SignInRefreshRequest("claude", true));
+        for (var i = 0; i < 100 && (calls < 2 || _viewModel.IsLoading); i++) await Task.Delay(10);
+
+        calls.Should().Be(2);
+        _viewModel.IsSignedOut("claude").Should().BeFalse();
+        watcher.Verify(w => w.Cancel("claude"), Times.Once);
+    }
+
+    [TestMethod]
+    public async Task SignInRefreshRequested_RecheckWhenAlreadySignedIn_CancelsWithoutRefresh()
+    {
+        var watcher = UseSignInWatcher();
+        var calls = 0;
+        _usage.Setup(s => s.GetAllUsageStreamAsync(It.IsAny<CancellationToken>()))
+            .Returns((CancellationToken ct) => { calls++; return Stream(Task.CompletedTask, Data(20), ct); });
+        await _viewModel.StartAsync();
+        watcher.Invocations.Clear();
+
+        watcher.Raise(w => w.RefreshRequested += null, watcher.Object, new SignInRefreshRequest("claude", false));
+        await Task.Delay(50);
+
+        calls.Should().Be(1);
+        watcher.Verify(w => w.Cancel("claude"), Times.Once);
+    }
+
     private void SetupImmediateUsage() => _usage.Setup(s => s.GetAllUsageStreamAsync(It.IsAny<CancellationToken>()))
         .Returns((CancellationToken ct) => Stream(Task.CompletedTask, Data(20), ct));
 

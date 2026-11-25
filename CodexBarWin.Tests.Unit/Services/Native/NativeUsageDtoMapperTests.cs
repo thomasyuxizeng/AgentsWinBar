@@ -106,6 +106,45 @@ public class NativeUsageDtoMapperTests
     }
 
     [TestMethod]
+    [DataRow(true)]
+    [DataRow(false)]
+    public void ToDto_WhenSignInExpired_FlagsSignInExpiredWithoutAuthRequired(bool withReading)
+    {
+        var result = withReading
+            ? Gemini() with { Status = NativeUsageStatus.SignInExpired, UpdatedAt = Now.AddMinutes(-7) }
+            : new NativeUsageResult { Provider = "codex", Status = NativeUsageStatus.SignInExpired, Message = "Sign-in expired" };
+
+        var dto = NativeUsageDtoMapper.ToDto(result);
+        var usage = dto.ToUsageData(Now.UtcDateTime);
+
+        dto.SignInExpired.Should().BeTrue();
+        usage.SignInExpired.Should().BeTrue();
+        usage.AuthRequired.Should().BeFalse();
+        SignInStatus.Of(usage).Should().Be(SignInState.Expired);
+    }
+
+    [TestMethod]
+    [DataRow(NativeUsageStatus.Ok)]
+    [DataRow(NativeUsageStatus.SignInMissing)]
+    [DataRow(NativeUsageStatus.Unauthorized)]
+    [DataRow(NativeUsageStatus.Failed)]
+    public void ToDto_WhenNotExpired_DoesNotFlagSignInExpired(NativeUsageStatus status)
+    {
+        var usage = NativeUsageDtoMapper.ToDto(Gemini() with { Status = status }).ToUsageData(Now.UtcDateTime);
+
+        usage.SignInExpired.Should().BeFalse();
+    }
+
+    [TestMethod]
+    public void ToUsageData_WhenAuthRequiredAndSignInExpired_SignedOutWins()
+    {
+        var usage = new UsageDataDto { Provider = "claude", AuthRequired = true, SignInExpired = true }.ToUsageData(Now.UtcDateTime);
+
+        usage.AuthRequired.Should().BeTrue();
+        usage.SignInExpired.Should().BeFalse();
+    }
+
+    [TestMethod]
     public void ToDto_WhenSignInExpiredWithReadingNotMarkedCached_StillEmitsCachedRowAtReadingTime()
     {
         var expired = Gemini() with { Status = NativeUsageStatus.SignInExpired, UpdatedAt = Now.AddMinutes(-7) };

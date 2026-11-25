@@ -44,6 +44,10 @@ public record UsageData
     public bool AuthRequired { get; init; }
     [System.Text.Json.Serialization.JsonIgnore]
     public string? AuthMessage { get; init; }
+    /// <summary>Session-only: the stored sign-in has expired and the provider's own tool is expected to renew it.
+    /// Not a sign-out: the app keeps the last reading and never asks the user to sign in for it.</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public bool SignInExpired { get; init; }
     /// <summary>Indicates the final provider command failed with shell exit code 127.</summary>
     public bool CommandNotFound { get; init; }
     public bool IsLoading { get; init; }

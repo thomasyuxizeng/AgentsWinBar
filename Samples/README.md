@@ -65,6 +65,20 @@ The sample files follow the structure returned by `codexbar usage --format json`
 - **updatedAt**: ISO 8601 timestamp when the data was last updated
 - **error**: Error message if data fetch failed (null if successful)
 
+## Signed-out and expired sign-ins (for screenshots)
+
+Two optional top-level fields let a sample show the sign-in states:
+
+- `"authRequired": true` shows the provider as signed out: the dashboard and the provider page show the "Signed out"
+  banner with its **Sign in** button, the numbers in `usage` are shown dimmed as last-known, and Settings > Sign-ins
+  lists the provider as "Signed out" with a **Sign in** button.
+- `"signInExpired": true` shows an expired sign-in that the provider's own tool will renew: no banner and no button;
+  Settings > Sign-ins says "Expired, waiting for <tool> to renew it".
+
+For example, to capture the button for Codex, add `"authRequired": true` next to `"provider": "codex"` in `codex.json`
+(in the build output's `Samples` folder, or here before building), turn on Developer mode, and refresh. Remove the
+field again afterwards. Clicking **Sign in** in Developer mode still opens the real sign-in.
+
 ## Updating Sample Data
 
 To update sample data with real data from CodexBar CLI:

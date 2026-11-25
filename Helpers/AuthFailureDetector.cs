@@ -52,12 +52,12 @@ public static class AuthFailureDetector
         return safe.Length <= 512 ? safe : safe[..512];
     }
 
-    /// <summary>Plain-text recovery instructions; Gemini usage is provided by Antigravity.</summary>
+    /// <summary>Plain-text sign-in hint shown next to the "Sign in" button; Gemini usage is provided by Antigravity.</summary>
     public static string GetSignInHint(string provider) => ProviderConstants.ValidateAndNormalize(provider) switch
     {
-        "claude" => "Sign in again in WSL by running claude, then /login.",
-        "codex" => "Sign in again by running codex login in WSL.",
-        "gemini" => "Gemini quota comes from Antigravity. Sign in to Antigravity (agy) in WSL.",
+        "claude" => "Sign in to Claude Code to see your Claude limits.",
+        "codex" => "Sign in to Codex to see your Codex limits.",
+        "gemini" => "Sign in to Antigravity with Google to see your Gemini limits.",
         _ => string.Empty
     };
 }

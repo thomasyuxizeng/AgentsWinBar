@@ -143,6 +143,10 @@
     <Compile Include="..\Services\UsageAlertEvaluator.cs" Link="Linked\UsageAlertEvaluator.cs" />
     <Compile Include="..\Services\IToastNotifier.cs" Link="Linked\IToastNotifier.cs" />
     <Compile Include="..\ViewModels\MainViewModel.cs" Link="Linked\MainViewModel.cs" />
+    <Compile Include="..\Services\ISignInLauncher.cs" Link="Linked\ISignInLauncher.cs" />
+    <Compile Include="..\Services\SignInLauncher.cs" Link="Linked\SignInLauncher.cs" />
+    <Compile Include="..\Services\SignInWatcher.cs" Link="Linked\SignInWatcher.cs" />
+    <Compile Include="..\Helpers\SignInStatus.cs" Link="Linked\SignInStatus.cs" />
     <!-- Native (in-process) usage readers spike: no Windows App SDK types -->
     <Compile Include="..\Services\Native\*.cs" Link="Linked\Native\%(Filename)%(Extension)" />
   </ItemGroup>

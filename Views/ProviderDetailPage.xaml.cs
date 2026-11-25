@@ -261,7 +261,12 @@ public sealed partial class ProviderDetailPage : Page
         var signedOut = _data.AuthRequired;
         SignedOutBanner.IsOpen = signedOut;
         SignedOutBanner.Visibility = signedOut ? Visibility.Visible : Visibility.Collapsed;
-        if (signedOut) SignedOutHint.Text = SignedOutHintFor(_data.Provider);
+        if (signedOut)
+        {
+            SignedOutHint.Text = SignedOutHintFor(_data.Provider);
+            Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(SignInButton,
+                $"Sign in to {Helpers.ProviderIcons.GetDisplayName(_data.Provider)}");
+        }
         var numbersOpacity = signedOut ? 0.55 : 1;
         SessionSection.Opacity = WeeklySection.Opacity = TertiarySection.Opacity = ExtraWindowsList.Opacity = numbersOpacity;
 
@@ -286,6 +291,11 @@ public sealed partial class ProviderDetailPage : Page
     {
         var hint = ProviderConstants.IsValidProvider(provider) ? Helpers.AuthFailureDetector.GetSignInHint(provider) : string.Empty;
         return string.IsNullOrWhiteSpace(hint) ? "Sign in again to keep usage up to date." : hint;
+    }
+
+    private void OnSignInClicked(object sender, RoutedEventArgs e)
+    {
+        if (_data != null && ProviderConstants.IsValidProvider(_data.Provider)) SignInAction.Start(_data.Provider);
     }
 
     private static void SetLine(TextBlock block, string text)

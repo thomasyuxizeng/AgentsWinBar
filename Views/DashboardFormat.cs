@@ -169,6 +169,8 @@ internal static class DashboardFormat
     public static Visibility VisSignedOut(DashboardProvider? provider) => Vis(IsSignedOut(provider));
     public static string SignedOutHint(DashboardProvider? provider) =>
         string.IsNullOrWhiteSpace(provider?.AuthHint) ? "Sign in again to keep usage up to date." : provider!.AuthHint!;
+    public static string SignInButtonName(DashboardProvider? provider) =>
+        string.IsNullOrWhiteSpace(provider?.DisplayName) ? "Sign in" : $"Sign in to {provider!.DisplayName}";
     public static bool HasFetchError(DashboardProvider? provider) => provider is { AuthRequired: false } && HasText(provider.Error);
     public static Visibility VisFetchError(DashboardProvider? provider) => Vis(HasFetchError(provider));
     public static double StaleNumbersOpacity(DashboardProvider? provider) => provider is { AuthRequired: true } ? 0.55 : 1;

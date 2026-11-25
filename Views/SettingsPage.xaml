@@ -250,6 +250,69 @@
                                SpinButtonPlacementMode="Compact" Width="110" VerticalAlignment="Center"/>
                 </Grid>
 
+                <!-- Sign-ins Section -->
+                <TextBlock
+                    Text="Sign-ins"
+                    Style="{StaticResource BodyStrongTextBlockStyle}"
+                    Margin="4,20,0,8"/>
+
+                <!-- Sign-ins Card: the button sits under the state, the window is only ~350 DIP wide on a 150% display -->
+                <Grid
+                    Padding="16"
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                    BorderThickness="1"
+                    CornerRadius="8">
+                    <StackPanel>
+                        <TextBlock
+                            Text="Each provider's own app keeps its sign-in; this app only reads it"
+                            Style="{StaticResource CaptionTextBlockStyle}"
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                            TextWrapping="Wrap"
+                            Margin="0,0,0,12"/>
+
+                        <ItemsControl x:Name="SignInsItemsControl">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="local:SignInRow">
+                                    <Grid Margin="0,2" Padding="12,10" Background="{ThemeResource SubtleFillColorSecondaryBrush}" CornerRadius="6">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+
+                                        <!-- Provider Icon -->
+                                        <Viewbox
+                                            Grid.Column="0"
+                                            Width="16"
+                                            Height="16"
+                                            Margin="0,2,12,0"
+                                            VerticalAlignment="Top">
+                                            <PathIcon Data="{x:Bind Icon}" Foreground="{ThemeResource TextFillColorPrimaryBrush}"/>
+                                        </Viewbox>
+
+                                        <StackPanel Grid.Column="1">
+                                            <TextBlock Text="{x:Bind DisplayName}" Style="{StaticResource BodyTextBlockStyle}"/>
+                                            <TextBlock
+                                                Text="{x:Bind StateText}"
+                                                Style="{StaticResource CaptionTextBlockStyle}"
+                                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                                TextWrapping="Wrap"/>
+                                            <Button
+                                                Content="Sign in"
+                                                Tag="{x:Bind ProviderId}"
+                                                Visibility="{x:Bind SignInVisibility}"
+                                                AutomationProperties.Name="{x:Bind SignInName}"
+                                                Click="OnSignInClicked"
+                                                Margin="0,8,0,0"
+                                                Padding="10,4"/>
+                                        </StackPanel>
+                                    </Grid>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+                </Grid>
+
                 <TextBlock
                     Text="Behavior"
                     Style="{StaticResource BodyStrongTextBlockStyle}"

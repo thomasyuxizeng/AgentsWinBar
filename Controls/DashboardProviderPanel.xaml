@@ -123,7 +123,12 @@
             <InfoBar IsOpen="{x:Bind views:DashboardFormat.IsSignedOut(Data), Mode=OneWay}" IsClosable="False"
                      Visibility="{x:Bind views:DashboardFormat.VisSignedOut(Data), Mode=OneWay}"
                      Severity="Error" Title="Signed out" AutomationProperties.Name="Signed out">
-                <StackPanel Spacing="4" Margin="0,-8,0,12">
+                <!-- InfoBar's compact action size (24 high) keeps the title row's height; the hint starts below the button -->
+                <InfoBar.ActionButton>
+                    <Button Content="Sign in" Click="OnSignInClicked" MinHeight="24" Padding="8,0,8,1"
+                            AutomationProperties.Name="{x:Bind views:DashboardFormat.SignInButtonName(Data), Mode=OneWay}"/>
+                </InfoBar.ActionButton>
+                <StackPanel Spacing="4" Margin="0,0,0,12">
                     <TextBlock Text="{x:Bind views:DashboardFormat.SignedOutHint(Data), Mode=OneWay}" TextWrapping="Wrap" FontSize="12"
                                IsTextSelectionEnabled="True"/>
                 </StackPanel>

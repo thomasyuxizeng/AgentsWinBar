@@ -6,6 +6,20 @@ using Microsoft.UI.Xaml.Controls;
 
 namespace CodexBarWin.Views;
 
+/// <summary>One provider in the Settings "Sign-ins" section.</summary>
+public sealed class SignInRow
+{
+    public required string ProviderId { get; init; }
+    public required string DisplayName { get; init; }
+    private Microsoft.UI.Xaml.Media.Geometry? _icon;
+    /// <summary>Built when the row is shown, not for every state comparison.</summary>
+    public Microsoft.UI.Xaml.Media.Geometry Icon => _icon ??= Helpers.ProviderIcons.GetGeometry(ProviderId);
+    public required string StateText { get; init; }
+    public bool CanSignIn { get; init; }
+    public Visibility SignInVisibility => CanSignIn ? Visibility.Visible : Visibility.Collapsed;
+    public string SignInName => $"Sign in to {DisplayName}";
+}
+
 /// <summary>
 /// Page for application settings.
 /// </summary>
@@ -30,9 +44,70 @@ public sealed partial class SettingsPage : Page
     public event EventHandler? SaveRequested;
     public event EventHandler? CancelRequested;
 
+    private MainViewModel? _mainViewModel;
+
     public SettingsPage()
     {
         InitializeComponent();
+        Loaded += OnLoaded;
+        Unloaded += OnUnloaded;
+    }
+
+    private void OnLoaded(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            _mainViewModel ??= App.Services.GetRequiredService<MainViewModel>();
+            _mainViewModel.Providers.CollectionChanged -= OnProvidersChanged;
+            _mainViewModel.Providers.CollectionChanged += OnProvidersChanged;
+            UpdateSignIns();
+        }
+        catch (Exception ex)
+        {
+            App.Services.GetRequiredService<ILogger<SettingsPage>>().LogWarning(ex, "Sign-ins could not be shown");
+        }
+    }
+
+    private void OnUnloaded(object sender, RoutedEventArgs e)
+    {
+        if (_mainViewModel != null) _mainViewModel.Providers.CollectionChanged -= OnProvidersChanged;
+    }
+
+    private void OnProvidersChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e) => UpdateSignIns();
+
+    /// <summary>Each enabled provider (saved settings, in display order) with its sign-in state from the last refresh.</summary>
+    private void UpdateSignIns()
+    {
+        if (_mainViewModel == null) return;
+        var settings = App.Services.GetRequiredService<Services.ISettingsService>().Settings;
+        var rows = settings.Providers
+            .Where(p => p.IsEnabled && Models.ProviderConstants.IsValidProvider(p.Id))
+            .OrderBy(p => p.Order)
+            .Select(p => Models.ProviderConstants.ValidateAndNormalize(p.Id))
+            .Distinct()
+            .Select(id =>
+            {
+                var state = Helpers.SignInStatus.Of(_mainViewModel.Providers.FirstOrDefault(
+                    d => d.Provider.Equals(id, StringComparison.OrdinalIgnoreCase)));
+                return new SignInRow
+                {
+                    ProviderId = id,
+                    DisplayName = Helpers.ProviderIcons.GetDisplayName(id),
+                    StateText = Helpers.SignInStatus.Text(id, state),
+                    CanSignIn = Helpers.SignInStatus.CanSignIn(state)
+                };
+            })
+            .ToList();
+        if (SignInsItemsControl.ItemsSource is List<SignInRow> current && current.Count == rows.Count &&
+            current.Zip(rows).All(pair => pair.First.ProviderId == pair.Second.ProviderId &&
+                pair.First.StateText == pair.Second.StateText && pair.First.CanSignIn == pair.Second.CanSignIn)) return;
+        SignInsItemsControl.ItemsSource = rows;
+    }
+
+    private void OnSignInClicked(object sender, RoutedEventArgs e)
+    {
+        if (sender is Button { Tag: string provider } && Models.ProviderConstants.IsValidProvider(provider))
+            SignInAction.Start(provider);
     }
 
     private void LoadSettings()

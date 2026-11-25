@@ -73,6 +73,15 @@ public sealed partial class DashboardProviderPanel : UserControl
         catch (Exception ex) { App.LogHandled("Dashboard details toggle failed", ex); }
     }
 
+    private void OnSignInClicked(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            if (Data?.Id is { Length: > 0 } id && Models.ProviderConstants.IsValidProvider(id)) SignInAction.Start(id);
+        }
+        catch (Exception ex) { App.LogHandled("Dashboard sign-in failed", ex); }
+    }
+
     private void ApplyDetails()
     {
         UpdateDetailsButton();
