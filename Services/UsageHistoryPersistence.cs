@@ -52,9 +52,8 @@ public sealed class UsageHistoryPersistence
                 _isLoaded = true;
                 return;
             }
-            var json = await File.ReadAllTextAsync(FilePath, ct);
+            var (samples, intact) = await LoadFromFileAsync(FilePath, ct).ConfigureAwait(false);
             var now = _clock.GetUtcNow();
-            var samples = Parse(json, out var intact);
             _store.Restore(samples, now.UtcDateTime);
             _store.TakeUnsaved();
             _savedGeneration = _store.Generation;
@@ -114,6 +113,50 @@ public sealed class UsageHistoryPersistence
         samplesInFile - samplesKept > Math.Max(50, samplesKept / 10);
 
     /// <summary>
+    /// Streams the JSON array from disk in UTF-8 chunks without allocating a full-file UTF-16 string.
+    /// A tail cut off by an interrupted append keeps every complete sample before it.
+    /// </summary>
+    internal static async Task<(List<UsageHistorySample> Samples, bool Intact)> LoadFromFileAsync(string filePath, CancellationToken ct)
+    {
+        await using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read,
+            bufferSize: 64 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
+        return await ParseStreamAsync(stream, ct).ConfigureAwait(false);
+    }
+
+    internal static async Task<(List<UsageHistorySample> Samples, bool Intact)> ParseStreamAsync(Stream stream, CancellationToken ct)
+    {
+        if (stream.CanSeek && stream.Length >= 3)
+        {
+            var start = stream.Position;
+            var bom = new byte[3];
+            var read = await stream.ReadAsync(bom.AsMemory(0, 3), ct).ConfigureAwait(false);
+            if (read != 3 || bom[0] != 0xEF || bom[1] != 0xBB || bom[2] != 0xBF)
+            {
+                stream.Position = start;
+            }
+        }
+
+        var samples = new List<UsageHistorySample>();
+        var intact = true;
+        try
+        {
+            await foreach (var sample in JsonSerializer.DeserializeAsyncEnumerable(
+                stream, AppJsonSerializerContext.Default.UsageHistorySample, ct).ConfigureAwait(false))
+            {
+                if (sample != null)
+                {
+                    samples.Add(sample);
+                }
+            }
+        }
+        catch (JsonException)
+        {
+            intact = false;
+        }
+        return (samples, intact);
+    }
+
+    /// <summary>
     /// Reads the array. A tail cut off by an interrupted append (power loss) keeps every complete sample before it;
     /// anything else that is not a JSON array of samples reads as empty, as before.
     /// </summary>
@@ -166,7 +209,28 @@ public sealed class UsageHistoryPersistence
     {
         Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
         var temporaryPath = FilePath + ".tmp";
-        await File.WriteAllBytesAsync(temporaryPath, Format(samples), ct);
+        await using (var stream = new FileStream(temporaryPath, FileMode.Create, FileAccess.Write, FileShare.None,
+            bufferSize: 64 * 1024, FileOptions.Asynchronous))
+        {
+            using var chunk = new MemoryStream(32 * 1024);
+            chunk.Write("["u8);
+            using var writer = new Utf8JsonWriter(chunk, new JsonWriterOptions { Indented = false });
+            for (var i = 0; i < samples.Count; i++)
+            {
+                chunk.Write(i == 0 ? "\n"u8 : Separator);
+                writer.Reset(chunk);
+                JsonSerializer.Serialize(writer, samples[i], AppJsonSerializerContext.Default.UsageHistorySample);
+                writer.Flush();
+                if (chunk.Length >= 16 * 1024)
+                {
+                    await stream.WriteAsync(chunk.GetBuffer().AsMemory(0, (int)chunk.Length), ct).ConfigureAwait(false);
+                    chunk.SetLength(0);
+                }
+            }
+            chunk.Write("\n]"u8);
+            await stream.WriteAsync(chunk.GetBuffer().AsMemory(0, (int)chunk.Length), ct).ConfigureAwait(false);
+            await stream.FlushAsync(ct).ConfigureAwait(false);
+        }
         File.Move(temporaryPath, FilePath, overwrite: true);
     }
 

@@ -661,7 +661,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     });
                 }
                 catch (Exception ex) { _logger.LogDebug(ex, "Refresh activity could not be recorded"); }
-                if (!developerMode) _history.Record(data, DateTime.UtcNow);
+                if (!developerMode) _history.Record(data, DateTime.UtcNow, prune: false);
                 // A reading without a sign-in problem ends any wait for a new sign-in
                 if (!data.AuthRequired && !data.HasError && ProviderConstants.IsValidProvider(data.Provider))
                     _signInWatcher?.Cancel(data.Provider);
