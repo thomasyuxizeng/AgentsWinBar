@@ -113,4 +113,47 @@ public class InPlaceRowTests
     }
 
     private sealed class OtherRow : InPlaceRow;
+
+    [TestMethod]
+    public void UpdateFrom_WhenNanValueUnchanged_DoesNotRaisePropertyChanged()
+    {
+        var row = new Row { Name = "Claude", Percent = double.NaN };
+        var raised = Raised(row);
+
+        var changed = row.UpdateFrom(new Row { Name = "Claude", Percent = double.NaN });
+
+        changed.Should().Be(0);
+        raised.Should().BeEmpty();
+    }
+
+    [TestMethod]
+    public void UpdateFrom_WhenSubclassOverridesUpdateFromCore_UsesOverrideAndRaisesCachedArgs()
+    {
+        var row = new TypedOverrideRow { Name = "Claude", Value = 1 };
+        var raised = new List<System.ComponentModel.PropertyChangedEventArgs>();
+        row.PropertyChanged += (_, e) => raised.Add(e);
+
+        var changed = row.UpdateFrom(new TypedOverrideRow { Name = "Claude", Value = 2 });
+        row.UpdateFrom(new TypedOverrideRow { Name = "Claude", Value = 3 });
+
+        changed.Should().Be(1);
+        row.Value.Should().Be(3);
+        raised.Should().HaveCount(2);
+        ReferenceEquals(raised[0], raised[1]).Should().BeTrue();
+    }
+
+    private sealed class TypedOverrideRow : InPlaceRow
+    {
+        public string Name { get; set; } = string.Empty;
+        public int Value { get; set; }
+
+        protected override int UpdateFromCore(InPlaceRow next)
+        {
+            var other = (TypedOverrideRow)next;
+            var changed = 0;
+            if (!string.Equals(Name, other.Name, StringComparison.Ordinal)) { Name = other.Name; changed++; RaisePropertyChanged(nameof(Name)); }
+            if (Value != other.Value) { Value = other.Value; changed++; RaisePropertyChanged(nameof(Value)); }
+            return changed;
+        }
+    }
 }

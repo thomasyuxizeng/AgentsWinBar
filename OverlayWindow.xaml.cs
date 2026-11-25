@@ -49,6 +49,35 @@ public sealed class OverlayRow : InPlaceRow
     public Microsoft.UI.Xaml.GridLength SessionNumberColumn { get; set; }
     public Microsoft.UI.Xaml.GridLength WeeklyNumberColumn { get; set; }
     public double RowHeight => OverlayWindow.RowHeightDip;
+
+    protected override int UpdateFromCore(InPlaceRow next)
+    {
+        var other = (OverlayRow)next;
+        var changed = 0;
+        if (!string.Equals(Name, other.Name, StringComparison.Ordinal)) { Name = other.Name; changed++; RaisePropertyChanged(nameof(Name)); }
+        if (!ReferenceEquals(StatusBrush, other.StatusBrush)) { StatusBrush = other.StatusBrush; changed++; RaisePropertyChanged(nameof(StatusBrush)); }
+        if (IncidentVisibility != other.IncidentVisibility) { IncidentVisibility = other.IncidentVisibility; changed++; RaisePropertyChanged(nameof(IncidentVisibility)); }
+        if (!string.Equals(StatusDescription, other.StatusDescription, StringComparison.Ordinal)) { StatusDescription = other.StatusDescription; changed++; RaisePropertyChanged(nameof(StatusDescription)); }
+        if (!EqualityComparer<double>.Default.Equals(SessionPercent, other.SessionPercent)) { SessionPercent = other.SessionPercent; changed++; RaisePropertyChanged(nameof(SessionPercent)); }
+        if (!EqualityComparer<UsageWindow?>.Default.Equals(SessionWindow, other.SessionWindow)) { SessionWindow = other.SessionWindow; changed++; RaisePropertyChanged(nameof(SessionWindow)); }
+        if (!EqualityComparer<UsageWindow?>.Default.Equals(WeeklyWindow, other.WeeklyWindow)) { WeeklyWindow = other.WeeklyWindow; changed++; RaisePropertyChanged(nameof(WeeklyWindow)); }
+        if (!ReferenceEquals(ResetHost, other.ResetHost)) { ResetHost = other.ResetHost; changed++; RaisePropertyChanged(nameof(ResetHost)); }
+        if (!EqualityComparer<double>.Default.Equals(SessionTimePercent, other.SessionTimePercent)) { SessionTimePercent = other.SessionTimePercent; changed++; RaisePropertyChanged(nameof(SessionTimePercent)); }
+        if (!string.Equals(SessionText, other.SessionText, StringComparison.Ordinal)) { SessionText = other.SessionText; changed++; RaisePropertyChanged(nameof(SessionText)); }
+        if (!EqualityComparer<double>.Default.Equals(WeeklyPercent, other.WeeklyPercent)) { WeeklyPercent = other.WeeklyPercent; changed++; RaisePropertyChanged(nameof(WeeklyPercent)); }
+        if (!EqualityComparer<double>.Default.Equals(WeeklyTimePercent, other.WeeklyTimePercent)) { WeeklyTimePercent = other.WeeklyTimePercent; changed++; RaisePropertyChanged(nameof(WeeklyTimePercent)); }
+        if (!string.Equals(SessionPace, other.SessionPace, StringComparison.Ordinal)) { SessionPace = other.SessionPace; changed++; RaisePropertyChanged(nameof(SessionPace)); }
+        if (!string.Equals(WeeklyPace, other.WeeklyPace, StringComparison.Ordinal)) { WeeklyPace = other.WeeklyPace; changed++; RaisePropertyChanged(nameof(WeeklyPace)); }
+        if (SessionAccent != other.SessionAccent) { SessionAccent = other.SessionAccent; changed++; RaisePropertyChanged(nameof(SessionAccent)); }
+        if (WeeklyAccent != other.WeeklyAccent) { WeeklyAccent = other.WeeklyAccent; changed++; RaisePropertyChanged(nameof(WeeklyAccent)); }
+        if (!string.Equals(WeeklyText, other.WeeklyText, StringComparison.Ordinal)) { WeeklyText = other.WeeklyText; changed++; RaisePropertyChanged(nameof(WeeklyText)); }
+        if (!SessionNumberColumn.Equals(other.SessionNumberColumn)) { SessionNumberColumn = other.SessionNumberColumn; changed++; RaisePropertyChanged(nameof(SessionNumberColumn)); }
+        if (!WeeklyNumberColumn.Equals(other.WeeklyNumberColumn)) { WeeklyNumberColumn = other.WeeklyNumberColumn; changed++; RaisePropertyChanged(nameof(WeeklyNumberColumn)); }
+        // [UpdateLast] properties copied after windows
+        if (SessionResetStamp != other.SessionResetStamp) { SessionResetStamp = other.SessionResetStamp; changed++; RaisePropertyChanged(nameof(SessionResetStamp)); }
+        if (WeeklyResetStamp != other.WeeklyResetStamp) { WeeklyResetStamp = other.WeeklyResetStamp; changed++; RaisePropertyChanged(nameof(WeeklyResetStamp)); }
+        return changed;
+    }
 }
 
 /// <summary>

@@ -47,6 +47,17 @@ public sealed partial class ProviderCard : UserControl
 
     private string? _iconProvider;
     private List<CardExtraRow>? _extraRows;
+    private string? _lastSessionLabel;
+    private string? _lastWeeklyLabel;
+    private string[]? _lastExtraTitles;
+    private double _lastLabelScale;
+    private double _lastLabelWidth;
+    private double _lastAppliedLabelWidth;
+
+    [ThreadStatic]
+    private static Dictionary<(double Scale, string Label), double>? _labelWidthCache;
+    [ThreadStatic]
+    private static TextBlock? _labelProbe;
 
     public ProviderCard()
     {
@@ -127,8 +138,12 @@ public sealed partial class ProviderCard : UserControl
         var extras = hasAnyData ? Data.ExtraWindows : [];
 
         // Right-aligned labels share one width, so the bars of session, weekly and the extras line up
-        var labelWidth = LabelColumnWidth(extras.Select(x => x.Title).Prepend(Data.WeeklyLabel).Prepend(Data.SessionLabel));
-        SessionLabelText.MinWidth = WeeklyLabelText.MinWidth = labelWidth;
+        var labelWidth = LabelColumnWidth(Data.SessionLabel, Data.WeeklyLabel, extras);
+        if (labelWidth != _lastAppliedLabelWidth)
+        {
+            _lastAppliedLabelWidth = labelWidth;
+            SessionLabelText.MinWidth = WeeklyLabelText.MinWidth = labelWidth;
+        }
         var extraRows = extras.Select(x => new CardExtraRow
         {
             Title = x.Title,
@@ -213,17 +228,71 @@ public sealed partial class ProviderCard : UserControl
     private const double MaxLabelWidth = 150;
 
     /// <summary>The width of the widest label (caption style), within the card's label limits.</summary>
-    private double LabelColumnWidth(IEnumerable<string> labels)
+    private double LabelColumnWidth(string sessionLabel, string weeklyLabel, IReadOnlyList<ExtraUsageWindow> extras)
     {
-        var style = (Style)Application.Current.Resources["CaptionTextBlockStyle"];
-        var widest = MinLabelWidth;
-        foreach (var label in labels.Where(l => !string.IsNullOrEmpty(l)))
+        var scale = XamlRoot?.RasterizationScale ?? 1.0;
+        if (_lastLabelWidth > 0 &&
+            scale == _lastLabelScale &&
+            string.Equals(sessionLabel, _lastSessionLabel, StringComparison.Ordinal) &&
+            string.Equals(weeklyLabel, _lastWeeklyLabel, StringComparison.Ordinal) &&
+            ExtraTitlesMatch(extras, _lastExtraTitles))
         {
-            var probe = new TextBlock { Text = label, Style = style, TextWrapping = TextWrapping.NoWrap };
-            probe.Measure(new Windows.Foundation.Size(double.PositiveInfinity, double.PositiveInfinity));
-            widest = Math.Max(widest, probe.DesiredSize.Width);
+            return _lastLabelWidth;
         }
-        return Math.Min(MaxLabelWidth, Math.Ceiling(widest));
+
+        var style = (Style)Application.Current.Resources["CaptionTextBlockStyle"];
+        var cache = _labelWidthCache ??= new Dictionary<(double Scale, string Label), double>();
+        var widest = MinLabelWidth;
+        widest = Math.Max(widest, MeasureLabel(sessionLabel, scale, style, cache));
+        widest = Math.Max(widest, MeasureLabel(weeklyLabel, scale, style, cache));
+        for (var i = 0; i < extras.Count; i++)
+        {
+            widest = Math.Max(widest, MeasureLabel(extras[i].Title, scale, style, cache));
+        }
+
+        var result = Math.Min(MaxLabelWidth, Math.Ceiling(widest));
+        _lastLabelScale = scale;
+        _lastSessionLabel = sessionLabel;
+        _lastWeeklyLabel = weeklyLabel;
+        if (extras.Count == 0)
+        {
+            _lastExtraTitles = Array.Empty<string>();
+        }
+        else
+        {
+            var titles = new string[extras.Count];
+            for (var i = 0; i < extras.Count; i++) titles[i] = extras[i].Title;
+            _lastExtraTitles = titles;
+        }
+        _lastLabelWidth = result;
+        return result;
+    }
+
+    private static bool ExtraTitlesMatch(IReadOnlyList<ExtraUsageWindow> extras, string[]? cached)
+    {
+        if (cached == null || cached.Length != extras.Count) return false;
+        for (var i = 0; i < extras.Count; i++)
+        {
+            if (!string.Equals(extras[i].Title, cached[i], StringComparison.Ordinal)) return false;
+        }
+        return true;
+    }
+
+    private static double MeasureLabel(string label, double scale, Style style, Dictionary<(double Scale, string Label), double> cache)
+    {
+        if (string.IsNullOrEmpty(label)) return 0;
+        var key = (scale, label);
+        if (cache.TryGetValue(key, out var cached)) return cached;
+
+        _labelProbe ??= new TextBlock { TextWrapping = TextWrapping.NoWrap };
+        if (!ReferenceEquals(_labelProbe.Style, style)) _labelProbe.Style = style;
+        _labelProbe.Text = label;
+        _labelProbe.Measure(new Windows.Foundation.Size(double.PositiveInfinity, double.PositiveInfinity));
+        var width = _labelProbe.DesiredSize.Width;
+
+        if (cache.Count >= 256) cache.Clear();
+        cache[key] = width;
+        return width;
     }
 
     // SVG path data for provider icons (from Bootstrap Icons and UXWing)

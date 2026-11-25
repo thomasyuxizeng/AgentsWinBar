@@ -231,12 +231,17 @@ public sealed partial class MainWindow : Window
     {
         if (e.Content is MainPage mainPage)
         {
+            mainPage.SettingsRequested -= OnSettingsRequested;
             mainPage.SettingsRequested += OnSettingsRequested;
+            mainPage.DashboardRequested -= OnDashboardRequested;
             mainPage.DashboardRequested += OnDashboardRequested;
+            mainPage.ProviderDetailRequested -= OnProviderDetailRequested;
             mainPage.ProviderDetailRequested += OnProviderDetailRequested;
+            mainPage.SetFlyoutVisible(_isWindowVisible);
         }
         else if (e.Content is ProviderDetailPage detailPage)
         {
+            detailPage.BackRequested -= OnBackRequested;
             detailPage.BackRequested += OnBackRequested;
         }
     }
@@ -615,6 +620,12 @@ public sealed partial class MainWindow : Window
         _startX = workArea.X + workArea.Width;
         _targetX = finalX;
 
+        // Flush any card/status updates deferred while the flyout was hidden before showing
+        if (ContentFrame.Content is MainPage mainPage)
+        {
+            mainPage.SetFlyoutVisible(true);
+        }
+
         // Position window at start location (off-screen right)
         AppWindow.Move(new PointInt32(_startX, _fixedY));
 
@@ -715,6 +726,10 @@ public sealed partial class MainWindow : Window
             {
                 WindowExtensions.Hide(this);
                 _isWindowVisible = false;
+                if (ContentFrame.Content is MainPage mainPage)
+                {
+                    mainPage.SetFlyoutVisible(false);
+                }
                 _costDemand?.Dispose();
                 _costDemand = null;
                 _viewModel.SetFlyoutVisible(false);
