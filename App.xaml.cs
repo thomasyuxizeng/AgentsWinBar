@@ -292,7 +292,8 @@ public partial class App : Application
         // constructor; CodexBarService routes providers whose usage source is "native" through it.
         services.AddSingleton<Services.Native.INativeUsageService>(sp =>
             new Services.Native.NativeUsageService(sp.GetRequiredService<ILoggerFactory>(),
-                () => sp.GetRequiredService<ISettingsService>().Settings.RenewClaudeSignIn, testOverrides));
+                () => sp.GetRequiredService<ISettingsService>().Settings.RenewClaudeSignIn, testOverrides,
+                () => sp.GetRequiredService<ISettingsService>().Settings.RenewGeminiSignIn));
         // Native cost scanner: index and refreshed prices live beside settings.json. CodexBarService uses it while
         // the cost source is "native"; nothing is scanned or watched before the first cost request.
         services.AddSingleton<Services.Native.INativeCostService>(sp =>

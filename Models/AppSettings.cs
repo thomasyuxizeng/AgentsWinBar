@@ -131,6 +131,13 @@ public class AppSettings
     public bool RenewClaudeSignIn { get; set; } = true;
 
     /// <summary>
+    /// When agy's Windows sign-in (the Gemini card) has expired, run <c>agy models</c> (at most every 30 minutes), which
+    /// makes agy renew its own sign-in. It lists models and uses no model quota, and the app never writes the sign-in
+    /// itself. Set in settings.json; files written before this setting existed load as on.
+    /// </summary>
+    public bool RenewGeminiSignIn { get; set; } = true;
+
+    /// <summary>
     /// Repairs malformed persisted values before they reach timers, animations or shell commands.
     /// An explicitly empty provider list remains empty.
     /// </summary>

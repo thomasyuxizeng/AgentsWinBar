@@ -44,17 +44,18 @@ public sealed class NativeUsageService : INativeTypedUsageService, IDisposable
     /// <summary>
     /// Production constructor: one pooled HttpClient and the three Windows-sign-in readers.
     /// <paramref name="renewClaudeSignIn"/> is asked whenever Claude's sign-in is found expired (the RenewClaudeSignIn
-    /// setting); null never renews. <paramref name="testOverrides"/> (<see cref="NativeTestOverrides.Current"/>, always
+    /// setting); null never renews. <paramref name="renewGeminiSignIn"/> does the same for agy's sign-in (the
+    /// RenewGeminiSignIn setting). <paramref name="testOverrides"/> (<see cref="NativeTestOverrides.Current"/>, always
     /// null in a Release build) points the readers at a fake profile, credential and server.
     /// </summary>
     public NativeUsageService(ILoggerFactory loggerFactory, Func<bool>? renewClaudeSignIn = null,
-        NativeTestOverrides? testOverrides = null)
+        NativeTestOverrides? testOverrides = null, Func<bool>? renewGeminiSignIn = null)
     {
         _logger = loggerFactory.CreateLogger<NativeUsageService>();
         _ownedHttp = testOverrides?.CreateHttpClient() ?? NativeHttp.CreateClient();
         var claude = CreateClaudeOptions() with { RenewExpiredSignIn = renewClaudeSignIn };
         var codex = new CodexNativeOptions();
-        var antigravity = new AntigravityNativeOptions();
+        var antigravity = new AntigravityNativeOptions { RenewExpiredSignIn = renewGeminiSignIn };
         if (testOverrides is not null)
             (claude, codex, antigravity) = (testOverrides.Apply(claude), testOverrides.Apply(codex), testOverrides.Apply(antigravity));
         _clients = Index([
@@ -64,7 +65,9 @@ public sealed class NativeUsageService : INativeTypedUsageService, IDisposable
                 renewer: testOverrides?.ProfileRoot is null ? new ClaudeAuthStatusRunner() : null),
             new CodexNativeClient(_ownedHttp, loggerFactory.CreateLogger<CodexNativeClient>(), codex),
             new AntigravityNativeClient(_ownedHttp, loggerFactory.CreateLogger<AntigravityNativeClient>(),
-                testOverrides?.CreateAntigravitySource(), antigravity)
+                testOverrides?.CreateAntigravitySource(), antigravity,
+                // A fake credential never starts the real agy, which would renew the real sign-in.
+                renewer: testOverrides?.AntigravityCredentialFile is null ? new AgyModelsRunner() : null)
         ]);
         if (testOverrides is not null)
             _logger.LogWarning("Native usage readers are using the Debug test overrides (fake profile, credential or server)");

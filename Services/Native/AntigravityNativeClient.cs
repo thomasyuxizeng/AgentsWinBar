@@ -23,6 +23,15 @@ public sealed record AntigravityNativeOptions
     public Uri LoadCodeAssistUri { get; init; } = AntigravityNativeClient.LoadCodeAssistUri;
     public Uri QuotaSummaryUri { get; init; } = AntigravityNativeClient.QuotaSummaryUri;
     public Uri AvailableModelsUri { get; init; } = AntigravityNativeClient.AvailableModelsUri;
+    /// <summary>
+    /// Asked each time the sign-in is found expired: true lets the client have agy renew it with <c>agy models</c>
+    /// (the app's RenewGeminiSignIn setting). Null never renews.
+    /// </summary>
+    public Func<bool>? RenewExpiredSignIn { get; init; }
+    /// <summary>At most one renewal attempt this often.</summary>
+    public TimeSpan RenewalInterval { get; init; } = TimeSpan.FromMinutes(30);
+    /// <summary>A renewal that has not finished by then is stopped (its whole process tree).</summary>
+    public TimeSpan RenewalTimeout { get; init; } = TimeSpan.FromSeconds(30);
 }
 
 /// <summary>
@@ -31,8 +40,8 @@ public sealed record AntigravityNativeOptions
 /// windows "Claude and GPT 5-hour" / "Claude and GPT weekly". Port of upstream CodexBar's
 /// AntigravityRemoteUsageFetcher (loadCodeAssist, retrieveUserQuotaSummary, fetchAvailableModels fallback).
 /// Differences from upstream: never onboards an account (onboardUser is a write), never persists credentials and never
-/// refreshes the token: an expired access token yields <see cref="NativeUsageStatus.SignInExpired"/> until agy renews
-/// it. An expired sign-in and transient failures (network, timeout, 5xx, 429) serve the last good reading as cached.
+/// refreshes the token itself: an expired access token has agy renew its own sign-in (<c>agy models</c>, when the
+/// RenewGeminiSignIn setting allows) and yields <see cref="NativeUsageStatus.SignInExpired"/> when that does not help. An expired sign-in and transient failures (network, timeout, 5xx, 429) serve the last good reading as cached.
 /// </summary>
 public sealed class AntigravityNativeClient : INativeUsageClient
 {
@@ -53,19 +62,25 @@ public sealed class AntigravityNativeClient : INativeUsageClient
     private readonly AntigravityNativeOptions _options;
     private readonly TimeProvider _clock;
     private readonly NativeLastGoodStore _lastGood = new();
+    private readonly IAgySignInRenewer? _renewer;
+    private readonly object _renewalGate = new();
+    private Task<AgyModelsRun?>? _renewal;
+    private DateTimeOffset? _lastRenewalStart;
 
     public AntigravityNativeClient(
         HttpClient http,
         ILogger<AntigravityNativeClient> logger,
         IAntigravityCredentialSource? source = null,
         AntigravityNativeOptions? options = null,
-        TimeProvider? clock = null)
+        TimeProvider? clock = null,
+        IAgySignInRenewer? renewer = null)
     {
         _http = http;
         _logger = logger;
         _source = source ?? new WindowsCredentialManagerSource();
         _options = options ?? new AntigravityNativeOptions();
         _clock = clock ?? TimeProvider.System;
+        _renewer = renewer;
         ProviderId = ProviderConstants.ValidateAndNormalize("gemini");
     }
 
@@ -75,14 +90,79 @@ public sealed class AntigravityNativeClient : INativeUsageClient
     public async Task<NativeUsageResult> FetchAsync(CancellationToken ct = default) =>
         _lastGood.Apply(await FetchCoreAsync(ct).ConfigureAwait(false), _clock.GetUtcNow());
 
+    private AntigravityCredentials? ReadCredentials()
+    {
+        using var blob = _source.ReadBlob();
+        return blob == null ? null : AntigravityCredentialParser.Parse(blob.Span);
+    }
+
+    /// <summary>
+    /// When renewal is on and allowed now (at most one attempt per <see cref="AntigravityNativeOptions.RenewalInterval"/>,
+    /// never two at once), has agy renew its sign-in, then reads the credential once more. Returns the renewed sign-in
+    /// when its expiry moved past <paramref name="expiredAt"/> and now; otherwise null.
+    /// </summary>
+    private async Task<AntigravityCredentials?> TryRenewSignInAsync(DateTimeOffset expiredAt, CancellationToken ct)
+    {
+        if (_renewer == null || _options.RenewExpiredSignIn?.Invoke() != true) return null;
+        Task<AgyModelsRun?> renewal;
+        lock (_renewalGate)
+        {
+            var now = _clock.GetUtcNow();
+            if (_renewal is { IsCompleted: false } running) renewal = running; // join the attempt in flight
+            else if (_lastRenewalStart is { } last && now >= last && now - last < _options.RenewalInterval) return null;
+            else
+            {
+                _lastRenewalStart = now;
+                // Not tied to this caller's deadline: an attempt that outlives it still finishes (or is stopped at its
+                // own timeout), and the next read finds the renewed sign-in.
+                renewal = _renewal = Task.Run(RenewAsync, CancellationToken.None);
+            }
+        }
+
+        if (await renewal.WaitAsync(ct).ConfigureAwait(false) is null) return null;
+        try
+        {
+            var renewed = ReadCredentials();
+            return renewed?.Expiry is { } expires && expires > expiredAt && expires > _clock.GetUtcNow() ? renewed : null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        {
+            _logger.LogWarning("Antigravity sign-in could not be read after renewal ({Type})", ex.GetType().Name);
+            return null;
+        }
+    }
+
+    /// <summary>One renewal attempt. Logs only whether it ran, its exit code and its duration; never its output.</summary>
+    private async Task<AgyModelsRun?> RenewAsync()
+    {
+        try
+        {
+            if (_renewer!.FindAgyExecutable() is not { } executable)
+            {
+                _logger.LogInformation("agy was not found; the expired Antigravity sign-in was not renewed");
+                return null;
+            }
+            var run = await _renewer.RunModelsAsync(executable, _options.RenewalTimeout, CancellationToken.None).ConfigureAwait(false);
+            if (run.TimedOut)
+                _logger.LogWarning("Antigravity sign-in renewal timed out after {Seconds:0.0} s and was stopped", run.Duration.TotalSeconds);
+            else
+                _logger.LogInformation("Antigravity sign-in renewal finished with exit code {ExitCode} in {Seconds:0.0} s", run.ExitCode, run.Duration.TotalSeconds);
+            return run;
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            _logger.LogWarning("Antigravity sign-in renewal could not run ({Type})", ex.GetType().Name);
+            return null;
+        }
+    }
+
     private async Task<NativeUsageResult> FetchCoreAsync(CancellationToken ct)
     {
         var now = _clock.GetUtcNow();
         AntigravityCredentials? credentials;
         try
         {
-            using var blob = _source.ReadBlob();
-            credentials = blob == null ? null : AntigravityCredentialParser.Parse(blob.Span);
+            credentials = ReadCredentials();
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
         {
@@ -94,15 +174,23 @@ public sealed class AntigravityNativeClient : INativeUsageClient
             return Fail(NativeUsageStatus.SignInMissing, null, "Not signed in to Antigravity on Windows. Sign in with agy on Windows.");
 
         var calls = 0;
-        var accessToken = credentials.AccessToken;
         if (credentials.Expiry is { } expiry && expiry - _options.ExpirySafetyWindow <= now)
         {
-            var ago = now - expiry;
-            _logger.LogInformation("Antigravity access token expired {Ago} ago; not refreshing (read-only)", NativeParse.Ago(ago));
-            return Fail(NativeUsageStatus.SignInExpired, null, ago > TimeSpan.Zero
-                ? $"Antigravity sign-in expired {NativeParse.Ago(ago)} ago. Run agy on Windows to renew it."
-                : "Antigravity sign-in expires in under a minute. Run agy on Windows to renew it.") with { ExpiredFor = ago };
+            // agy renews its own sign-in when it lists models; the app never writes the credential itself.
+            if (await TryRenewSignInAsync(expiry, ct).ConfigureAwait(false) is { } renewed)
+            {
+                credentials = renewed;
+            }
+            else
+            {
+                var ago = now - expiry;
+                _logger.LogInformation("Antigravity access token expired {Ago} ago; not renewed", NativeParse.Ago(ago));
+                return Fail(NativeUsageStatus.SignInExpired, null, ago > TimeSpan.Zero
+                    ? $"Antigravity sign-in expired {NativeParse.Ago(ago)} ago. Run agy on Windows to renew it."
+                    : "Antigravity sign-in expires in under a minute. Run agy on Windows to renew it.") with { ExpiredFor = ago };
+            }
         }
+        var accessToken = credentials.AccessToken;
 
         try
         {
