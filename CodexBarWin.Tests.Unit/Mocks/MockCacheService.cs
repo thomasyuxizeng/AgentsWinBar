@@ -1,34 +1,39 @@
+using System.Collections.Concurrent;
 using CodexBarWin.Models;
 using CodexBarWin.Services;
 
 namespace CodexBarWin.Tests.Unit.Mocks;
 
 /// <summary>
-/// Mock implementation of ICacheService for testing.
+/// Mock implementation of ICacheService for testing. Thread-safe like the real CacheService: native providers finish
+/// in parallel and each one stores its reading, so a plain Dictionary here made routing tests fail intermittently.
 /// </summary>
 public class MockCacheService : ICacheService
 {
-    private readonly Dictionary<string, UsageData> _cache = new();
+    private readonly ConcurrentDictionary<string, UsageData> _cache = new();
+    private int _getCallCount;
+    private int _setCallCount;
+    private int _clearCallCount;
 
-    public int GetCallCount { get; private set; }
-    public int SetCallCount { get; private set; }
-    public int ClearCallCount { get; private set; }
+    public int GetCallCount => Volatile.Read(ref _getCallCount);
+    public int SetCallCount => Volatile.Read(ref _setCallCount);
+    public int ClearCallCount => Volatile.Read(ref _clearCallCount);
 
     public UsageData? Get(string provider)
     {
-        GetCallCount++;
+        Interlocked.Increment(ref _getCallCount);
         return _cache.TryGetValue(provider, out var data) ? data : null;
     }
 
     public void Set(string provider, UsageData data)
     {
-        SetCallCount++;
+        Interlocked.Increment(ref _setCallCount);
         _cache[provider] = data;
     }
 
     public void Clear()
     {
-        ClearCallCount++;
+        Interlocked.Increment(ref _clearCallCount);
         _cache.Clear();
     }
 
