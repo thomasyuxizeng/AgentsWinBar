@@ -91,6 +91,7 @@ public sealed partial class DashboardAppWindow : Window
         Closed += OnClosed;
         Activated += OnActivated;
         _appWindow.Changed += OnAppWindowChanged;
+        _appWindow.Closing += OnAppWindowClosing;
 
         if (Content is UIElement root)
         {
@@ -323,10 +324,15 @@ public sealed partial class DashboardAppWindow : Window
         _appWindow.SetIcon($"Assets/{(light ? "app-dark.ico" : "app.ico")}");
     }
 
-    private void OnClosed(object sender, WindowEventArgs args)
+    private void OnAppWindowClosing(AppWindow sender, AppWindowClosingEventArgs args) => Teardown();
+
+    private void OnClosed(object sender, WindowEventArgs args) => Teardown();
+
+    private void Teardown()
     {
         if (_closed) return;
         _closed = true;
+        _appWindow.Closing -= OnAppWindowClosing;
         Closed -= OnClosed;
         Activated -= OnActivated;
         _costDemand?.Dispose();

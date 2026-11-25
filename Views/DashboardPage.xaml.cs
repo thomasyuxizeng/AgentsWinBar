@@ -4,6 +4,7 @@ using CodexBarWin.Models;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
+using Microsoft.UI.Xaml.Media;
 
 namespace CodexBarWin.Views;
 
@@ -46,6 +47,31 @@ public sealed partial class DashboardPage : Page
     public DashboardPage()
     {
         InitializeComponent();
+        AttentionRepeater.ElementPrepared += OnAttentionElementPrepared;
+        AttentionRepeater.ElementClearing += OnAttentionElementClearing;
+    }
+
+    private void OnAttentionElementPrepared(ItemsRepeater sender, ItemsRepeaterElementPreparedEventArgs args)
+    {
+        if (_disposed || args.Element is not HyperlinkButton hb) return;
+        hb.Click -= OnAttentionClicked;
+        hb.Click += OnAttentionClicked;
+    }
+
+    private void OnAttentionElementClearing(ItemsRepeater sender, ItemsRepeaterElementClearingEventArgs args)
+    {
+        if (args.Element is HyperlinkButton hb) hb.Click -= OnAttentionClicked;
+    }
+
+    private void DetachAttentionClicks(DependencyObject root)
+    {
+        var count = VisualTreeHelper.GetChildrenCount(root);
+        for (var i = 0; i < count; i++)
+        {
+            var child = VisualTreeHelper.GetChild(root, i);
+            if (child is HyperlinkButton hb) hb.Click -= OnAttentionClicked;
+            DetachAttentionClicks(child);
+        }
     }
 
     /// <summary>Recursively tears down all child panels, charts, toggles, repeaters, and event subscriptions on window close.</summary>
@@ -60,7 +86,14 @@ public sealed partial class DashboardPage : Page
         SettingsButton.Click -= OnSettingsClicked;
 
         SetBusy(false);
+        AttentionRepeater.ElementPrepared -= OnAttentionElementPrepared;
+        AttentionRepeater.ElementClearing -= OnAttentionElementClearing;
+        DetachAttentionClicks(AttentionRepeater);
         AttentionRepeater.ItemsSource = null;
+        AttentionRepeater.ItemTemplate = null;
+        AttentionPanel.Children.Clear();
+        SummaryGrid.Children.Clear();
+        SummaryCard.Child = null;
         _attention = [];
         _snapshot = null;
 
@@ -82,6 +115,8 @@ public sealed partial class DashboardPage : Page
 
         DiagnosticsExpander.IsExpanded = false;
         Diagnostics.Cleanup();
+        DiagnosticsExpander.Content = null;
+        DiagnosticsExpander.Header = null;
         ContentStack.Children.Clear();
         DataContext = null;
     }

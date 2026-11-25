@@ -36,6 +36,7 @@ public sealed partial class DashboardGraphCard : UserControl
         _disposed = true;
         CleanupBurndownCharts(WindowsChartsList);
         WindowsChartsList.ItemsSource = null;
+        WindowsChartsList.ItemTemplate = null;
         CostChart.Cleanup();
         Bindings?.StopTracking();
         SetValue(DataProperty, null);

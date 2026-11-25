@@ -90,10 +90,15 @@ public sealed partial class DashboardProviderPanel : UserControl
         WindowsHost.ColumnDefinitions.Clear();
 
         ApiUseList.ItemsSource = null;
+        ApiUseList.ItemTemplate = null;
         GeminiUseList.ItemsSource = null;
+        GeminiUseList.ItemTemplate = null;
         TokenMixList.ItemsSource = null;
+        TokenMixList.ItemTemplate = null;
         TopModelsList.ItemsSource = null;
+        TopModelsList.ItemTemplate = null;
         CostFactsList.ItemsSource = null;
+        CostFactsList.ItemTemplate = null;
         TokenRows = ModelRows = [];
         CostFacts = [];
         ApiUseRows = GeminiUseRows = [];

@@ -41,11 +41,17 @@ public sealed partial class DashboardDiagnosticsPanel : UserControl
         CardsGrid.SizeChanged -= OnSizeChanged;
         SystemFacts = SettingsFacts = HistoryFacts = CostCacheFacts = [];
         SystemFactsList.ItemsSource = null;
+        SystemFactsList.ItemTemplate = null;
         SettingsFactsList.ItemsSource = null;
+        SettingsFactsList.ItemTemplate = null;
         HistoryFactsList.ItemsSource = null;
+        HistoryFactsList.ItemTemplate = null;
         CostCacheFactsList.ItemsSource = null;
+        CostCacheFactsList.ItemTemplate = null;
         RefreshesList.ItemsSource = null;
+        RefreshesList.ItemTemplate = null;
         AlertsList.ItemsSource = null;
+        AlertsList.ItemTemplate = null;
         CardsGrid.Children.Clear();
         CardsGrid.ColumnDefinitions.Clear();
         CardsGrid.RowDefinitions.Clear();

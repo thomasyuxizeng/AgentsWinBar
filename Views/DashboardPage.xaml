@@ -98,7 +98,7 @@
                                 <ItemsRepeater.ItemTemplate>
                                     <DataTemplate x:DataType="helpers:AttentionItem">
                                         <HyperlinkButton Padding="0,2" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
-                                                         Click="OnAttentionClicked" Tag="{x:Bind ProviderId}"
+                                                         Tag="{x:Bind ProviderId}"
                                                          AutomationProperties.Name="{x:Bind views:DashboardFormat.AttentionText(Label, Detail)}"
                                                          ToolTipService.ToolTip="{x:Bind views:DashboardFormat.AttentionText(Label, Detail)}">
                                             <!-- A Grid, not a horizontal StackPanel: the StackPanel measures its text with unlimited
