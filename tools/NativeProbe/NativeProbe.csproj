@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Spike probe for the native usage readers. Not part of the solution and excluded from the app build
+    (CodexBarWin.csproj removes tools\**). Build: dotnet build tools\NativeProbe -c Release -nodeReuse:false
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <Platforms>x64</Platforms>
+    <PlatformTarget>x64</PlatformTarget>
+    <RootNamespace>NativeProbe</RootNamespace>
+    <!-- Match the app: workstation GC. -->
+    <ServerGarbageCollection>false</ServerGarbageCollection>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.*" />
+  </ItemGroup>
+
+  <!-- The same sources the app and the tests compile. The DTO mapper needs the app's model graph, so it stays out. -->
+  <ItemGroup>
+    <Compile Include="..\..\Services\Native\*.cs" Exclude="..\..\Services\Native\NativeUsageDtoMapper.cs" Link="Native\%(Filename)%(Extension)" />
+    <Compile Include="..\..\Models\ProviderConfig.cs" Link="Linked\ProviderConfig.cs" />
+  </ItemGroup>
+
+</Project>
