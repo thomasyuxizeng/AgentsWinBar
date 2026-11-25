@@ -30,6 +30,14 @@
     <Content Remove="CodexBarWin.Tests.Unit\**" />
     <EmbeddedResource Remove="CodexBarWin.Tests.Unit\**" />
     <None Remove="CodexBarWin.Tests.Unit\**" />
+    <Compile Remove="tools\**" />
+    <Content Remove="tools\**" />
+    <EmbeddedResource Remove="tools\**" />
+    <None Remove="tools\**" />
+    <Compile Remove=".spike-data\**" />
+    <Content Remove=".spike-data\**" />
+    <EmbeddedResource Remove=".spike-data\**" />
+    <None Remove=".spike-data\**" />
   </ItemGroup>
 
   <!-- Version Management (MinVer) -->
