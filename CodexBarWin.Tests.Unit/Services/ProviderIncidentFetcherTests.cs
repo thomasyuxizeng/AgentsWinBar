@@ -1,4 +1,6 @@
 using System.Net;
+using System.Net.Http.Headers;
+using System.Text;
 using AwesomeAssertions;
 using CodexBarWin.Models;
 using CodexBarWin.Services;
@@ -241,5 +243,119 @@ public class ProviderIncidentFetcherTests
         var status3 = await fetcher.GetIncidentAsync("claude");
         status3.Should().NotBeNull();
         handler.Requests.Should().Be(2);
+    }
+
+    private sealed class ThrowingStreamContent : HttpContent
+    {
+        protected override Task SerializeToStreamAsync(Stream stream, TransportContext? context) =>
+            throw new InvalidOperationException("Body should not be read on 304 Not Modified");
+        protected override Task<Stream> CreateContentReadStreamAsync() =>
+            throw new InvalidOperationException("Body stream should not be opened on 304 Not Modified");
+        protected override bool TryComputeLength(out long length) { length = 0; return false; }
+    }
+
+    private sealed class ChunkedStream(byte[] data, int chunkSize) : Stream
+    {
+        private int _pos;
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => _pos; set => throw new NotSupportedException(); }
+        public override void Flush() { }
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken ct = default)
+        {
+            if (_pos >= data.Length) return ValueTask.FromResult(0);
+            var toCopy = Math.Min(Math.Min(chunkSize, buffer.Length), data.Length - _pos);
+            data.AsSpan(_pos, toCopy).CopyTo(buffer.Span);
+            _pos += toCopy;
+            return ValueTask.FromResult(toCopy);
+        }
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
+
+    [TestMethod]
+    public void CreateDefaultHandler_Configuration_UsesDecompressionNoCookiesAnd90sIdleTimeout()
+    {
+        using var handler = ProviderIncidentFetcher.CreateDefaultHandler();
+
+        handler.AutomaticDecompression.Should().Be(
+            DecompressionMethods.GZip | DecompressionMethods.Deflate | DecompressionMethods.Brotli);
+        handler.UseCookies.Should().BeFalse();
+        handler.PooledConnectionIdleTimeout.Should().Be(TimeSpan.FromSeconds(90));
+    }
+
+    [TestMethod]
+    public async Task GetIncidentAsync_ConditionalGet304NotModified_RefreshesCacheWithoutBodyRead()
+    {
+        var lastModified = new DateTimeOffset(2026, 10, 11, 11, 55, 0, TimeSpan.Zero);
+        EntityTagHeaderValue? seenIfNoneMatch = null;
+        DateTimeOffset? seenIfModifiedSince = null;
+        var callCount = 0;
+
+        var handler = new DelegatingHandler((req, _) =>
+        {
+            callCount++;
+            if (callCount == 1)
+            {
+                var ok = new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(ClaudeJson) };
+                ok.Headers.ETag = new EntityTagHeaderValue("\"etag-v1\"");
+                ok.Content.Headers.LastModified = lastModified;
+                return Task.FromResult(ok);
+            }
+
+            seenIfNoneMatch = req.Headers.IfNoneMatch.FirstOrDefault();
+            seenIfModifiedSince = req.Headers.IfModifiedSince;
+            var notModified = new HttpResponseMessage(HttpStatusCode.NotModified)
+            {
+                Content = new ThrowingStreamContent()
+            };
+            notModified.Headers.ETag = new EntityTagHeaderValue("\"etag-v2\"");
+            return Task.FromResult(notModified);
+        });
+
+        var clock = new TestClock(InitialTime);
+        using var fetcher = new ProviderIncidentFetcher(handler, clock);
+
+        var status1 = await fetcher.GetIncidentAsync("claude");
+        status1.Should().NotBeNull();
+
+        clock.Current = InitialTime.AddMinutes(6);
+        var status2 = await fetcher.GetIncidentAsync("claude");
+
+        seenIfNoneMatch.Should().Be(new EntityTagHeaderValue("\"etag-v1\""));
+        seenIfModifiedSince.Should().Be(lastModified);
+        status2.Should().BeSameAs(status1);
+        handler.Requests.Should().Be(2);
+
+        // Cache TTL should be refreshed by 304, so another call 4 minutes later uses cache without HTTP
+        clock.Current = InitialTime.AddMinutes(10);
+        var status3 = await fetcher.GetIncidentAsync("claude");
+        status3.Should().BeSameAs(status1);
+        handler.Requests.Should().Be(2);
+    }
+
+    [TestMethod]
+    public async Task GetIncidentAsync_MultiChunkLargeUtf8BodyWithBom_GrowsArrayPoolAndParses()
+    {
+        var padded = new string(' ', 70_000);
+        var json = ClaudeJson + padded;
+        var payload = new byte[] { 0xEF, 0xBB, 0xBF }.Concat(Encoding.UTF8.GetBytes(json)).ToArray();
+
+        var handler = new DelegatingHandler((req, _) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StreamContent(new ChunkedStream(payload, 4096))
+        }));
+
+        var clock = new TestClock(InitialTime);
+        using var fetcher = new ProviderIncidentFetcher(handler, clock);
+
+        var status = await fetcher.GetIncidentAsync("claude");
+
+        status.Should().NotBeNull();
+        status!.IncidentTitle.Should().Be("Elevated errors on platform.claude.com");
     }
 }

@@ -1,5 +1,7 @@
+using System.Buffers;
 using System.Collections.Concurrent;
-using System.Text;
+using System.Net;
+using System.Net.Http.Headers;
 using CodexBarWin.Models;
 using Microsoft.Extensions.Logging;
 
@@ -21,12 +23,19 @@ public sealed class ProviderIncidentFetcher : IProviderIncidentFetcher, IDisposa
     public const int MaxFeedBytes = 2 * 1024 * 1024;
     public const string UserAgent = "CodexBarWin/1.0 (+https://github.com/steipete/CodexBar)";
 
+    private sealed record CachedEntry(
+        DateTimeOffset CachedAt,
+        ProviderStatus? Status,
+        EntityTagHeaderValue? ETag = null,
+        string? RawETag = null,
+        DateTimeOffset? LastModified = null);
+
     private readonly HttpClient _httpClient;
     private readonly bool _disposeClient;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<ProviderIncidentFetcher>? _logger;
 
-    private readonly ConcurrentDictionary<string, (DateTimeOffset CachedAt, ProviderStatus? Status)> _cache = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, CachedEntry> _cache = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _gates = new(StringComparer.OrdinalIgnoreCase);
 
     private readonly object _lifetimeLock = new();
@@ -63,10 +72,22 @@ public sealed class ProviderIncidentFetcher : IProviderIncidentFetcher, IDisposa
         }
         else
         {
-            _httpClient = new HttpClient { Timeout = DefaultTimeout };
+            _httpClient = new HttpClient(CreateDefaultHandler(), disposeHandler: true)
+            {
+                Timeout = DefaultTimeout
+            };
             _disposeClient = true;
         }
     }
+
+    internal static SocketsHttpHandler CreateDefaultHandler() => new()
+    {
+        AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate | DecompressionMethods.Brotli,
+        UseCookies = false,
+        PooledConnectionIdleTimeout = TimeSpan.FromSeconds(90),
+        PooledConnectionLifetime = TimeSpan.FromMinutes(15),
+        ConnectTimeout = DefaultTimeout
+    };
 
     public Task<ProviderStatus?> GetStatusAsync(string provider, CancellationToken ct = default) =>
         GetIncidentAsync(provider, ct);
@@ -119,10 +140,10 @@ public sealed class ProviderIncidentFetcher : IProviderIncidentFetcher, IDisposa
                 }
             }
 
-            ProviderStatus? status = null;
+            CachedEntry entry;
             try
             {
-                status = await FetchHttpCoreAsync(normalized, deadline.Token).ConfigureAwait(false);
+                entry = await FetchHttpCoreAsync(normalized, cached, deadline.Token).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested || _disposed)
             {
@@ -131,11 +152,11 @@ public sealed class ProviderIncidentFetcher : IProviderIncidentFetcher, IDisposa
             catch (Exception ex)
             {
                 _logger?.LogWarning(ex, "Failed to retrieve incident status for {Provider}", normalized);
-                status = null;
+                entry = new CachedEntry(_timeProvider.GetUtcNow(), null);
             }
 
-            _cache[normalized] = (_timeProvider.GetUtcNow(), status);
-            return status;
+            _cache[normalized] = entry;
+            return entry.Status;
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -143,13 +164,13 @@ public sealed class ProviderIncidentFetcher : IProviderIncidentFetcher, IDisposa
         }
         catch (OperationCanceledException)
         {
-            _cache[normalized] = (_timeProvider.GetUtcNow(), null);
+            _cache[normalized] = new CachedEntry(_timeProvider.GetUtcNow(), null);
             return null;
         }
         catch (Exception ex)
         {
             _logger?.LogWarning(ex, "Failed to retrieve incident status for {Provider}", normalized);
-            _cache[normalized] = (_timeProvider.GetUtcNow(), null);
+            _cache[normalized] = new CachedEntry(_timeProvider.GetUtcNow(), null);
             return null;
         }
         finally
@@ -158,7 +179,7 @@ public sealed class ProviderIncidentFetcher : IProviderIncidentFetcher, IDisposa
         }
     }
 
-    private async Task<ProviderStatus?> FetchHttpCoreAsync(string provider, CancellationToken ct)
+    private async Task<CachedEntry> FetchHttpCoreAsync(string provider, CachedEntry? previous, CancellationToken ct)
     {
         var uri = provider switch
         {
@@ -170,7 +191,7 @@ public sealed class ProviderIncidentFetcher : IProviderIncidentFetcher, IDisposa
 
         if (uri == null)
         {
-            return null;
+            return new CachedEntry(_timeProvider.GetUtcNow(), null);
         }
 
         try
@@ -181,40 +202,121 @@ public sealed class ProviderIncidentFetcher : IProviderIncidentFetcher, IDisposa
                 request.Headers.UserAgent.ParseAdd(UserAgent);
             }
 
+            if (previous?.Status != null)
+            {
+                if (previous.ETag != null)
+                {
+                    request.Headers.IfNoneMatch.Add(previous.ETag);
+                }
+                else if (!string.IsNullOrEmpty(previous.RawETag))
+                {
+                    request.Headers.TryAddWithoutValidation("If-None-Match", previous.RawETag);
+                }
+
+                if (previous.LastModified.HasValue)
+                {
+                    request.Headers.IfModifiedSince = previous.LastModified.Value;
+                }
+            }
+
             using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
+            if (response.StatusCode == HttpStatusCode.NotModified && previous?.Status != null)
+            {
+                var updatedETag = response.Headers.ETag ?? previous.ETag;
+                var updatedRawETag = updatedETag != null ? null : (TryGetRawETag(response) ?? previous.RawETag);
+                var updatedLastModified = response.Content?.Headers.LastModified ?? previous.LastModified;
+                return new CachedEntry(_timeProvider.GetUtcNow(), previous.Status, updatedETag, updatedRawETag, updatedLastModified);
+            }
+
             if (!response.IsSuccessStatusCode)
             {
                 _logger?.LogWarning("{Provider} status feed returned HTTP {StatusCode}", provider, response.StatusCode);
-                return null;
+                return new CachedEntry(_timeProvider.GetUtcNow(), null);
             }
 
             if (response.Content.Headers.ContentLength > MaxFeedBytes)
             {
-                return null;
+                return new CachedEntry(_timeProvider.GetUtcNow(), null);
             }
 
             await using var stream = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
-            using var buffer = new MemoryStream();
-            var chunk = new byte[16 * 1024];
-            while (true)
+            var initialCapacity = response.Content.Headers.ContentLength is long contentLength && contentLength > 0
+                ? (int)Math.Min(contentLength + 1, MaxFeedBytes + 1)
+                : 32 * 1024;
+
+            var buffer = ArrayPool<byte>.Shared.Rent(initialCapacity);
+            var totalRead = 0;
+            try
             {
-                var read = await stream.ReadAsync(chunk.AsMemory(0, Math.Min(chunk.Length, MaxFeedBytes + 1 - (int)buffer.Length)), ct).ConfigureAwait(false);
-                if (read == 0) break;
-                buffer.Write(chunk, 0, read);
-                if (buffer.Length > MaxFeedBytes) return null;
+                while (true)
+                {
+                    if (totalRead == buffer.Length)
+                    {
+                        if (totalRead > MaxFeedBytes)
+                        {
+                            return new CachedEntry(_timeProvider.GetUtcNow(), null);
+                        }
+
+                        var nextSize = Math.Min(buffer.Length * 2, MaxFeedBytes + 1);
+                        if (nextSize <= buffer.Length)
+                        {
+                            return new CachedEntry(_timeProvider.GetUtcNow(), null);
+                        }
+
+                        var next = ArrayPool<byte>.Shared.Rent(nextSize);
+                        Buffer.BlockCopy(buffer, 0, next, 0, totalRead);
+                        ArrayPool<byte>.Shared.Return(buffer);
+                        buffer = next;
+                    }
+
+                    var toRead = Math.Min(buffer.Length - totalRead, MaxFeedBytes + 1 - totalRead);
+                    if (toRead <= 0)
+                    {
+                        return new CachedEntry(_timeProvider.GetUtcNow(), null);
+                    }
+
+                    var read = await stream.ReadAsync(buffer.AsMemory(totalRead, toRead), ct).ConfigureAwait(false);
+                    if (read == 0)
+                    {
+                        break;
+                    }
+
+                    totalRead += read;
+                    if (totalRead > MaxFeedBytes)
+                    {
+                        return new CachedEntry(_timeProvider.GetUtcNow(), null);
+                    }
+                }
+
+                var offset = totalRead >= 3 && buffer[0] == 0xEF && buffer[1] == 0xBB && buffer[2] == 0xBF ? 3 : 0;
+                if (totalRead <= offset)
+                {
+                    return new CachedEntry(_timeProvider.GetUtcNow(), null);
+                }
+
+                var utf8Memory = buffer.AsMemory(offset, totalRead - offset);
+                var now = _timeProvider.GetUtcNow();
+                var status = provider switch
+                {
+                    "gemini" => GoogleIncidentParser.ParseIncidents(utf8Memory, now),
+                    "claude" or "codex" => StatuspageIncidentParser.ParseSummary(utf8Memory, now),
+                    _ => null
+                };
+
+                if (status == null)
+                {
+                    return new CachedEntry(now, null);
+                }
+
+                var etag = response.Headers.ETag;
+                var rawETag = etag == null ? TryGetRawETag(response) : null;
+                var lastModified = response.Content.Headers.LastModified;
+                return new CachedEntry(now, status, etag, rawETag, lastModified);
             }
-
-            var bytes = buffer.GetBuffer();
-            var offset = buffer.Length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF ? 3 : 0;
-            var json = Encoding.UTF8.GetString(bytes, offset, (int)buffer.Length - offset);
-
-            var now = _timeProvider.GetUtcNow();
-            return provider switch
+            finally
             {
-                "gemini" => GoogleIncidentParser.ParseIncidents(json, now),
-                "claude" or "codex" => StatuspageIncidentParser.ParseSummary(json, now),
-                _ => null
-            };
+                ArrayPool<byte>.Shared.Return(buffer);
+            }
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -223,14 +325,17 @@ public sealed class ProviderIncidentFetcher : IProviderIncidentFetcher, IDisposa
         catch (OperationCanceledException)
         {
             _logger?.LogWarning("Timeout fetching {Provider} status incidents feed", provider);
-            return null;
+            return new CachedEntry(_timeProvider.GetUtcNow(), null);
         }
         catch (Exception ex)
         {
             _logger?.LogWarning(ex, "Failed to fetch or parse {Provider} status incidents feed", provider);
-            return null;
+            return new CachedEntry(_timeProvider.GetUtcNow(), null);
         }
     }
+
+    private static string? TryGetRawETag(HttpResponseMessage response) =>
+        response.Headers.TryGetValues("ETag", out var values) ? values.FirstOrDefault() : null;
 
     public void Dispose()
     {

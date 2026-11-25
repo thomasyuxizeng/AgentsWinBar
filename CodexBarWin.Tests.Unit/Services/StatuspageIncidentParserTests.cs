@@ -1,3 +1,4 @@
+using System.Text;
 using AwesomeAssertions;
 using CodexBarWin.Models;
 using CodexBarWin.Services;
@@ -304,5 +305,43 @@ public class StatuspageIncidentParserTests
     {
         var status = StatuspageIncidentParser.ParseSummary(malformed, Now);
         status.Should().BeNull();
+    }
+
+    [TestMethod]
+    public void ParseSummary_Utf8BytesWithBom_MatchesStringOverload()
+    {
+        var json = """
+            {
+              "page": { "url": "https://status.claude.com", "updated_at": "2026-10-11T11:00:00Z" },
+              "status": { "indicator": "minor", "description": "Partially Degraded Service" },
+              "incidents": [
+                {
+                  "name": "Elevated errors on platform.claude.com",
+                  "status": "monitoring",
+                  "resolved_at": null,
+                  "impact": "major",
+                  "incident_updates": [
+                    { "body": "Mitigated errors.", "display_at": "2026-10-11T11:45:00Z" }
+                  ]
+                }
+              ]
+            }
+            """;
+        var payload = new byte[] { 0xEF, 0xBB, 0xBF }.Concat(Encoding.UTF8.GetBytes(json)).ToArray();
+
+        var expected = StatuspageIncidentParser.ParseSummary(json, Now);
+        var actual = StatuspageIncidentParser.ParseSummary(payload.AsMemory(), Now);
+
+        actual.Should().BeEquivalentTo(expected);
+    }
+
+    [TestMethod]
+    public void ParseSummary_Utf8EmptyWhitespaceOrOversized_ReturnsNull()
+    {
+        StatuspageIncidentParser.ParseSummary(ReadOnlyMemory<byte>.Empty, Now).Should().BeNull();
+        StatuspageIncidentParser.ParseSummary("   \r\n\t"u8.ToArray().AsMemory(), Now).Should().BeNull();
+        var oversized = new byte[StatuspageIncidentParser.MaxFeedBytes + 1];
+        Array.Fill(oversized, (byte)' ');
+        StatuspageIncidentParser.ParseSummary(oversized.AsMemory(), Now).Should().BeNull();
     }
 }

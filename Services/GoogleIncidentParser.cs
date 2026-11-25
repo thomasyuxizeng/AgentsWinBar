@@ -26,68 +26,108 @@ public static class GoogleIncidentParser
         try
         {
             using var doc = JsonDocument.Parse(json);
-            if (doc.RootElement.ValueKind != JsonValueKind.Array)
-            {
-                return null;
-            }
-
-            ProviderStatus? winningStatus = null;
-            int highestRank = -1;
-
-            foreach (var incident in doc.RootElement.EnumerateArray())
-            {
-                if (incident.ValueKind != JsonValueKind.Object)
-                {
-                    continue;
-                }
-
-                if (!IsGeminiIncident(incident))
-                {
-                    continue;
-                }
-
-                if (IsEnded(incident, now) || IsResolved(incident))
-                {
-                    continue;
-                }
-
-                var (indicator, rank) = DetermineIndicatorAndRank(incident);
-                if (indicator == ProviderStatusIndicator.None)
-                {
-                    continue;
-                }
-
-                if (rank > highestRank)
-                {
-                    highestRank = rank;
-                    winningStatus = new ProviderStatus
-                    {
-                        Indicator = indicator,
-                        Description = ExtractDescription(incident, indicator),
-                        Url = HistoryUrl,
-                        UpdatedAt = ExtractUpdatedAt(incident, now),
-                        IncidentTitle = ExtractTitle(incident, indicator),
-                        LatestUpdateText = ExtractUpdateText(incident),
-                        LatestUpdateAt = ExtractLatestUpdateAt(incident, now)
-                    };
-                }
-            }
-
-            return winningStatus ?? new ProviderStatus
-            {
-                Indicator = ProviderStatusIndicator.None,
-                Description = "All systems operational",
-                Url = HistoryUrl,
-                UpdatedAt = now.UtcDateTime,
-                IncidentTitle = null,
-                LatestUpdateText = null,
-                LatestUpdateAt = null
-            };
+            return ParseIncidentsCore(doc, now);
         }
         catch (JsonException)
         {
             return null;
         }
+    }
+
+    public static ProviderStatus? ParseIncidents(ReadOnlyMemory<byte> utf8Json, DateTimeOffset now)
+    {
+        if (utf8Json.IsEmpty || utf8Json.Length > MaxFeedBytes)
+        {
+            return null;
+        }
+
+        var trimmed = TrimBomAndLeadingWhitespace(utf8Json);
+        if (trimmed.IsEmpty)
+        {
+            return null;
+        }
+
+        try
+        {
+            using var doc = JsonDocument.Parse(trimmed);
+            return ParseIncidentsCore(doc, now);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static ReadOnlyMemory<byte> TrimBomAndLeadingWhitespace(ReadOnlyMemory<byte> utf8Json)
+    {
+        var span = utf8Json.Span;
+        var start = span.Length >= 3 && span[0] == 0xEF && span[1] == 0xBB && span[2] == 0xBF ? 3 : 0;
+        while (start < span.Length && span[start] is (byte)' ' or (byte)'\t' or (byte)'\r' or (byte)'\n')
+        {
+            start++;
+        }
+        return start >= span.Length ? ReadOnlyMemory<byte>.Empty : utf8Json[start..];
+    }
+
+    private static ProviderStatus? ParseIncidentsCore(JsonDocument doc, DateTimeOffset now)
+    {
+        if (doc.RootElement.ValueKind != JsonValueKind.Array)
+        {
+            return null;
+        }
+
+        ProviderStatus? winningStatus = null;
+        int highestRank = -1;
+
+        foreach (var incident in doc.RootElement.EnumerateArray())
+        {
+            if (incident.ValueKind != JsonValueKind.Object)
+            {
+                continue;
+            }
+
+            if (!IsGeminiIncident(incident))
+            {
+                continue;
+            }
+
+            if (IsEnded(incident, now) || IsResolved(incident))
+            {
+                continue;
+            }
+
+            var (indicator, rank) = DetermineIndicatorAndRank(incident);
+            if (indicator == ProviderStatusIndicator.None)
+            {
+                continue;
+            }
+
+            if (rank > highestRank)
+            {
+                highestRank = rank;
+                winningStatus = new ProviderStatus
+                {
+                    Indicator = indicator,
+                    Description = ExtractDescription(incident, indicator),
+                    Url = HistoryUrl,
+                    UpdatedAt = ExtractUpdatedAt(incident, now),
+                    IncidentTitle = ExtractTitle(incident, indicator),
+                    LatestUpdateText = ExtractUpdateText(incident),
+                    LatestUpdateAt = ExtractLatestUpdateAt(incident, now)
+                };
+            }
+        }
+
+        return winningStatus ?? new ProviderStatus
+        {
+            Indicator = ProviderStatusIndicator.None,
+            Description = "All systems operational",
+            Url = HistoryUrl,
+            UpdatedAt = now.UtcDateTime,
+            IncidentTitle = null,
+            LatestUpdateText = null,
+            LatestUpdateAt = null
+        };
     }
 
     public static bool IsGeminiIncident(JsonElement incident)

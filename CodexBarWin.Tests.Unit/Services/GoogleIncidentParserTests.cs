@@ -1,3 +1,4 @@
+using System.Text;
 using AwesomeAssertions;
 using CodexBarWin.Models;
 using CodexBarWin.Services;
@@ -132,5 +133,45 @@ public class GoogleIncidentParserTests
     {
         var status = GoogleIncidentParser.ParseIncidents(malformed, Now);
         status.Should().BeNull();
+    }
+
+    [TestMethod]
+    public void ParseIncidents_Utf8BytesWithBom_MatchesStringOverload()
+    {
+        var json = """
+            [
+              {
+                "service_key": "npdyhgECDJ6tB66MxXyo",
+                "service_name": "Gemini",
+                "status_impact": "SERVICE_DISRUPTION",
+                "severity": "high",
+                "begin": "2026-10-11T09:00:00Z",
+                "end": null,
+                "modified": "2026-10-11T11:00:00Z",
+                "external_desc": "Intermittent errors on Gemini.",
+                "most_recent_update": {
+                  "text": "Mitigating now.",
+                  "status": "SERVICE_DISRUPTION",
+                  "when": "2026-10-11T11:00:00Z"
+                }
+              }
+            ]
+            """;
+        var payload = new byte[] { 0xEF, 0xBB, 0xBF }.Concat(Encoding.UTF8.GetBytes(json)).ToArray();
+
+        var expected = GoogleIncidentParser.ParseIncidents(json, Now);
+        var actual = GoogleIncidentParser.ParseIncidents(payload.AsMemory(), Now);
+
+        actual.Should().BeEquivalentTo(expected);
+    }
+
+    [TestMethod]
+    public void ParseIncidents_Utf8EmptyWhitespaceOrOversized_ReturnsNull()
+    {
+        GoogleIncidentParser.ParseIncidents(ReadOnlyMemory<byte>.Empty, Now).Should().BeNull();
+        GoogleIncidentParser.ParseIncidents("   \r\n\t"u8.ToArray().AsMemory(), Now).Should().BeNull();
+        var oversized = new byte[GoogleIncidentParser.MaxFeedBytes + 1];
+        Array.Fill(oversized, (byte)' ');
+        GoogleIncidentParser.ParseIncidents(oversized.AsMemory(), Now).Should().BeNull();
     }
 }
