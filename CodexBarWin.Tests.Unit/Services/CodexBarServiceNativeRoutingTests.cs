@@ -369,6 +369,24 @@ public class CodexBarServiceNativeRoutingTests
         ((ICacheService)_cache).GetLastKnown("claude")!.Session!.Percent.Should().Be(0, "the cache must not keep the ended window either");
     }
 
+    [TestMethod]
+    public async Task GetUsageAndAllUsageAsync_WithTypedUsageService_CallsFetchUsageDtoAsyncWithoutJsonRoundtrip()
+    {
+        _settings.SetProviders([new() { Id = "claude", IsEnabled = true }]);
+        var typed = new Mock<INativeTypedUsageService>(MockBehavior.Strict);
+        typed.Setup(n => n.FetchUsageDtoAsync("claude", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(NativeUsageDtoMapper.ToDto(Ok("claude", 33)));
+        var service = Create(new Mock<IWslService>(MockBehavior.Strict).Object, typed.Object);
+
+        var single = await service.GetUsageAsync("claude");
+        var all = await service.GetAllUsageAsync();
+
+        single!.Session!.Percent.Should().Be(33);
+        all.Should().ContainSingle().Which.Session!.Percent.Should().Be(33);
+        typed.Verify(n => n.FetchUsageDtoAsync("claude", It.IsAny<CancellationToken>()), Times.Exactly(2));
+        typed.VerifyNoOtherCalls();
+    }
+
     private sealed class FakeClient(string provider, NativeUsageResult result) : INativeUsageClient
     {
         public string ProviderId => provider;

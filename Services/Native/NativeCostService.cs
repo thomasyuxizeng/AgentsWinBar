@@ -18,11 +18,18 @@ public interface INativeCostService
         DateTimeOffset asOf, CancellationToken ct = default);
 }
 
+/// <summary>Direct typed DTO route avoiding JSON serialize-then-deserialize roundtrips in-process.</summary>
+public interface INativeTypedCostService : INativeCostService
+{
+    Task<IReadOnlyDictionary<string, CostDataDto?>> FetchCostDtosAsync(IReadOnlyList<string> providers,
+        DateTimeOffset asOf, CancellationToken ct = default);
+}
+
 /// <summary>
 /// Owns the incremental scanner (index in the app's data folder), the change notifications on the Windows log
 /// folders and the price store. All work runs off the UI thread at background priority.
 /// </summary>
-public sealed class NativeCostService : INativeCostService, IDisposable
+public sealed class NativeCostService : INativeTypedCostService, IDisposable
 {
     internal const string IndexFolderName = "cost-index";
     internal const int HistoryDays = 30;
@@ -77,6 +84,19 @@ public sealed class NativeCostService : INativeCostService, IDisposable
     public async Task<IReadOnlyDictionary<string, string?>> FetchCostJsonAsync(IReadOnlyList<string> providers,
         DateTimeOffset asOf, CancellationToken ct = default)
     {
+        var dtos = await FetchCostDtosAsync(providers, asOf, ct).ConfigureAwait(false);
+        var reports = new Dictionary<string, string?>(dtos.Count, StringComparer.Ordinal);
+        foreach (var (provider, report) in dtos)
+        {
+            reports[provider] = report is null ? null
+                : JsonSerializer.Serialize(report, AppJsonSerializerContext.Default.CostDataDto);
+        }
+        return reports;
+    }
+
+    public async Task<IReadOnlyDictionary<string, CostDataDto?>> FetchCostDtosAsync(IReadOnlyList<string> providers,
+        DateTimeOffset asOf, CancellationToken ct = default)
+    {
         var normalized = providers.Select(ProviderConstants.ValidateAndNormalize).Distinct(StringComparer.Ordinal).ToArray();
         ct.ThrowIfCancellationRequested();
         // At most one download a day, off the caller's thread; new prices apply from the next report.
@@ -92,7 +112,7 @@ public sealed class NativeCostService : INativeCostService, IDisposable
         finally { _gate.Release(); }
     }
 
-    private IReadOnlyDictionary<string, string?> Scan(string[] providers, DateTimeOffset asOf, CancellationToken ct)
+    private IReadOnlyDictionary<string, CostDataDto?> Scan(string[] providers, DateTimeOffset asOf, CancellationToken ct)
     {
         var plan = _watcher.TakePlan();
         // A deleted index is rebuilt by a listing now; the changed paths alone would leave it empty.
@@ -144,10 +164,10 @@ public sealed class NativeCostService : INativeCostService, IDisposable
         _skipRetries = retries;
     }
 
-    private IReadOnlyDictionary<string, string?> ReadReports(string[] providers, CostPricing pricing,
+    private IReadOnlyDictionary<string, CostDataDto?> ReadReports(string[] providers, CostPricing pricing,
         DateTimeOffset asOf, CancellationToken ct)
     {
-        var reports = new Dictionary<string, string?>(StringComparer.Ordinal);
+        var reports = new Dictionary<string, CostDataDto?>(providers.Length, StringComparer.Ordinal);
         foreach (var provider in providers)
         {
             ct.ThrowIfCancellationRequested();
@@ -159,11 +179,9 @@ public sealed class NativeCostService : INativeCostService, IDisposable
             };
             // The CLI reports Gemini (its "antigravity" provider) as a successful reading without any usage; there
             // are no local Gemini logs to scan, so the native report says the same.
-            var report = source is { } known
+            reports[provider] = source is { } known
                 ? _scanner.ReadReport(known, pricing, asOf, HistoryDays, ct)
                 : provider == "gemini" ? EmptyReport("antigravity") : null;
-            reports[provider] = report is null ? null
-                : JsonSerializer.Serialize(report, AppJsonSerializerContext.Default.CostDataDto);
         }
         return reports;
     }

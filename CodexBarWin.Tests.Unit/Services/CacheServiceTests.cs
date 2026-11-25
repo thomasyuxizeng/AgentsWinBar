@@ -400,4 +400,33 @@ public class CacheServiceTests
             result.Should().BeNull();
         }
     }
+
+    [TestMethod]
+    public async Task SaveAsync_PrunesExpiredProvidersAndStreamsUtf8JsonToDisk()
+    {
+        var expiredTime = DateTime.UtcNow.Subtract(CacheRetention.MaxAge + TimeSpan.FromMinutes(10));
+        _cacheService.Set("claude", new UsageData
+        {
+            Provider = "claude",
+            FetchedAt = DateTime.UtcNow,
+            Session = new() { ReportedPercent = 28 },
+            UsageFetchOutcome = FetchOutcome.Success
+        });
+        _cacheService.Set("codex", new UsageData
+        {
+            Provider = "codex",
+            FetchedAt = expiredTime,
+            Session = new() { ReportedPercent = 50 },
+            UsageFetchOutcome = FetchOutcome.Success
+        });
+
+        await _cacheService.SaveAsync();
+        _cacheService.Clear();
+        await _cacheService.LoadAsync();
+
+        _cacheService.Get("claude")!.Session!.Percent.Should().Be(28);
+        _cacheService.GetLastKnown("codex").Should().BeNull();
+        var rawJson = await File.ReadAllTextAsync(_cachePath);
+        rawJson.Should().Contain("\"claude\"").And.NotContain("\"codex\"");
+    }
 }
