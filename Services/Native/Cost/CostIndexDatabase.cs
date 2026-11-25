@@ -5,11 +5,15 @@ namespace CodexBarWin.Services.Native.Cost;
 // Windows ships this SQLite library. Keep SQL errors free of paths and input values.
 internal sealed class CostIndexDatabase : IDisposable
 {
+    private const int OpenReadOnly = 0x01;
+    private const int OpenReadWrite = 0x02;
+    private const int OpenCreate = 0x04;
     private IntPtr _handle;
 
-    internal CostIndexDatabase(string path)
+    internal CostIndexDatabase(string path, bool readOnly = false)
     {
-        var status = Native.sqlite3_open_v2(path, out _handle, 6, IntPtr.Zero);
+        var flags = readOnly ? OpenReadOnly : OpenReadWrite | OpenCreate;
+        var status = Native.sqlite3_open_v2(path, out _handle, flags, IntPtr.Zero);
         if (status == 0) return;
         Dispose();
         Check(status);
@@ -26,7 +30,13 @@ internal sealed class CostIndexDatabase : IDisposable
 
     internal static void Check(int status)
     {
-        if (status != 0) throw new IOException($"Cost index SQLite error {status}.");
+        if (status != 0) throw new SqliteException(status);
+    }
+
+    internal sealed class SqliteException(int status) : IOException($"Cost index SQLite error {status}.")
+    {
+        // Schema errors and malformed databases can be rebuilt. Preserve the index on lock and I/O errors.
+        internal bool InvalidIndex => status is 1 or 11 or 17 or 26;
     }
 
     public void Dispose()
@@ -39,6 +49,7 @@ internal sealed class CostIndexDatabase : IDisposable
     internal sealed class Statement(IntPtr handle) : IDisposable
     {
         internal void Bind(int slot, long value) => Check(Native.sqlite3_bind_int64(handle, slot, value));
+        internal void BindNull(int slot) => Check(Native.sqlite3_bind_null(handle, slot));
         internal void Bind(int slot, string value) => Check(Native.sqlite3_bind_text(handle, slot, value, -1, new IntPtr(-1)));
         internal long Number(int column) => Native.sqlite3_column_int64(handle, column);
         internal string Text(int column) => Marshal.PtrToStringUTF8(Native.sqlite3_column_text(handle, column)) ?? "";
@@ -77,6 +88,8 @@ internal sealed class CostIndexDatabase : IDisposable
         internal static extern int sqlite3_finalize(IntPtr statement);
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
         internal static extern int sqlite3_bind_int64(IntPtr statement, int index, long value);
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int sqlite3_bind_null(IntPtr statement, int index);
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
         internal static extern int sqlite3_bind_text(IntPtr statement, int index, [MarshalAs(UnmanagedType.LPUTF8Str)] string value, int bytes, IntPtr destructor);
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]

@@ -7,8 +7,9 @@ internal readonly record struct IndexedDay(int Day, string Model, int Band, Cost
 
 internal sealed class CostIndex(CostIndexDatabase database) : IDisposable
 {
-    // The cursor, canonical usage rows and their aggregate changes commit together. Rotation
-    // retains observations already recorded, including observations of files that disappear.
+    internal const int SchemaVersion = 2;
+
+    // The cursor, canonical usage rows and their aggregate changes commit together.
     internal const string Schema = """
         BEGIN IMMEDIATE;
         CREATE TABLE IF NOT EXISTS settings(id INTEGER PRIMARY KEY, zone TEXT NOT NULL);
@@ -24,8 +25,11 @@ internal sealed class CostIndex(CostIndexDatabase database) : IDisposable
             provider INTEGER, key1 INTEGER, key2 INTEGER, path1 INTEGER, path2 INTEGER,
             rank INTEGER, incomplete INTEGER, day INTEGER, model TEXT, band INTEGER,
             input INTEGER, output INTEGER, read INTEGER, written INTEGER, one_hour INTEGER, reasoning INTEGER,
+            utc_seconds INTEGER NOT NULL, offset_generation INTEGER,
             PRIMARY KEY(provider,key1,key2)
         ) WITHOUT ROWID;
+        CREATE INDEX usage_by_generation ON usage(provider,path1,path2,offset_generation)
+            WHERE offset_generation IS NOT NULL;
         CREATE TABLE IF NOT EXISTS days(
             provider INTEGER, day INTEGER, model TEXT, band INTEGER, count INTEGER,
             input INTEGER, output INTEGER, read INTEGER, written INTEGER, one_hour INTEGER, reasoning INTEGER,
@@ -38,24 +42,96 @@ internal sealed class CostIndex(CostIndexDatabase database) : IDisposable
                 count=count+1,input=input+new.input,output=output+new.output,read=read+new.read,
                 written=written+new.written,one_hour=one_hour+new.one_hour,reasoning=reasoning+new.reasoning;
         END;
-        CREATE TRIGGER IF NOT EXISTS usage_remove BEFORE UPDATE ON usage WHEN old.incomplete=0 BEGIN
+        CREATE TRIGGER usage_delete AFTER DELETE ON usage WHEN old.incomplete=0 BEGIN
+            UPDATE days SET count=count-1,input=input-old.input,output=output-old.output,read=read-old.read,
+                written=written-old.written,one_hour=one_hour-old.one_hour,reasoning=reasoning-old.reasoning
+            WHERE provider=old.provider AND day=old.day AND model=old.model AND band=old.band;
+            DELETE FROM days
+            WHERE provider=old.provider AND day=old.day AND model=old.model AND band=old.band AND count=0;
+        END;
+        CREATE TRIGGER IF NOT EXISTS usage_remove BEFORE UPDATE OF incomplete ON usage WHEN old.incomplete=0 BEGIN
             UPDATE days SET count=count-1,input=input-old.input,output=output-old.output,read=read-old.read,
                 written=written-old.written,one_hour=one_hour-old.one_hour,reasoning=reasoning-old.reasoning
             WHERE provider=old.provider AND day=old.day AND model=old.model AND band=old.band;
         END;
-        CREATE TRIGGER IF NOT EXISTS usage_replace AFTER UPDATE ON usage WHEN new.incomplete=0 BEGIN
+        CREATE TRIGGER IF NOT EXISTS usage_replace AFTER UPDATE OF incomplete ON usage WHEN new.incomplete=0 BEGIN
             INSERT INTO days VALUES (new.provider,new.day,new.model,new.band,1,
                 new.input,new.output,new.read,new.written,new.one_hour,new.reasoning)
             ON CONFLICT(provider,day,model,band) DO UPDATE SET
                 count=count+1,input=input+new.input,output=output+new.output,read=read+new.read,
                 written=written+new.written,one_hour=one_hour+new.one_hour,reasoning=reasoning+new.reasoning;
         END;
-        PRAGMA user_version=1;
+        PRAGMA user_version=2;
         COMMIT;
         """;
 
     private CostIndexDatabase.Statement? _save;
     private CostIndexDatabase.Statement? _add;
+    private CostIndexDatabase.Statement? _remove;
+
+    internal static long ReadVersion(CostIndexDatabase database)
+    {
+        using var row = database.Prepare("PRAGMA user_version");
+        return row.Step() ? row.Number(0) : 0;
+    }
+
+    internal string ReadZone()
+    {
+        using var row = database.Prepare("SELECT zone FROM settings WHERE id=1");
+        return row.Step() ? row.Text(0) : "";
+    }
+
+    internal void SetZone(TimeZoneInfo zone, CancellationToken token)
+    {
+        var previous = ReadZone();
+        if (previous == zone.Id) return;
+        if (previous.Length > 0)
+        {
+            database.Execute("CREATE TEMP TABLE local_days(utc_seconds INTEGER PRIMARY KEY, day INTEGER NOT NULL)");
+            using (var times = database.Prepare("SELECT DISTINCT utc_seconds FROM usage"))
+            using (var map = database.Prepare("INSERT INTO local_days VALUES (?,?)"))
+            {
+                while (times.Step())
+                {
+                    token.ThrowIfCancellationRequested();
+                    var seconds = times.Number(0);
+                    map.Bind(1, seconds);
+                    map.Bind(2, LocalDay(DateTimeOffset.FromUnixTimeSeconds(seconds), zone).DayNumber);
+                    map.Write();
+                }
+            }
+
+            // Day-only updates bypass the upsert triggers. Rebuild the aggregates in one pass.
+            database.Execute("""
+                UPDATE usage SET day=(SELECT day FROM local_days WHERE local_days.utc_seconds=usage.utc_seconds);
+                DROP TABLE local_days;
+                DELETE FROM days;
+                INSERT INTO days
+                SELECT provider,day,model,band,COUNT(*),SUM(input),SUM(output),SUM(read),
+                    SUM(written),SUM(one_hour),SUM(reasoning)
+                FROM usage WHERE incomplete=0 GROUP BY provider,day,model,band;
+                """);
+        }
+        token.ThrowIfCancellationRequested();
+        using var update = database.Prepare("INSERT OR REPLACE INTO settings VALUES (1, ?)");
+        update.Bind(1, zone.Id);
+        update.Write();
+    }
+
+    internal static DateOnly LocalDay(DateTimeOffset time, TimeZoneInfo zone) =>
+        DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(time, zone).DateTime);
+
+    internal void RemoveOffsetUsage(CostProvider provider, CostKey path, long generation)
+    {
+        var row = _remove ??= database.Prepare("""
+            DELETE FROM usage WHERE provider=? AND path1=? AND path2=? AND offset_generation=?
+            """);
+        row.Bind(1, (int)provider);
+        row.Bind(2, path.First);
+        row.Bind(3, path.Second);
+        row.Bind(4, generation);
+        row.Write();
+    }
 
     internal Dictionary<(CostProvider, CostKey), IndexedFile> ReadFiles()
     {
@@ -109,23 +185,26 @@ internal sealed class CostIndex(CostIndexDatabase database) : IDisposable
         row.Write();
     }
 
-    internal void Add(CostProvider provider, CostKey path, CostKey key, DateOnly day, CostEvent evt)
+    internal void Add(CostProvider provider, CostKey path, long generation, long offset, DateOnly day, CostEvent evt)
     {
         var row = _add ??= database.Prepare("""
-            INSERT INTO usage VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            INSERT INTO usage VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(provider,key1,key2) DO UPDATE SET
                 path1=excluded.path1,path2=excluded.path2,rank=excluded.rank,incomplete=excluded.incomplete,
                 day=excluded.day,model=excluded.model,band=excluded.band,input=excluded.input,output=excluded.output,
-                read=excluded.read,written=excluded.written,one_hour=excluded.one_hour,reasoning=excluded.reasoning
+                read=excluded.read,written=excluded.written,one_hour=excluded.one_hour,reasoning=excluded.reasoning,
+                utc_seconds=excluded.utc_seconds,offset_generation=excluded.offset_generation
             WHERE excluded.provider=0 AND (
                 (excluded.path1=usage.path1 AND excluded.path2=usage.path2 AND excluded.incomplete<=usage.incomplete)
                 OR excluded.rank>usage.rank
                 OR (excluded.rank=usage.rank AND (excluded.path1,excluded.path2)<(usage.path1,usage.path2)))
             """);
         var count = evt.Tokens;
+        var seconds = evt.Time.ToUnixTimeSeconds();
+        var key = evt.Key == default ? path.Combine(new(generation, offset)) : evt.Key;
         var band = (count.Input + count.Read + count.Write > 200_000 ? 1 : 0) |
                    (count.Input + count.Read + count.Write > 272_000 ? 2 : 0) |
-                   (CostPricing.Historical(evt.Model, evt.Time.ToUnixTimeSeconds()) ? 4 : 0) | (evt.Tier << 3);
+                   (CostPricing.Historical(evt.Model, seconds) ? 4 : 0) | (evt.Tier << 3);
 
         row.Bind(1, (int)provider);
         row.Bind(2, key.First);
@@ -143,6 +222,9 @@ internal sealed class CostIndex(CostIndexDatabase database) : IDisposable
         row.Bind(14, count.Write);
         row.Bind(15, count.OneHour);
         row.Bind(16, count.Reasoning);
+        row.Bind(17, seconds);
+        if (evt.Key == default) row.Bind(18, generation);
+        else row.BindNull(18);
         row.Write();
     }
 
@@ -170,5 +252,6 @@ internal sealed class CostIndex(CostIndexDatabase database) : IDisposable
     {
         _save?.Dispose();
         _add?.Dispose();
+        _remove?.Dispose();
     }
 }
