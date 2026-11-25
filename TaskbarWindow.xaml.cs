@@ -10,6 +10,8 @@ using Microsoft.UI;
 using Microsoft.UI.Composition.SystemBackdrops;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Automation.Peers;
+using Microsoft.UI.Xaml.Automation.Provider;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Windows.Graphics;
@@ -53,6 +55,40 @@ public sealed class TaskbarItem : InPlaceRow
     public string ToolTip { get; set; } = string.Empty;
     /// <summary>Width of the number column: always enough for "100%", so the strip never resizes with the digits.</summary>
     public GridLength NumberColumn { get; set; }
+}
+
+/// <summary>
+/// Root grid of <see cref="TaskbarWindow"/> exposing UI Automation <see cref="IInvokeProvider"/>
+/// so UI automation callers can toggle the flyout directly.
+/// </summary>
+public sealed class TaskbarStripGrid : Microsoft.UI.Xaml.Controls.Grid
+{
+    public event EventHandler? AutomationInvoked;
+
+    protected override AutomationPeer OnCreateAutomationPeer() => new TaskbarStripAutomationPeer(this);
+
+    private sealed class TaskbarStripAutomationPeer(TaskbarStripGrid owner)
+        : FrameworkElementAutomationPeer(owner), IInvokeProvider
+    {
+        protected override AutomationControlType GetAutomationControlTypeCore() => AutomationControlType.Button;
+
+        protected override object? GetPatternCore(PatternInterface patternInterface)
+            => patternInterface == PatternInterface.Invoke ? this : base.GetPatternCore(patternInterface);
+
+        public void Invoke()
+        {
+            try
+            {
+                if (Owner is TaskbarStripGrid grid)
+                {
+                    grid.AutomationInvoked?.Invoke(grid, EventArgs.Empty);
+                }
+            }
+            catch
+            {
+            }
+        }
+    }
 }
 
 /// <summary>
@@ -145,6 +181,7 @@ public sealed partial class TaskbarWindow : Window
 
         _viewModel.Providers.CollectionChanged += OnProvidersChanged;
         RootGrid.ActualThemeChanged += (_, _) => Rebuild();
+        RootGrid.AutomationInvoked += OnStripAutomationInvoked;
         _sessionState.Locked += OnSessionLocked;
         _sessionState.Unlocked += OnSessionUnlocked;
         _sessionState.Resumed += OnSessionUnlocked;
@@ -714,6 +751,18 @@ public sealed partial class TaskbarWindow : Window
         }
     }
 
+    private void OnStripAutomationInvoked(object? sender, EventArgs e)
+    {
+        try
+        {
+            if (_closed) return;
+            OpenDetailsRequested?.Invoke(this, EventArgs.Empty);
+        }
+        catch
+        {
+        }
+    }
+
     private void OnOpenDetailsClick(object sender, RoutedEventArgs e)
     {
         OpenDetailsRequested?.Invoke(this, EventArgs.Empty);
@@ -743,6 +792,7 @@ public sealed partial class TaskbarWindow : Window
         _foregroundWatcher = null;
         _taskbarChangeWatcher?.Dispose();
         _taskbarChangeWatcher = null;
+        RootGrid.AutomationInvoked -= OnStripAutomationInvoked;
         _viewModel.Providers.CollectionChanged -= OnProvidersChanged;
         _acrylicController?.Dispose();
         _acrylicController = null;

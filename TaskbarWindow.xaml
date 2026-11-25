@@ -11,8 +11,9 @@
 
     <!-- Flush with the taskbar: full taskbar height, square corners, no border.
          Spacing (DIP): 18 side padding, 24 between providers, 10 icon to bars, 8 bar to number, bars close together -->
-    <Grid
+    <local:TaskbarStripGrid
         x:Name="RootGrid"
+        AutomationProperties.Name="CodexBarWin taskbar strip"
         Padding="18,0"
         Background="Transparent"
         PointerPressed="OnPointerPressed">
@@ -131,5 +132,5 @@
                 </DataTemplate>
             </ItemsControl.ItemTemplate>
         </ItemsControl>
-    </Grid>
+    </local:TaskbarStripGrid>
 </Window>
