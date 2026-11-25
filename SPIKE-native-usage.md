@@ -12,11 +12,14 @@ Date: 2026-11-25 (all times UTC). Branch: `perf/native-usage`. Status: spike onl
   18 MB private bytes, of which about 27 MB / 8 MB is the bare .NET runtime before any call. For comparison, the owner
   measured the current WSL route at 1.4 to 1.7 GB of RAM for about 40 s per refresh (owner's figure, not re-measured
   in this spike).
-- Parity against the app's cache.json: Codex and Antigravity match within the tolerances. The Windows Claude
-  sign-in is a different account from the WSL one, so Claude numbers cannot be compared (see Parity).
+- Parity against the app's cache.json: Codex and Antigravity match within the tolerances. Claude did not match in the
+  spike because the spike agent's launcher set `CLAUDE_CONFIG_DIR` to another seat's sign-in; a rerun from a normal
+  environment at 07:35Z matched (see "Correction" under Parity).
 - The decision the owner has to make: Antigravity access tokens last about one hour and are only renewed while agy
   runs. Without a refresh, the native Gemini row will often say "sign-in expired". An in-memory refresh path is built
   and tested with synthetic fixtures, but is off by default and was never run against a real token or endpoint.
+  After the council review the owner decided to remove it (25 Nov); it is kept on branch
+  `perf/antigravity-refresh-optin`.
 - One budget rule was broken: the second Claude call came about 90 s after the first, not 2 minutes (details under
   Live call log). It returned 200; no 429 was seen.
 
@@ -156,6 +159,23 @@ Cache readings were 2.4 to 3.1 minutes old at comparison time (`fetchedAt`), tak
 | | | weekly | 34%, resets 2026-11-30 13:00:00 | 68%, resets 2026-11-26 12:00:00 | Not comparable |
 | | | labels | Session, Weekly, plan "Claude Team" | Session, Weekly, "Fable" extra, plan "Claude Team" | Window kinds match; the Windows account returned no scoped weekly limit |
 
+**Correction (added 25 Nov, after the spike).** The Claude mismatch above is not a different Windows account. The
+spike agent ran under a launcher that sets `CLAUDE_CONFIG_DIR` to another Claude seat, and `ClaudeNativeClient`
+honored it, so the probe read that seat's sign-in. Neither `CLAUDE_CONFIG_DIR` nor `CODEX_HOME` is set at user or
+machine level on this laptop. A rerun from a normal environment (NativeProbe `single`, 07:35:07Z, one Claude call,
+HTTP 200, 953 ms wall, 422 ms CPU cold) read the default profile and matched the app's reading:
+
+| Window | Native (07:35) | cache.json | Result |
+|---|---|---|---|
+| session | 18% | 16% (reading 11 minutes older, during active use) | OK within the gap |
+| weekly | 68% | 68% | OK |
+| Fable-only weekly (scoped) | 8% | 8% | OK: the scoped window, verified live |
+| resets | equal | equal | OK |
+
+This is one pair, taken 11 minutes apart. The owner decided (25 Nov) that the native clients ignore
+`CLAUDE_CONFIG_DIR` and `CODEX_HOME` unless an app setting names another path; that change is on branch
+`perf/native-fixes-usage`.
+
 An earlier single-provider run (07:24) compared against a 4.7-minute-old cache gave Codex session 10% vs 6%; the
 fresher cache above agrees. The `source` label also differs (native "oauth"/"remote" vs CLI "oauth"/"codex-cli"/
 "cli"); the app only shows it as text on the detail page.
@@ -218,6 +238,7 @@ per-host caps).
 | 07:25:22 | all, cold | 1 (200) | 1 (200) | 2 (200, 200) |
 | about 07:27:35 | all, warm | 1 (200) | 1 (200) | 2 (200, 200) |
 | Total | | 3 of 3 | 3 of 3 | 8 of 8 |
+| 07:35:07 | parity rerun by the reviewing session, after the spike (not part of the spike's budget) | 1 (200) | | |
 
 Budget breach: Claude calls 1 and 2 were about 90 s apart (07:23:52 and 07:25:22), not the required 2 minutes. I
 misjudged the elapsed time instead of checking the clock before starting the parallel run. Calls 2 and 3 were 133 s
@@ -243,19 +264,19 @@ the app's existing `UsageDataDto.ToUsageData`.
   `CodexBar`, Antigravity gets `antigravity/hub/2.9.1 linux/amd64` from a Windows process. All accepted today;
   any of them could be rejected later.
 - Rate limits. Anthropic rate limits the Claude usage endpoint (that is why the shim exists). Today 3 calls in about
-  4 minutes got no 429, which says little about the 5-minute steady state. The running app also calls it (via WSL,
-  with a different account), so the two do not share a per-token limit, but a per-IP limit is unknown. Codex and
-  Cloud Code limits were not hit and are unknown.
+  4 minutes got no 429, which says little about the 5-minute steady state. In normal use the native reader and the
+  running app read the same account (see the Correction under Parity), so two pollers would share whatever limit
+  applies; the rollout uses one app reading both sources instead. Codex and Cloud Code limits were not hit and are
+  unknown.
 - Token lifetimes without refresh: Claude at least 6 hours (350 minutes were left at 06:59; issue time unknown),
   Codex about 10 days (inferred from `exp` and `last_refresh`), Antigravity about 1 hour (the token agy wrote at
   07:14:46 had about 50 minutes left at 07:25). With refresh off,
   each provider shows "sign-in expired" until its own app next runs on Windows: rarely for Codex, sometimes for
   Claude, often for Antigravity (it had expired at 06:59 today).
-- The Windows Claude sign-in is a different account from the one the app shows today (WSL). Switching to native
-  reads changes whose Claude usage the app displays unless the owner signs Claude Code for Windows into the same
-  account.
-- The Claude scoped weekly window ("Fable only") and Daily Routines were verified with synthetic data only; the
-  Windows account returned neither. Codex extra limits (Spark) likewise: none were returned live.
+- (Corrected 25 Nov.) The spike reported the Windows Claude sign-in as a different account; it was the other seat
+  selected by `CLAUDE_CONFIG_DIR`. The default Windows profile is the account the app shows today.
+- The Claude scoped weekly window ("Fable only") was verified live in the 07:35Z rerun (8% vs 8%). Daily Routines
+  were verified with synthetic data only. Codex extra limits (Spark) likewise: none were returned live.
 - Antigravity fallback (`fetchAvailableModels`) is simplified (most used Gemini model as primary, most used
   Claude/GPT model as secondary) and refuses the all-100% placeholder instead of verifying it with
   `retrieveUserQuota`. Not exercised live.

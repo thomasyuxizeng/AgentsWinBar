@@ -1,21 +1,25 @@
 """Split the WSL VM's memory during CodexBarWin refreshes between page cache, process memory and the rest.
 
-Inputs (all in this folder): vmmon.mem.csv, vmmon.procs.csv (guest, from vm-monitor.sh) and warm-vm.csv (host).
+Usage: python analyse_vm.py [DIR] [PREFIX] [HOST_CSV]  (defaults: this folder, vmmon, warm-vm.csv)
+Inputs: <PREFIX>.mem.csv, <PREFIX>.procs.csv (guest, from vm-monitor.sh) and HOST_CSV (host, optional).
 Prints: guest memory over time at key moments, the processes that appeared during refreshes with their peak RSS
 and CPU, and the host's vmmemWSL working set at the same moments.
 """
 import csv, sys, os, collections, datetime
 
-here = os.path.dirname(os.path.abspath(__file__))
-mem = [r for r in csv.DictReader(open(os.path.join(here, 'vmmon.mem.csv'))) if not r['t'].startswith('hz=')]
+here = sys.argv[1] if len(sys.argv) > 1 else os.path.dirname(os.path.abspath(__file__))
+prefix = sys.argv[2] if len(sys.argv) > 2 else 'vmmon'
+host_csv = sys.argv[3] if len(sys.argv) > 3 else 'warm-vm.csv'
+mem = [r for r in csv.DictReader(open(os.path.join(here, prefix + '.mem.csv'))) if not r['t'].startswith('hz=')]
 procs = []
-for r in csv.DictReader(open(os.path.join(here, 'vmmon.procs.csv'))):
+for r in csv.DictReader(open(os.path.join(here, prefix + '.procs.csv'))):
     try:
         float(r['t']); int(r['pid']); int(r['rss_kb']); int(r['cpu_ticks']); int(r['child_cpu_ticks'])
     except (ValueError, TypeError):
         continue
     procs.append(r)
-host = [r for r in csv.DictReader(open(os.path.join(here, 'warm-vm.csv'))) if r['proc'].startswith('vmmem')]
+host_path = os.path.join(here, host_csv)
+host = [r for r in csv.DictReader(open(host_path)) if r['proc'].startswith('vmmem')] if os.path.exists(host_path) else []
 
 def ts(x): return float(x)
 def local(t): return datetime.datetime.fromtimestamp(t).strftime('%H:%M:%S')

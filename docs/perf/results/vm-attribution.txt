@@ -1,3 +1,6 @@
+# FIRST guest capture, 25 Nov 16:02-16:14 local time. Its CPU columns are INVALID (0.00 everywhere): vm-monitor.sh read
+# the wrong /proc/stat fields (bash $12 = ${1}2), fixed before the second capture (vm-attribution-run2.txt). Memory columns are valid.
+
 guest samples 1190 from 16:02:28 to 16:14:27
 
 Guest memory (MB): used = total - free; cached = page cache; anon = process heap/stack

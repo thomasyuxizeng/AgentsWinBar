@@ -18,6 +18,12 @@ Raw CSVs are kept outside the repo (session scratchpad, `perf\`).
 | 15:53:35 | 33 s | 1,466 MB | 1,470 MB |
 | 15:58:43 | 34 s | 1,326 MB | 1,330 MB |
 
+The 15:53 and 15:58 rows are in `results/cold-baseline-summary.txt`. The 15:28 and 15:34 rows come from an earlier
+run whose CSV was not kept, so they cannot be re-derived; treat them as unrecorded. The guest's own figures (section
+2) do not add up to the host's: 315 + 650 + 206 = 1,171 MB inside against 1,326-1,657 MB on the host, and the
+idle booted VM shows about 495-516 MB on the host against 313-336 MB used inside, so roughly 180 MB is host-side
+VM overhead not attributed to anything in the guest.
+
 The VM climbs from 88 MB to 1,233-1,550 MB within 6 s of starting. Windows reports vmmemWSL CPU time as 0, so VM CPU
 was measured from inside the guest (section 3).
 
@@ -48,15 +54,25 @@ refresh loads them again from the virtual disk.
 - App process (host, cold-boot runs 15:53 and 15:58): 2.50 s and 2.73 s of CPU in the window around each refresh;
   42 CPU-s per hour in total, 16 CPU-s per hour between refreshes. (The later warm-VM run's app numbers are
   inflated by an attached trace and are not used.)
-- Guest, refresh at 16:19:21-16:19:29 (warm cache): the batch shells' reaped-children CPU reached 3.55 s for one
-  provider branch; per program: CodexBarCLI 1.07 s (Codex) and 1.79 s (Antigravity), `codex` 0.85 s + 0.25 s,
-  `agy -p` 0.65 s, `node` 0.25 s. Lower bound for the whole refresh inside the VM: about 4 CPU-s.
-- Guest boot: 1.47 CPU-s used by the time the probe's first sample ran.
-- Caveat: the guest probe forks several tools per process per sample, so whole-VM CPU totals are dominated by the
-  probe itself and are not used. A 130 s burst at 16:18-16:20 included the spike agents' unit tests, which run
-  WSL batch tests (`yes runaway`, `startup noise`); it is excluded.
-- Estimate per refresh, cold path: about 2.5 (app) + 4 (guest programs) + 1.5 (boot) = **about 8 CPU-s**, so about
-  **95 CPU-s per hour** at the 5-minute cadence, before Hyper-V overhead on the host.
+- Guest, one refresh at 16:19:21-16:19:29 (warm page cache; `results/vm-attribution-run2.txt`, from the second,
+  fixed capture). The refresh is one batch shell (pid 9142) with a Codex branch (pid 9152) and a Gemini branch
+  (pid 9154). CPU counted as reaped-children time, which includes every finished descendant: Codex branch 2.79 s
+  (reaped by 9142 when it ended at 16:19:26), Gemini branch 3.55 s (reaped by 9154). **About 6.3 CPU-s for the
+  refresh inside the VM**, not the "about 4" lower bound an earlier version of this file gave (it counted one
+  branch). Per program, from the 0.5 s samples (short-lived processes are under-counted there): Codex CodexBarCLI
+  0.54 s, `codex` app server 1.11 s, `node`/`codex --version` 0.25 s each; Gemini `agy --version` 0.69 s and
+  0.16 s, `agy -p /usage` 1.47 s, CodexBarCLI 0.16 s.
+- That is one sample (n = 1). The spike agents' unit tests started their own WSL batches from 16:19:27 (`startup
+  noise`, `yes runaway`). They are separate process trees (other session leaders), so they are not inside the
+  totals above, but they may have competed for the VM's CPUs during the last two seconds.
+- `results/vm-attribution.txt` is the first capture; its CPU columns are invalid (the `$12` bug) and only its memory
+  columns are used.
+- Guest boot: 1.47 CPU-s used by the time the probe's first sample ran (one boot).
+- Whole-VM CPU totals are not used: the probe forks several tools per process per sample and dominates them.
+- Estimate per refresh, cold path: about 2.5 (app) + 6.3 (guest programs) + 1.5 (boot) = **about 10 CPU-s**, so
+  about **120 CPU-s per hour** at the 5-minute cadence, before Hyper-V overhead on the host. These three parts come
+  from three separate runs; the total was never measured end to end. A clean rerun (10 or more cold refreshes with
+  nothing else using WSL, plus a system-wide counter) is planned before the post-change comparison.
 
 ## 4. The app process itself
 
