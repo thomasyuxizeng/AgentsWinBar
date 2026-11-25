@@ -7,11 +7,18 @@ using Microsoft.Extensions.Logging;
 namespace CodexBarWin.Services.Native;
 
 /// <summary>The fields of Claude Code's OAuth sign-in this reader uses. The access token never leaves this process.</summary>
-public sealed record ClaudeCredentials(string AccessToken, DateTimeOffset? ExpiresAt, string? SubscriptionType, string? RateLimitTier);
+public sealed record ClaudeCredentials(string AccessToken, DateTimeOffset? ExpiresAt, string? SubscriptionType, string? RateLimitTier)
+{
+    /// <summary>The generated ToString would print <see cref="AccessToken"/>; this one never prints a token value.</summary>
+    public override string ToString() => $"ClaudeCredentials {{ ExpiresAt = {ExpiresAt:o}, SubscriptionType = {SubscriptionType} }}";
+}
 
 public sealed record ClaudeNativeOptions
 {
-    /// <summary>Defaults to %CLAUDE_CONFIG_DIR%\.credentials.json, else %USERPROFILE%\.claude\.credentials.json.</summary>
+    /// <summary>
+    /// Defaults to %USERPROFILE%\.claude\.credentials.json: the default profile only, CLAUDE_CONFIG_DIR is not honored.
+    /// A path set here always wins.
+    /// </summary>
     public string? CredentialsPath { get; init; }
     /// <summary>Sent as "claude-code/&lt;version&gt;". Upstream detects it by running claude; we never run it.</summary>
     public string ClaudeCodeVersion { get; init; } = "2.1.0";
@@ -28,8 +35,6 @@ public sealed record ClaudeNativeOptions
     public string ResolveCredentialsPath()
     {
         if (!string.IsNullOrWhiteSpace(CredentialsPath)) return CredentialsPath;
-        var configDir = Environment.GetEnvironmentVariable("CLAUDE_CONFIG_DIR");
-        if (!string.IsNullOrWhiteSpace(configDir)) return Path.Combine(configDir, ".credentials.json");
         return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude", ".credentials.json");
     }
 }
@@ -77,7 +82,7 @@ public sealed class ClaudeNativeClient : INativeUsageClient
 
         // 1. Fresh cache: answer immediately (the shim's 10-minute cache), unless a window has reset since.
         if (_options.UseFreshCache && lastGood?.UpdatedAt is { } updated && now - updated < _options.CacheLifetime &&
-            !HasPastReset(lastGood, now))
+            !NativeLastGood.HasPastReset(lastGood, now))
             return lastGood with { Cached = true, CacheUpdatedAt = updated, NetworkCalls = 0 };
 
         // 2. 429 cooldown: never call; serve the last good reading if any.
@@ -298,27 +303,13 @@ public sealed class ClaudeNativeClient : INativeUsageClient
     private static string ResetDescription(DateTimeOffset resetsAt, TimeZoneInfo zone) =>
         TimeZoneInfo.ConvertTime(resetsAt, zone).ToString("MMM d 'at' h:mmtt", CultureInfo.InvariantCulture);
 
-    private static bool HasPastReset(NativeUsageResult result, DateTimeOffset now) =>
-        new[] { result.Primary, result.Secondary, result.Tertiary }.Concat(result.ExtraWindows.Select(e => e.Window))
-            .Any(w => w?.ResetsAt is { } r && r <= now);
-
     private static NativeUsageResult Fail(NativeUsageStatus status, int? http, string message) =>
         new() { Provider = "claude", Source = "oauth", Status = status, HttpStatus = http, Message = message };
 
     /// <summary>
-    /// Like the shim: when a last good reading exists, show it (marked cached) and keep the failure's status and
-    /// message so the app can flag a sign-in problem; otherwise return the failure alone.
+    /// Like the shim: when a last good reading exists, show it (marked cached, windows that have reset since cleared)
+    /// and keep the failure's status and message so the app can flag a sign-in problem; otherwise return the failure alone.
     /// </summary>
-    private static NativeUsageResult FromCacheOr(NativeUsageResult? lastGood, NativeUsageResult failure) =>
-        lastGood == null ? failure : lastGood with
-        {
-            Status = failure.Status,
-            Message = failure.Message,
-            HttpStatus = failure.HttpStatus,
-            ExpiredFor = failure.ExpiredFor,
-            RetryAfter = failure.RetryAfter,
-            NetworkCalls = failure.NetworkCalls,
-            Cached = true,
-            CacheUpdatedAt = lastGood.UpdatedAt
-        };
+    private NativeUsageResult FromCacheOr(NativeUsageResult? lastGood, NativeUsageResult failure) =>
+        NativeLastGood.FromCacheOr(lastGood, failure, _clock.GetUtcNow());
 }

@@ -6,14 +6,21 @@ using Microsoft.Extensions.Logging;
 namespace CodexBarWin.Services.Native;
 
 /// <summary>The fields of the Codex CLI's auth.json this reader uses. The access token never leaves this process.</summary>
-public sealed record CodexCredentials(string AccessToken, string? AccountId, DateTimeOffset? ExpiresAt, DateTimeOffset? LastRefresh);
+public sealed record CodexCredentials(string AccessToken, string? AccountId, DateTimeOffset? ExpiresAt, DateTimeOffset? LastRefresh)
+{
+    /// <summary>The generated ToString would print <see cref="AccessToken"/>; this one prints no token or account value.</summary>
+    public override string ToString() => $"CodexCredentials {{ ExpiresAt = {ExpiresAt:o}, LastRefresh = {LastRefresh:o} }}";
+}
 
 /// <summary>What auth.json holds: a ChatGPT sign-in, only an API key, or nothing usable.</summary>
 public enum CodexCredentialKind { Missing, ApiKeyOnly, ChatGpt }
 
 public sealed record CodexNativeOptions
 {
-    /// <summary>Defaults to %CODEX_HOME%\auth.json, else %USERPROFILE%\.codex\auth.json.</summary>
+    /// <summary>
+    /// Defaults to %USERPROFILE%\.codex\auth.json: the default profile only, CODEX_HOME is not honored.
+    /// A path set here always wins.
+    /// </summary>
     public string? AuthPath { get; init; }
     public TimeSpan RequestTimeout { get; init; } = TimeSpan.FromSeconds(30);
     /// <summary>Upstream identifies itself as "CodexBar"; kept for parity with the working WSL route.</summary>
@@ -22,8 +29,6 @@ public sealed record CodexNativeOptions
     public string ResolveAuthPath()
     {
         if (!string.IsNullOrWhiteSpace(AuthPath)) return AuthPath;
-        var home = Environment.GetEnvironmentVariable("CODEX_HOME");
-        if (!string.IsNullOrWhiteSpace(home)) return Path.Combine(home, "auth.json");
         return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".codex", "auth.json");
     }
 }
@@ -31,7 +36,8 @@ public sealed record CodexNativeOptions
 /// <summary>
 /// Reads Codex plan usage from ChatGPT's wham/usage endpoint with the Windows Codex CLI sign-in, read-only.
 /// Port of upstream CodexBar's CodexOAuthUsageFetcher (usage call only) and its window normalizer.
-/// Never refreshes or writes the token: an expired token yields <see cref="NativeUsageStatus.SignInExpired"/>.
+/// Never refreshes or writes the token: an expired token yields <see cref="NativeUsageStatus.SignInExpired"/>. An
+/// expired sign-in and transient failures (network, timeout, 5xx, 429) serve the last good reading as cached.
 /// </summary>
 public sealed class CodexNativeClient : INativeUsageClient
 {
@@ -41,6 +47,7 @@ public sealed class CodexNativeClient : INativeUsageClient
     private readonly ILogger<CodexNativeClient> _logger;
     private readonly CodexNativeOptions _options;
     private readonly TimeProvider _clock;
+    private readonly NativeLastGoodStore _lastGood = new();
 
     public CodexNativeClient(HttpClient http, ILogger<CodexNativeClient> logger, CodexNativeOptions? options = null, TimeProvider? clock = null)
     {
@@ -53,7 +60,10 @@ public sealed class CodexNativeClient : INativeUsageClient
 
     public string ProviderId { get; }
 
-    public async Task<NativeUsageResult> FetchAsync(CancellationToken ct = default)
+    public async Task<NativeUsageResult> FetchAsync(CancellationToken ct = default) =>
+        _lastGood.Apply(await FetchCoreAsync(ct).ConfigureAwait(false), _clock.GetUtcNow());
+
+    private async Task<NativeUsageResult> FetchCoreAsync(CancellationToken ct)
     {
         var now = _clock.GetUtcNow();
         (CodexCredentialKind Kind, CodexCredentials? Credentials) read;

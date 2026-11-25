@@ -10,7 +10,6 @@ using Microsoft.Extensions.Logging;
 // or credential blobs: only a SHA-256 prefix of the Antigravity blob, and only key facts (expiry deltas).
 //
 //   NativeProbe hash                         SHA-256 prefix and expiry state of the Antigravity credential (no network)
-//   NativeProbe discover                     find the Antigravity OAuth client in the installed binaries (no network)
 //   NativeProbe single <claude|codex|gemini> [--warm-after <s>]   one provider, cold call (and optional warm call)
 //   NativeProbe all [--warm-after <s>]       one refresh = the three providers in parallel, cold (and optional warm)
 //   NativeProbe replay [--rounds <n>]        parse/map cost with synthetic responses and sign-ins (no network)
@@ -25,11 +24,10 @@ PrintMemory("baseline (before any call)");
 switch (mode)
 {
     case "hash": Hash(); break;
-    case "discover": Discover(); break;
     case "single": await Single(args.ElementAtOrDefault(1) ?? throw new ArgumentException("provider required")); break;
     case "all": await All(); break;
     case "replay": await Replay(int.Parse(Arg("--rounds") ?? "5", CultureInfo.InvariantCulture)); break;
-    default: Console.WriteLine("modes: hash | discover | single <provider> [--warm-after s] | all [--warm-after s] | replay [--rounds n]"); break;
+    default: Console.WriteLine("modes: hash | single <provider> [--warm-after s] | all [--warm-after s] | replay [--rounds n]"); break;
 }
 return;
 
@@ -164,19 +162,6 @@ void Hash()
     {
         var delta = expiry - DateTimeOffset.UtcNow;
         Console.WriteLine(delta > TimeSpan.Zero ? $"  access token valid for {delta.TotalMinutes:F0} more min" : $"  access token expired {-delta.TotalMinutes:F0} min ago");
-    }
-}
-
-void Discover()
-{
-    foreach (var path in AntigravityOAuthClientDiscovery.CandidatePaths())
-    {
-        if (!File.Exists(path)) continue;
-        var name = Path.GetFileName(path);
-        var client = Measure($"discover in {name} ({new FileInfo(path).Length / 1024 / 1024} MB)",
-            () => Task.FromResult(AntigravityOAuthClientDiscovery.Discover([path]))).GetAwaiter().GetResult();
-        // Only facts, never the values.
-        Console.WriteLine($"  -> {name}: client found {client != null}, consumer client {client?.IsConsumerClient == true}, secret shape valid {client?.ClientSecret.Length == 35}");
     }
 }
 
