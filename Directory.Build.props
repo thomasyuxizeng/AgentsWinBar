@@ -6,5 +6,11 @@
     <Product>CodexBarWin</Product>
     <Description>AI coding assistant usage monitor for Windows system tray</Description>
     <Copyright>Copyright (c) 2025 CodexBarWin Contributors</Copyright>
+    <!-- LibraryImport emits unsafe interop stubs for the app and the projects that link its scanner. -->
+    <AllowUnsafeBlocks Condition="'$(MSBuildProjectName)' == 'CodexBarWin' Or '$(MSBuildProjectName)' == 'CodexBarWin.Tests.Unit' Or '$(MSBuildProjectName)' == 'CostProbe'">true</AllowUnsafeBlocks>
+  </PropertyGroup>
+  <!-- The Windows SDK falls back to x86 when the MSBuild host has no PROCESSOR_ARCHITECTURE. -->
+  <PropertyGroup Condition="'$(MSBuildProjectName)' == 'CodexBarWin' And '$(MSBuildRuntimeType)' == 'Core' And '$(PROCESSOR_ARCHITECTURE)' == '' And '$(WindowsSDKBuildToolsArchFolder)' == ''">
+    <WindowsSDKBuildToolsArchFolder>$([System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture.ToString().ToLowerInvariant())</WindowsSDKBuildToolsArchFolder>
   </PropertyGroup>
 </Project>
