@@ -25,8 +25,22 @@ Every refresh (every 5 minutes) costs, on the cold path the app always takes:
 
 So about **8 CPU-s and a 1.3-1.7 GB spike per refresh**, about 95 CPU-s per hour. Between refreshes the app
 idles at ~16 CPU-s per hour and holds 176-196 MB private (133-157 MB working set). Of that, the .NET heap holds
-only 7.4 MB live in 55 MB committed; ~104 MB is native (WinUI/XAML, Direct2D, the Intel GPU driver, whose shader
-compiler alone is mapped at 83 MB).
+only 7.4 MB live in 55 MB committed (`dotnet-gcdump` plus `Get-MemoryMap.ps1`).
+
+Hypotheses, not yet shown by measurement:
+- **What the other ~104 MB of private memory is.** `Get-MemoryMap.ps1` is a new, unvalidated script; its private
+  kinds sum to about 160 of the 179 MB Windows reports. It shows `igc64.dll` (Intel's shader compiler, 83 MB
+  mapped) and Direct2D/D3D loaded in the process, which suggests GPU-rendered XAML is a large part, but the split
+  between XAML, the GPU driver and other native heaps is not measured. A VMMap or WPA heap trace would settle it.
+- **Where the app's ~2.5 CPU-s per refresh goes.** `dotnet-trace` on Windows samples thread time, which counts
+  blocked threads too. Its refresh-minus-idle difference points at recreating `ProviderCard` and `UsageMeter`
+  controls, rebuilding the taskbar strip, TLS handshakes and the history write, but none of these is a CPU
+  measurement. A before/after CPU measurement of each fix is the test.
+- **Guest CPU** (about 4 s per refresh) and **VM boot CPU** (about 1.5 s) are single samples from one refresh each.
+
+Already broken today: the app's cost ledger has no Claude day after 20 November, so the WSL Claude cost scan has not
+completed since then (cause not investigated; the 10 GB of logs is the obvious suspect). A native scanner is also a
+fix, not only a speed-up.
 
 Two different budgets, then: the **VM episode** (90% of the RAM and ~70% of the CPU) and the **resident app**.
 A UI rewrite touches only the second.
@@ -102,9 +116,23 @@ So the engine is validated on tokens; cost parity needs the full pricing port an
 
 Do **4 and 5 together** first. They remove the VM episode entirely (the 1.3-1.7 GB and roughly 5.5 of the 8 CPU-s
 per refresh), cut the app's own refresh work from ~2.5 s toward 0.1 s, and make setup a single MSIX with no WSL.
-Usage reads can ship first (they matched live); native costs ship once the pricing port reaches 1% daily parity,
-and until then costs can keep coming from WSL on a slow, visible-only schedule or simply stay at the last saved
-ledger values.
+Staging, because cost parity is not there yet:
+
+1. Usage reads go native first (they matched live). WSL is then needed only for Codex cost scans.
+2. Native costs replace WSL once the pricing port reaches 1% daily parity. Claude costs gain the most: the WSL scan
+   has recorded no Claude day since 20 November, so there is no working WSL route to keep for Claude.
+3. After that the installer stops requiring WSL.
+
+Targets against what the owner approved:
+
+- **CPU per refresh.** The usage spike measured 0.19 CPU-s per refresh warm, with new TLS connections each time
+  (servers close idle connections well before 5 minutes). So the realistic mark is **0.25 CPU-s or less per
+  refresh in total**, not the 0.05-0.1 first proposed; 0.1 needs connection reuse across refreshes, which is not
+  shown.
+- **Resident memory.** The approved criteria were 60 MB (stretch) and 90 MB (must) with the dashboard closed. Options
+  4 and 5 are expected to reach roughly 120-150 MB private (an estimate: the GC commit and JIT savings are
+  inferred, and the native ~104 MB stays). So **meeting the approved resident targets needs option 6**; that is the
+  decision this memo hands on, not a detail for later.
 Then measure the resident app again and decide on **6** with numbers: if the always-on app is still above the
 owner's comfort, move the tray, strip and overlay out of XAML and keep the dashboard as an on-demand process.
 Option 7 buys nothing over 6 and redoes the dashboard. Options 1-3 keep WSL, keep the child programs (or a VM),
@@ -134,7 +162,7 @@ and do not meet requirement 3.
 | Claude usage (session, weekly, scoped extras) | CLI in WSL, OAuth endpoint | same endpoint, Windows sign-in |
 | Codex usage | CLI in WSL, Codex app server | spike: endpoint from upstream, Windows `auth.json` |
 | Gemini usage (5-hour, weekly) and Claude/GPT-on-Antigravity extras | CLI in WSL runs `agy -p /usage`, shim reshapes | Cloud Code quota summary, Credential Manager sign-in, same reshaping |
-| Provider status and incidents | already native HTTPS (with `--status` also asked of the CLI) | native only |
+| Provider status and incidents | the app's native incident fetcher covers Claude, Codex and Gemini (`CodexBarService.StartProviderStatusPrefetches`); the CLI's `--status` is merged in as a second opinion | the native fetcher alone (`AttachProviderStatus` case 1). Lost: the CLI's status as a backup when the fetcher misses its 500 ms budget |
 | API credits | already native (`ApiBillingService`) | unchanged |
 | Gemini API spend | already native (`GeminiSpendService`) | unchanged |
 | Cost from logs | CLI in WSL over `/mnt/c` every 30 min | native incremental scanner with on-disk index |
@@ -156,13 +184,13 @@ and do not meet requirement 3.
 | Check | Tool | Pass |
 |---|---|---|
 | No VM per refresh | `Measure-Refresh.ps1`, 12 refreshes | 0 vmmemWSL episodes |
-| CPU per refresh, everything included | same | 0.1 CPU-s or less (stretch 0.05) |
+| CPU per refresh, everything included | same | 0.25 CPU-s or less (0.1 with connection reuse) |
 | Idle CPU, dashboard closed | same, 1 h | 2 CPU-s per hour or less |
-| Resident memory, dashboard closed | same, 1 h median | private 120 MB or less after 4+5; 60 MB or less if 6 is built |
+| Resident memory, dashboard closed | same, 1 h median | approved: 90 MB or less (stretch 60); expected after 4+5 alone: ~120-150 MB, so option 6 is needed to pass |
 | Usage parity | side by side, 24 h, 24+ pairs per provider | within 3 points, resets within 60 s |
 | Cost parity | completed days, last 30 | each provider's daily total within 1% |
 | Cost scan | probe | full rescan 60 s or less and 64 MB heap or less; update 100 ms CPU or less |
-| Sign-ins | Process Monitor + entry hashes over 24 h | zero writes, hashes unchanged, agy still works |
+| Sign-ins (static check done 25 Nov: `Services/Native` opens no file for writing, imports only `CredReadW`/`CredFree`, and reaches Google's token endpoint only when `AllowInMemoryRefresh` is on) | Process Monitor + entry hashes over 24 h | zero writes, hashes unchanged, agy still works |
 | Setup | fresh install in Windows Sandbox | first good reading with no WSL and no extra sign-ins |
 | Battery | SRUM energy per day vs the October baseline | 50% lower or better |
 
