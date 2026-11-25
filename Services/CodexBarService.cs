@@ -8,7 +8,9 @@ namespace CodexBarWin.Services;
 
 /// <summary>
 /// Usage readings per provider: read natively (<see cref="INativeUsageService"/>, the default) or through the
-/// codexbar CLI in WSL. Both routes produce the CLI's JSON and share one interpretation path. Cost scans use WSL.
+/// codexbar CLI in WSL. Both routes produce the CLI's JSON and share one interpretation path. Cost scans follow the
+/// cost source setting the same way: the native log scanner (<see cref="INativeCostService"/>, the default) or the
+/// CLI's cost scan in WSL.
 /// </summary>
 public class CodexBarService : ICodexBarService
 {
@@ -44,6 +46,7 @@ public class CodexBarService : ICodexBarService
     private readonly IGeminiStatusFallback? _geminiStatusFallback;
     private readonly IProviderIncidentFetcher? _incidentFetcher;
     private readonly INativeUsageService? _nativeUsage;
+    private readonly INativeCostService? _nativeCost;
     /// <summary>
     /// A prefetched provider status may take this long, counted from the moment its prefetch started. A usage read
     /// that took longer adds no extra wait.
@@ -97,9 +100,11 @@ public class CodexBarService : ICodexBarService
         ICostLedger? costLedger = null,
         IEarlyResetStore? earlyResetStore = null,
         IToastNotifier? toastNotifier = null,
-        INativeUsageService? nativeUsage = null)
+        INativeUsageService? nativeUsage = null,
+        INativeCostService? nativeCost = null)
     {
         _nativeUsage = nativeUsage;
+        _nativeCost = nativeCost;
         _history = history;
         _costStore = costStore;
         _costLedger = costLedger;
@@ -171,6 +176,9 @@ public class CodexBarService : ICodexBarService
 
     private bool CostsEnabled => _settingsService.Settings.ShowCostTotals && !_settingsService.Settings.DeveloperModeEnabled;
 
+    /// <summary>True when cost scans run in-process; they then never reach <see cref="IWslService"/>.</summary>
+    private bool UsesNativeCost => _nativeCost != null && _settingsService.Settings.UsesNativeCost();
+
     private async Task FetchCostsAsync(IReadOnlyList<string> providers, bool forceRefresh, bool useBatch,
         Action<string, CostData?> onCompleted, CancellationToken ct)
     {
@@ -217,8 +225,11 @@ public class CodexBarService : ICodexBarService
                 onCompleted(provider, published);
             }
             if (due.Count == 0) return;
-            var commands = due.Select(provider => new WslBatchCommand(
-                Helpers.CostCommandBuilder.Build(provider, _userProfile(), _directoryExists), CostTimeout(provider, now))).ToArray();
+            var nativeCost = UsesNativeCost;
+            var timeouts = due.Select(provider => CostTimeout(provider, now)).ToArray();
+            // The native scanner reads the Windows log folders itself; only the WSL route builds shell commands.
+            var commands = nativeCost ? Array.Empty<WslBatchCommand>() : due.Select((provider, index) => new WslBatchCommand(
+                Helpers.CostCommandBuilder.Build(provider, _userProfile(), _directoryExists), timeouts[index])).ToArray();
             var completed = new bool[due.Count];
             var retry = new bool[due.Count];
             var batchFailed = false;
@@ -243,7 +254,7 @@ public class CodexBarService : ICodexBarService
                             if (timedOut) _costTimedOut.Add(provider);
                             else _costTimedOut.Remove(provider);
                             _costFailures[provider] = timedOut
-                                ? FormattableString.Invariant($"Scan timed out after {commands[index].Timeout.TotalMinutes:0.##} min")
+                                ? FormattableString.Invariant($"Scan timed out after {timeouts[index].TotalMinutes:0.##} min")
                                 : "Scan failed";
                             _costStoreDirty = true;
                             data = LastGoodCost(provider, now);
@@ -281,6 +292,35 @@ public class CodexBarService : ICodexBarService
                     _logger.LogDebug(ex, "Cost scan unavailable for {Provider}", due[index]);
                     Complete(index, new WslResult());
                 }
+            }
+            if (nativeCost)
+            {
+                // One index update serves every due provider. Each report then takes the CLI's path through
+                // InterpretCostResult, so the ledger, the cache and last-good handling behave as with WSL.
+                using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                deadline.CancelAfter(timeouts.Max());
+                IReadOnlyDictionary<string, string?>? reports = null;
+                var failure = new WslResult();
+                try
+                {
+                    reports = await _nativeCost!.FetchCostJsonAsync(due, now, deadline.Token);
+                    ct.ThrowIfCancellationRequested();
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+                catch (OperationCanceledException) when (deadline.IsCancellationRequested)
+                {
+                    // The index keeps what was read so far; the next scan continues from there.
+                    failure = new WslResult { ExitCode = -1, Error = "Command timed out" };
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogDebug(ex, "Native cost scan unavailable");
+                }
+                for (var i = 0; i < due.Count; i++)
+                    Complete(i, reports != null && reports.TryGetValue(due[i], out var json) && !string.IsNullOrWhiteSpace(json)
+                        ? new WslResult { Success = true, Output = json }
+                        : failure);
+                return;
             }
             if (!useBatch)
             {

@@ -37,9 +37,15 @@ public sealed partial class NativeCostScanner
         CancellationToken cancellationToken = default) =>
         Update([new(CostProvider.Claude, claudeProjects), new(CostProvider.Codex, codexSessions)], workers, cancellationToken);
 
+    /// <summary>
+    /// Indexes what changed under the roots. Without <paramref name="changedPaths"/> every root is listed; with it
+    /// only those files and directories (from change notifications) are looked at, so an update with no changes
+    /// touches neither the log folders nor the index.
+    /// </summary>
     public CostScanResult Update(IReadOnlyList<CostLogRoot> roots, int workers = 1,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default, IReadOnlyCollection<string>? changedPaths = null)
     {
+        if (changedPaths is { Count: 0 }) return new(0, 0, 0, 0, 0, 0, 0);
         ArgumentOutOfRangeException.ThrowIfLessThan(workers, 1);
         cancellationToken.ThrowIfCancellationRequested();
         using var background = new BackgroundPriority();
@@ -59,7 +65,7 @@ public sealed partial class NativeCostScanner
         {
             // TimeZoneInfo caches the system zone until explicitly refreshed.
             if (_zone is null) TimeZoneInfo.ClearCachedData();
-            return UpdateIndex(roots, workers, _zone ?? TimeZoneInfo.Local, cancellationToken);
+            return UpdateIndex(roots, workers, _zone ?? TimeZoneInfo.Local, changedPaths, cancellationToken);
         }
         finally
         {
@@ -68,7 +74,7 @@ public sealed partial class NativeCostScanner
     }
 
     private CostScanResult UpdateIndex(IReadOnlyList<CostLogRoot> roots, int workers, TimeZoneInfo zone,
-        CancellationToken cancellationToken)
+        IReadOnlyCollection<string>? changedPaths, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         Directory.CreateDirectory(Path.GetDirectoryName(_indexPath)!);
@@ -79,35 +85,74 @@ public sealed partial class NativeCostScanner
         index.SetZone(zone, cancellationToken);
         database.Execute("COMMIT");
 
-        var inputs = new List<Input>();
-        var discovered = new HashSet<(CostProvider, CostKey)>();
-        var files = 0;
-        long size = 0;
+        // A compressed archive stands for the plain log of the same name: one index entry, and the plain file wins.
+        var candidates = new Dictionary<(CostProvider, CostKey), Discovered>();
         foreach (var (provider, root) in roots)
         {
             if (provider is not (CostProvider.Claude or CostProvider.Codex))
                 throw new ArgumentOutOfRangeException(nameof(roots));
             var directory = Path.GetFullPath(root);
-            if (!Directory.Exists(directory)) continue;
-            var entries = new FileSystemEnumerable<Discovered>(directory,
-                (ref FileSystemEntry entry) => new(entry.ToFullPath(), entry.Length, entry.LastWriteTimeUtc.UtcTicks,
-                    entry.CreationTimeUtc.UtcTicks),
-                new EnumerationOptions { RecurseSubdirectories = true, IgnoreInaccessible = true, AttributesToSkip = FileAttributes.ReparsePoint })
+            if (changedPaths is null)
             {
-                ShouldIncludePredicate = (ref FileSystemEntry entry) =>
-                    !entry.IsDirectory && entry.FileName.EndsWith(".jsonl", StringComparison.OrdinalIgnoreCase)
-            };
+                if (Directory.Exists(directory)) Offer(provider, EnumerateLogs(directory, provider));
+                continue;
+            }
+
+            var prefix = Path.TrimEndingDirectorySeparator(directory) + Path.DirectorySeparatorChar;
+            foreach (var changed in changedPaths)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (!changed.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) continue;
+                // Keep the root's spelling so a notification and a listing produce the same path key.
+                var path = string.Concat(prefix, changed.AsSpan(prefix.Length));
+                try
+                {
+                    if (IsLog(path, provider))
+                    {
+                        var info = new FileInfo(path);
+                        if (info.Exists && (info.Attributes & (FileAttributes.ReparsePoint | FileAttributes.Directory)) == 0)
+                            Offer(provider, [new(path, info.Length, info.LastWriteTimeUtc.Ticks, info.CreationTimeUtc.Ticks)]);
+                    }
+                    else if (Directory.Exists(path) &&
+                             (File.GetAttributes(path) & FileAttributes.ReparsePoint) == 0)
+                    {
+                        Offer(provider, EnumerateLogs(path, provider));
+                    }
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    // Gone or locked since the notification; the next full listing covers it.
+                }
+            }
+        }
+
+        var inputs = new List<Input>();
+        var files = 0;
+        long size = 0;
+        foreach (var ((provider, key), entry) in candidates)
+        {
+            files++;
+            size += entry.Length;
+            previous.TryGetValue((provider, key), out var state);
+            if (state is null || state.Length != entry.Length || state.WriteTime != entry.WriteTime ||
+                state.Created != entry.Created)
+                inputs.Add(new(provider, key, entry, state));
+        }
+
+        void Offer(CostProvider provider, IEnumerable<Discovered> entries)
+        {
+            Span<char> scratch = stackalloc char[512];
             foreach (var entry in entries)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                var key = CostKey.Hash(MemoryMarshal.AsBytes(entry.Path.AsSpan()));
-                if (!discovered.Add((provider, key))) continue;
-                files++;
-                size += entry.Length;
-                previous.TryGetValue((provider, key), out var state);
-                if (state is null || state.Length != entry.Length || state.WriteTime != entry.WriteTime ||
-                    state.Created != entry.Created)
-                    inputs.Add(new(provider, key, entry, state));
+                var compressed = IsCompressed(entry.Path);
+                var logical = compressed ? entry.Path.AsSpan(..^CompressedSuffix.Length) : entry.Path.AsSpan();
+                // Windows paths ignore case, and a notification can spell a path differently from a listing.
+                var upper = logical.Length <= scratch.Length ? scratch[..logical.Length] : new char[logical.Length];
+                logical.ToUpperInvariant(upper);
+                var id = (provider, CostKey.Hash(MemoryMarshal.AsBytes((ReadOnlySpan<char>)upper)));
+                if (candidates.TryGetValue(id, out var existing) && (!existing.Compressed || compressed)) continue;
+                candidates[id] = entry with { Compressed = compressed };
             }
         }
 
@@ -118,7 +163,7 @@ public sealed partial class NativeCostScanner
         {
             // Estimate bytes from the enumeration snapshot and commit at file boundaries.
             var unread = Math.Max(0, input.Entry.Length - (input.State?.Offset ?? 0));
-            if (input.State is { } state &&
+            if (input.Entry.Compressed || input.State is { } state &&
                 (input.Entry.Length < state.Length || input.Entry.Created != state.Created))
                 unread = input.Entry.Length;
             batchBytes += unread;
@@ -153,27 +198,68 @@ public sealed partial class NativeCostScanner
                         var length = stream.Length;
                         var fileId = FileIdentity(stream.SafeFileHandle);
                         var old = input.State;
-                        var reset = old is null || length < old.Length || length < old.Offset ||
-                            old.Created != input.Entry.Created || (old.FileId != default && fileId != default && old.FileId != fileId);
-                        var generation = reset ? (old?.Generation ?? -1) + 1 : old!.Generation;
-                        if (reset && old is not null)
+                        var directory = Path.GetDirectoryName(input.Entry.Path.AsSpan());
+                        var subagent = directory.Contains("\\subagents\\", StringComparison.OrdinalIgnoreCase) ||
+                            directory.EndsWith("\\subagents", StringComparison.OrdinalIgnoreCase);
+                        void Accept(CostEvent evt, long offset, long rowGeneration)
                         {
-                            lock (index) index.RemoveOffsetUsage(input.Provider, input.Key, old.Generation);
+                            var day = CostIndex.LocalDay(evt.Time, zone);
+                            lock (index) index.Add(input.Provider, input.Key, rowGeneration, offset, day, evt);
                             modified = true;
                         }
 
-                        var directory = Path.GetDirectoryName(input.Entry.Path.AsSpan());
-                        var parser = new CostLogParser(input.Provider,
-                            directory.Contains("\\subagents\\", StringComparison.OrdinalIgnoreCase) ||
-                            directory.EndsWith("\\subagents", StringComparison.OrdinalIgnoreCase), reset ? default : old!.Cursor);
-
-                        stream.Position = reset ? 0 : old!.Offset;
-                        var result = ReadLines(stream, length, buffer, parser, (evt, offset) =>
+                        CostLogParser parser;
+                        (long CompleteOffset, long Bytes, long Oversized) result;
+                        long generation;
+                        if (input.Entry.Compressed)
                         {
-                            var day = CostIndex.LocalDay(evt.Time, zone);
-                            lock (index) index.Add(input.Provider, input.Key, generation, offset, day, evt);
-                            modified = true;
-                        }, cancellationToken);
+                            // The archive holds the same bytes as the plain log it replaced, so the entry of that
+                            // log (same key) says how much is already indexed: skip that much and read the rest.
+                            generation = old?.Generation ?? 0;
+                            var indexed = old?.Offset ?? 0;
+                            var cursor = old?.Cursor ?? default;
+                            long skipped;
+                            while (true)
+                            {
+                                stream.Position = 0;
+                                using var plain = new ZstdSharp.DecompressionStream(stream, leaveOpen: true);
+                                skipped = Skip(plain, indexed, buffer, cancellationToken);
+                                if (skipped == indexed)
+                                {
+                                    parser = new CostLogParser(input.Provider, subagent, cursor);
+                                    var current = generation;
+                                    result = ReadLines(plain, indexed, long.MaxValue, buffer, parser,
+                                        (evt, offset) => Accept(evt, offset, current), cancellationToken);
+                                    break;
+                                }
+
+                                // Shorter than what was indexed: a different file, so index it from the start.
+                                lock (index) index.RemoveOffsetUsage(input.Provider, input.Key, generation);
+                                modified = true;
+                                generation++;
+                                indexed = 0;
+                                cursor = default;
+                            }
+                            result.Bytes += skipped;
+                        }
+                        else
+                        {
+                            var reset = old is null || length < old.Length || length < old.Offset ||
+                                old.Created != input.Entry.Created || (old.FileId != default && fileId != default && old.FileId != fileId);
+                            generation = reset ? (old?.Generation ?? -1) + 1 : old!.Generation;
+                            if (reset && old is not null)
+                            {
+                                lock (index) index.RemoveOffsetUsage(input.Provider, input.Key, old.Generation);
+                                modified = true;
+                            }
+
+                            parser = new CostLogParser(input.Provider, subagent, reset ? default : old!.Cursor);
+                            var start = reset ? 0 : old!.Offset;
+                            stream.Position = start;
+                            var current = generation;
+                            result = ReadLines(stream, start, length, buffer, parser,
+                                (evt, offset) => Accept(evt, offset, current), cancellationToken);
+                        }
                         lock (index) index.Save(input.Provider, input.Key, new(length, input.Entry.WriteTime, input.Entry.Created,
                             result.CompleteOffset, generation, fileId, parser.Cursor));
                         modified = true;
@@ -182,7 +268,7 @@ public sealed partial class NativeCostScanner
                         Interlocked.Add(ref badLines, parser.BadLines);
                         Interlocked.Add(ref oversizedLines, result.Oversized);
                     }
-                    catch (Exception ex) when (ex is UnauthorizedAccessException ||
+                    catch (Exception ex) when (ex is UnauthorizedAccessException or ZstdSharp.ZstdException ||
                         ex is IOException and not CostIndexDatabase.SqliteException)
                     {
                         input.Skipped = true;
@@ -255,11 +341,12 @@ public sealed partial class NativeCostScanner
         var today = CostIndex.LocalDay(asOf ?? DateTimeOffset.UtcNow, _zone ?? TimeZoneInfo.Local);
         var first = Math.Max(0, today.DayNumber - historyDays + 1);
         var rows = ReadDays(provider, first, today.DayNumber, cancellationToken);
-        long priced = 0, unpriced = 0;
+        long priced = 0, unpriced = 0, unpricedTokens = 0;
         var days = new List<DailyCost>();
         foreach (var group in rows.GroupBy(row => row.Day))
         {
             var day = new CostTokens();
+            long dayUnpricedTokens = 0;
             var breakdown = new List<ModelCost>();
             foreach (var modelGroup in group.GroupBy(row => row.Model))
             {
@@ -267,14 +354,19 @@ public sealed partial class NativeCostScanner
                 var modelTokens = new CostTokens();
                 foreach (var row in modelGroup)
                 {
-                    var rate = pricing.GetRates(provider, row.Model, (row.Band & 1) != 0, (row.Band & 2) != 0,
-                        (row.Band & 4) != 0, row.Band >> 3);
-                    if (rate is { } rates)
+                    var price = pricing.PriceTokens(provider, row.Model, (row.Band & 1) != 0, (row.Band & 2) != 0,
+                        (row.Band & 4) != 0, row.Band >> 3, row.Tokens);
+                    if (price is { } known)
                     {
-                        cost = (cost ?? 0) + rates.Price(row.Tokens);
+                        cost = (cost ?? 0) + known;
                         priced += row.Count;
                     }
-                    else unpriced += row.Count;
+                    else
+                    {
+                        // No price is not a price of zero: these tokens are reported, not hidden in the total.
+                        unpriced += row.Count;
+                        dayUnpricedTokens += row.Tokens.Total;
+                    }
                     modelTokens = modelTokens.Add(row.Tokens);
                 }
                 day = day.Add(modelTokens);
@@ -285,8 +377,9 @@ public sealed partial class NativeCostScanner
                 Date = DateOnly.FromDayNumber(group.Key), TotalCost = breakdown.Sum(model => model.Cost ?? 0),
                 TotalTokens = day.Total, InputTokens = provider == CostProvider.Codex ? day.Input + day.Read + day.Write : day.Input,
                 OutputTokens = day.Output, CacheReadTokens = day.Read, CacheCreationTokens = day.Write,
-                ReasoningTokens = day.Reasoning, ModelBreakdowns = breakdown
+                ReasoningTokens = day.Reasoning, UnpricedTokens = dayUnpricedTokens, ModelBreakdowns = breakdown
             });
+            unpricedTokens += dayUnpricedTokens;
         }
 
         return new CostDataDto
@@ -298,6 +391,7 @@ public sealed partial class NativeCostScanner
             SessionTokens = days.Count > 0 && days[^1].Date == today ? days[^1].TotalTokens : 0,
             Last30DaysCostUSD = days.Where(d => d.Date.DayNumber >= today.DayNumber - 29).Sum(d => d.TotalCost),
             Last30DaysTokens = days.Where(d => d.Date.DayNumber >= today.DayNumber - 29).Sum(d => d.TotalTokens),
+            UnpricedTokens = unpricedTokens,
             Daily = days
         };
     }
@@ -375,19 +469,21 @@ public sealed partial class NativeCostScanner
         return check.Step() && check.Text(0) == "ok";
     }
 
-    private static (long CompleteOffset, long Bytes, long Oversized) ReadLines(FileStream stream, long length, byte[] buffer,
-        CostLogParser parser, Action<CostEvent, long> accept, CancellationToken token)
+    private static (long CompleteOffset, long Bytes, long Oversized) ReadLines(Stream stream, long start, long length,
+        byte[] buffer, CostLogParser parser, Action<CostEvent, long> accept, CancellationToken token)
     {
-        var complete = stream.Position;
+        var complete = start;
+        var position = start;
         long readBytes = 0, oversized = 0;
         var skipping = false;
         var carry = 0;
-        while (stream.Position < length)
+        while (position < length)
         {
             token.ThrowIfCancellationRequested();
-            var start = stream.Position - carry;
-            var read = stream.Read(buffer.AsSpan(carry, (int)Math.Min(BufferBytes - carry, length - stream.Position)));
+            var blockStart = position - carry;
+            var read = stream.Read(buffer.AsSpan(carry, (int)Math.Min(BufferBytes - carry, length - position)));
             if (read == 0) break;
+            position += read;
             readBytes += read;
             var view = buffer.AsSpan(0, carry + read);
             var consumed = 0;
@@ -395,12 +491,12 @@ public sealed partial class NativeCostScanner
             {
                 var newline = view.IndexOf((byte)'\n');
                 if (newline < 0) break;
-                complete = start + consumed + newline + 1;
+                complete = blockStart + consumed + newline + 1;
                 if (skipping || newline > MaxLineBytes) oversized++;
                 else
                 {
                     var line = view[..newline];
-                    if (start + consumed == 0 && line.StartsWith("\uFEFF"u8)) line = line[3..];
+                    if (blockStart + consumed == 0 && line.StartsWith("\uFEFF"u8)) line = line[3..];
                     if (parser.Parse(line) is { } evt) accept(evt, complete);
                 }
                 skipping = false;
@@ -413,6 +509,39 @@ public sealed partial class NativeCostScanner
         }
         return (complete, readBytes, oversized);
     }
+
+    /// <summary>Reads and discards up to <paramref name="count"/> bytes; returns how many were there.</summary>
+    private static long Skip(Stream stream, long count, byte[] buffer, CancellationToken token)
+    {
+        long skipped = 0;
+        while (skipped < count)
+        {
+            token.ThrowIfCancellationRequested();
+            var read = stream.Read(buffer.AsSpan(0, (int)Math.Min(buffer.Length, count - skipped)));
+            if (read == 0) break;
+            skipped += read;
+        }
+        return skipped;
+    }
+
+    internal const string CompressedSuffix = ".zst";
+
+    /// <summary>Codex compresses older session logs to "name.jsonl.zst".</summary>
+    internal static bool IsCompressed(ReadOnlySpan<char> path) =>
+        path.EndsWith(".jsonl.zst", StringComparison.OrdinalIgnoreCase);
+
+    internal static bool IsLog(ReadOnlySpan<char> path, CostProvider provider) =>
+        path.EndsWith(".jsonl", StringComparison.OrdinalIgnoreCase) ||
+        provider == CostProvider.Codex && IsCompressed(path);
+
+    private static FileSystemEnumerable<Discovered> EnumerateLogs(string directory, CostProvider provider) =>
+        new(directory,
+            (ref FileSystemEntry entry) => new(entry.ToFullPath(), entry.Length, entry.LastWriteTimeUtc.UtcTicks,
+                entry.CreationTimeUtc.UtcTicks),
+            new EnumerationOptions { RecurseSubdirectories = true, IgnoreInaccessible = true, AttributesToSkip = FileAttributes.ReparsePoint })
+        {
+            ShouldIncludePredicate = (ref FileSystemEntry entry) => !entry.IsDirectory && IsLog(entry.FileName, provider)
+        };
 
     private static CostKey FileIdentity(SafeFileHandle handle)
     {
@@ -431,7 +560,8 @@ public sealed partial class NativeCostScanner
         internal uint Volume, SizeHigh, SizeLow, Links, IndexHigh, IndexLow;
     }
 
-    private readonly record struct Discovered(string Path, long Length, long WriteTime, long Created);
+    private readonly record struct Discovered(string Path, long Length, long WriteTime, long Created,
+        bool Compressed = false);
     private sealed record Input(CostProvider Provider, CostKey Key, Discovered Entry, IndexedFile? State)
     {
         internal bool Skipped { get; set; }

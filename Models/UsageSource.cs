@@ -4,6 +4,7 @@ namespace CodexBarWin.Models;
 /// Where a provider's usage numbers come from: read natively over HTTPS with the Windows sign-ins ("native", the
 /// default) or through the CodexBar CLI inside WSL ("wsl", kept as a fallback).
 /// </summary>
+/// <remarks>The same two values select the cost source (<see cref="AppSettings.CostSource"/>).</remarks>
 public static class UsageSource
 {
     public const string Native = "native";

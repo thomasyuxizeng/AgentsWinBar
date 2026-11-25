@@ -60,6 +60,10 @@
 
   <!-- Sample data for Developer Mode -->
   <ItemGroup>
+    <!-- Bundled price data for the native cost scanner (tools/update-model-prices.ps1 regenerates the snapshot). -->
+    <None Remove="Services\Native\Cost\Pricing\*.json" />
+    <Content Remove="Services\Native\Cost\Pricing\*.json" />
+    <EmbeddedResource Include="Services\Native\Cost\Pricing\*.json" LogicalName="CodexBarWin.Pricing.%(Filename)%(Extension)" />
     <Content Include="Samples\*.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
@@ -95,6 +99,8 @@
 
     <!-- System Tray -->
     <PackageReference Include="H.NotifyIcon.WinUI" Version="2.4.1" />
+    <!-- Managed Zstandard decoder (MIT) for Codex's compressed session logs. -->
+    <PackageReference Include="ZstdSharp.Port" Version="0.8.6" />
 
     <!-- Version Management -->
     <PackageReference Include="MinVer" Version="7.0.0">

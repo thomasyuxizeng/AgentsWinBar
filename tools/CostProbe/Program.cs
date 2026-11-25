@@ -13,9 +13,24 @@ internal static class Program
 
     private static int Main(string[] args)
     {
+        if (args.Length > 0 && args[0] == "parity")
+        {
+            using var stop = new CancellationTokenSource();
+            Console.CancelKeyPress += (_, e) =>
+            {
+                e.Cancel = true;
+                stop.Cancel();
+            };
+            CultureInfo.CurrentCulture = CultureInfo.InvariantCulture;
+            using var current = Process.GetCurrentProcess();
+            current.PriorityClass = ProcessPriorityClass.BelowNormal;
+            return Parity.Run(args, stop.Token);
+        }
+
         if (args.Length != 2 || !int.TryParse(args[1], out var workers) || workers is < 1 or > 2)
         {
             Console.Error.WriteLine("Usage: CostProbe <fresh-index-directory> <1|2>");
+            Console.Error.WriteLine("       CostProbe parity <from yyyy-MM-dd> <to yyyy-MM-dd> [index-directory]");
             return 2;
         }
 

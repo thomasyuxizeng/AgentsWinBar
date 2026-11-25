@@ -113,6 +113,16 @@ public class AppSettings
         .All(p => UsesNativeUsage(p.Id));
 
     /// <summary>
+    /// Cost source for every provider: "native" (default) scans the Windows log folders in-process with an on-disk
+    /// index; "wsl" runs the CodexBar CLI's cost scan inside WSL (kept as a fallback). Set in settings.json; files
+    /// written before this setting existed load as "native".
+    /// </summary>
+    public string CostSource { get; set; } = UsageSource.Native;
+
+    /// <summary>True when costs come from the native log scanner, so cost scans never start WSL.</summary>
+    public bool UsesNativeCost() => UsageSource.Normalize(CostSource) == UsageSource.Native;
+
+    /// <summary>
     /// Repairs malformed persisted values before they reach timers, animations or shell commands.
     /// An explicitly empty provider list remains empty.
     /// </summary>
@@ -125,6 +135,7 @@ public class AppSettings
             .DistinctBy(p => p.Id)
             .ToList();
         UsageSources = NormalizeUsageSources(UsageSources);
+        CostSource = UsageSource.Normalize(CostSource);
         if (!Enum.IsDefined(Theme)) Theme = AppTheme.System;
         if (!Enum.IsDefined(ResetAnimationMode)) ResetAnimationMode = ResetAnimationMode.WhenNotBatterySaver;
         RefreshIntervalSeconds = ValidRange(RefreshIntervalSeconds, 86400, 120);

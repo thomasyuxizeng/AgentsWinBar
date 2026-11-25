@@ -12,6 +12,8 @@ public record CostData
     public string? Provenance { get; init; }
     public int HistoryDays { get; init; } = 30;
     public CostCoverage Coverage { get; init; } = new();
+    /// <summary>Tokens in the reported days that had no known price. They are in the token totals, not in the cost.</summary>
+    public long UnpricedTokens { get; init; }
     public IReadOnlyList<DailyCost> Daily { get; init; } = [];
     public DateTime FetchedAt { get; init; } = DateTime.UtcNow;
     /// <summary>Outcome of the scan that produced these values. IsStale marks a later failed or pending scan.</summary>
@@ -43,6 +45,8 @@ public record DailyCost
     public long CacheReadTokens { get; init; }
     public long CacheCreationTokens { get; init; }
     public long ReasoningTokens { get; init; }
+    /// <summary>Tokens of this day that had no known price (models whose cost is null in the breakdown).</summary>
+    public long UnpricedTokens { get; init; }
     public IReadOnlyList<ModelCost> ModelBreakdowns { get; init; } = [];
 }
 
@@ -77,6 +81,8 @@ public record CostDataDto
     public int HistoryDays { get; init; } = 30;
     public string? Provenance { get; init; }
     public CostCoverage? Coverage { get; init; }
+    /// <summary>Set by the native scanner; the CLI's JSON has no such field and reads as zero.</summary>
+    public long? UnpricedTokens { get; init; }
     public List<DailyCost>? Daily { get; init; }
 
     public CostData ToCostData(string provider, DateTime fetchedAt) => new()
@@ -90,6 +96,7 @@ public record CostDataDto
         Provenance = Provenance,
         HistoryDays = HistoryDays,
         Coverage = Coverage ?? new(),
+        UnpricedTokens = UnpricedTokens ?? 0,
         Daily = Daily ?? [],
         FetchedAt = fetchedAt,
         FetchOutcome = HasReading ? FetchOutcome.Success : FetchOutcome.Unavailable,
