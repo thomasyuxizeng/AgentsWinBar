@@ -35,7 +35,7 @@
 
         <ItemsControl x:Name="RowsControl" ItemsSource="{x:Bind Rows}" IsTabStop="False">
             <ItemsControl.ItemTemplate>
-                <DataTemplate x:DataType="local:OverlayRow">
+                <DataTemplate x:DataType="local:OverlayRow" x:DefaultBindMode="OneWay">
                     <!-- No column spacing: each bar column carries its own 8 DIP lead-in (via the bar's margin) and each
                          number column carries its own short lead-in (OverlayWindow.NumberGapDip), so the gap between a
                          bar and its number can be tighter than the gap to the next element. -->

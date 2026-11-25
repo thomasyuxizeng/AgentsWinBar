@@ -7,9 +7,26 @@ public sealed class UsageHistoryStore
 {
     private readonly object _gate = new();
     private readonly List<UsageHistorySample> _samples = [];
+    // Samples accepted since the persistence last took them, in the order they were added (see TakeUnsaved)
+    private readonly List<UsageHistorySample> _unsaved = [];
     private long _revision;
+    private long _generation;
     public long Revision { get { lock (_gate) return _revision; } }
+    /// <summary>Changes whenever the whole history is replaced (<see cref="Restore"/>), so a writer knows appending is not enough.</summary>
+    public long Generation { get { lock (_gate) return _generation; } }
+    public int Count { get { lock (_gate) return _samples.Count; } }
     public IReadOnlyList<UsageHistorySample> Samples { get { lock (_gate) return _samples.ToArray(); } }
+
+    /// <summary>Returns the samples added since the previous call (oldest first) and forgets them.</summary>
+    public IReadOnlyList<UsageHistorySample> TakeUnsaved()
+    {
+        lock (_gate)
+        {
+            var taken = _unsaved.ToArray();
+            _unsaved.Clear();
+            return taken;
+        }
+    }
 
     public static string ExtraWindowKey(ExtraUsageWindow extra) =>
         "extra:" + (string.IsNullOrWhiteSpace(extra.Key) ? (extra.Title ?? string.Empty).Trim().ToLowerInvariant() : extra.Key);
@@ -32,6 +49,7 @@ public sealed class UsageHistoryStore
                     sample.Timestamp - last.Timestamp < TimeSpan.FromMinutes(10)) return false;
             }
             _samples.Add(sample);
+            _unsaved.Add(sample);
             _revision++;
             return true;
         }
@@ -66,6 +84,8 @@ public sealed class UsageHistoryStore
             _samples.Clear();
             _revision++;
             foreach (var sample in samples.OfType<UsageHistorySample>().OrderBy(s => s.Timestamp)) Add(sample, nowUtc);
+            _unsaved.Clear();
+            _generation++;
         }
     }
 

@@ -18,20 +18,20 @@ namespace CodexBarWin;
 /// <summary>
 /// One line of the always-on overlay.
 /// </summary>
-public sealed class OverlayRow
+public sealed class OverlayRow : InPlaceRow
 {
     public string Name { get; set; } = string.Empty;
     public Microsoft.UI.Xaml.Media.Brush StatusBrush { get; set; } = null!;
     public Visibility IncidentVisibility { get; set; }
     public string StatusDescription { get; set; } = string.Empty;
-    public Microsoft.UI.Xaml.Media.Geometry Icon { get; set; } = null!;
+    [KeepOnUpdate] public Microsoft.UI.Xaml.Media.Geometry Icon { get; set; } = null!;
     public double SessionPercent { get; set; }
     /// <summary>The selected windows, including their session-only ResetDetectedAtUtc signals.</summary>
     public UsageWindow? SessionWindow { get; set; }
     public UsageWindow? WeeklyWindow { get; set; }
     /// <summary>The reset stamps the bars may show (null while a reset is held back until the overlay is on screen again).</summary>
-    public DateTime? SessionResetStamp { get; set; }
-    public DateTime? WeeklyResetStamp { get; set; }
+    [UpdateLast] public DateTime? SessionResetStamp { get; set; }
+    [UpdateLast] public DateTime? WeeklyResetStamp { get; set; }
     /// <summary>The overlay's memory of the resets it played, shared by every bar it creates (see UsageMeter.ResetHost).</summary>
     public ResetHostState? ResetHost { get; set; }
     /// <summary>Identifies each bar across rebuilds, so a reset the overlay already played is not played again.</summary>
@@ -70,6 +70,9 @@ public sealed partial class OverlayWindow : Window
     private static readonly TimeSpan ActiveTick = TimeSpan.FromSeconds(2);
     private static readonly TimeSpan HiddenTick = TimeSpan.FromSeconds(5);   // hidden for a fullscreen app
     private static readonly TimeSpan LockedTick = TimeSpan.FromSeconds(30);   // locked screen: only watch for the unlock
+    // The lock screen covers the overlay, so noticing a lock a few ticks late changes nothing visible; the Locked event and
+    // the foreground watcher still react at once, and the reset gate asks for the lock state itself
+    private const int LockPollEveryTicks = 5;
 
     private readonly MainViewModel _viewModel;
     private readonly ISettingsService _settingsService;
@@ -77,6 +80,7 @@ public sealed partial class OverlayWindow : Window
     private readonly IntPtr _hwnd;
     private readonly DispatcherTimer _topmostTimer;
     private int _tickCount;
+    private int _lockPollCount;
     private bool _hiddenForFullscreen;
     private bool _wasLocked;
     private bool _shown;
@@ -140,7 +144,8 @@ public sealed partial class OverlayWindow : Window
             }
 
             // Unlock events don't reliably reach the app, so a locked screen slows the timer down instead of stopping it
-            if (_sessionState.IsLocked)
+            var pollLock = _wasLocked || ++_lockPollCount % LockPollEveryTicks == 0;
+            if (pollLock && _sessionState.IsLocked)
             {
                 _wasLocked = true;
                 SyncResetGate();
@@ -165,7 +170,7 @@ public sealed partial class OverlayWindow : Window
             }
 
             ApplySize();   // follows display scale changes (e.g. remote desktop)
-            WindowZOrder.AssertTopmost(_hwnd);
+            WindowZOrder.AssertTopmostIfCovered(_hwnd);
         };
 
         App.Windows.Add(this);
@@ -199,7 +204,7 @@ public sealed partial class OverlayWindow : Window
             UpdateFullscreenVisibility();
             if (!_hiddenForFullscreen && !_sessionState.IsLocked && AppWindow.IsVisible)
             {
-                WindowZOrder.AssertTopmost(_hwnd);
+                WindowZOrder.AssertTopmostIfCovered(_hwnd);
             }
         });
         _shown = true;
@@ -451,7 +456,7 @@ public sealed partial class OverlayWindow : Window
     }
 
     /// <summary>
-    /// A rebuild recreates every row, which would cut a running reset animation short: while one of this window's bars
+    /// A rebuild updates or recreates the rows, which would cut a running reset animation short: while one of this window's bars
     /// plays, the rebuild waits until it is over (the bars it then creates do not replay it, see UsageMeter.ResetKey).
     /// </summary>
     private bool DeferRebuildWhileResetPlays()
@@ -501,14 +506,14 @@ public sealed partial class OverlayWindow : Window
         var sessionWidth = Math.Ceiling(Math.Max(widest, sessionText)) + 1 + NumberGapDip;
         var weeklyWidth = Math.Ceiling(Math.Max(widest, weeklyText)) + 1 + NumberGapDip;
 
-        Rows.Clear();
         foreach (var row in rows)
         {
             row.ResetHost = _resetHost;
             row.SessionNumberColumn = new GridLength(sessionWidth);
             row.WeeklyNumberColumn = new GridLength(weeklyWidth);
-            Rows.Add(row);
         }
+        // Same providers in the same order: update the rows already shown instead of recreating them
+        InPlaceRow.Apply(Rows, rows, row => row.Name);
 
         // 12 padding + 1 border per side; columns = icon + (8 lead-in + 44 bar + number column) twice, where
         // each number column already includes its NumberGapDip lead-in
@@ -575,8 +580,9 @@ public sealed partial class OverlayWindow : Window
 
         if (!contentChanged && !scaleChanged && _hasTargetSize)
         {
-            var current = AppWindow.Size;
-            if (current.Width == _lastTargetSize.Width && current.Height == _lastTargetSize.Height)
+            // A plain Win32 query: this runs on every tick
+            if (WindowZOrder.TryGetWindowRect(_hwnd, out var current) &&
+                current.Right - current.Left == _lastTargetSize.Width && current.Bottom - current.Top == _lastTargetSize.Height)
             {
                 return;
             }

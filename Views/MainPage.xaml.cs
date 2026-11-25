@@ -1,4 +1,7 @@
+using System.Collections.ObjectModel;
+using System.Collections.Specialized;
 using CodexBarWin.Controls;
+using CodexBarWin.Helpers;
 using CodexBarWin.Models;
 using CodexBarWin.ViewModels;
 using Microsoft.Extensions.DependencyInjection;
@@ -8,6 +11,16 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Navigation;
 
 namespace CodexBarWin.Views;
+
+/// <summary>
+/// One provider card on the flyout. A refresh replaces the provider's data in the view model; the slot stays, so the card
+/// updates in place instead of being recreated.
+/// </summary>
+public sealed class ProviderSlot : InPlaceRow
+{
+    public string Provider { get; set; } = string.Empty;
+    public UsageData? Data { get; set; }
+}
 
 /// <summary>
 /// Main page displaying provider usage data.
@@ -20,6 +33,9 @@ public sealed partial class MainPage : Page
 
     public MainViewModel ViewModel { get; }
 
+    /// <summary>The cards shown: one slot per provider in the view model, in its order.</summary>
+    public ObservableCollection<ProviderSlot> Slots { get; } = [];
+
     public MainPage()
     {
         InitializeComponent();
@@ -30,6 +46,8 @@ public sealed partial class MainPage : Page
     {
         base.OnNavigatedTo(e);
         ViewModel.PropertyChanged += OnViewModelPropertyChanged;
+        ViewModel.Providers.CollectionChanged += OnProvidersChanged;
+        SyncSlots();
         UpdateUI();
     }
 
@@ -37,6 +55,26 @@ public sealed partial class MainPage : Page
     {
         base.OnNavigatedFrom(e);
         ViewModel.PropertyChanged -= OnViewModelPropertyChanged;
+        ViewModel.Providers.CollectionChanged -= OnProvidersChanged;
+    }
+
+    private void OnProvidersChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    {
+        if (DispatcherQueue.HasThreadAccess) SyncSlots();
+        else DispatcherQueue.TryEnqueue(SyncSlots);
+    }
+
+    private void SyncSlots()
+    {
+        try
+        {
+            InPlaceRow.Apply(Slots, ViewModel.Providers.Select(p => new ProviderSlot { Provider = p.Provider, Data = p }).ToList(),
+                slot => slot.Provider);
+        }
+        catch (Exception ex)
+        {
+            App.Services.GetRequiredService<ILogger<MainPage>>().LogError(ex, "Updating the provider cards failed");
+        }
     }
 
     private void OnViewModelPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)

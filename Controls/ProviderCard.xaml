@@ -57,12 +57,13 @@
                     Height="8"
                     Fill="#9CA3AF"
                     Visibility="Collapsed"/>
-                <!-- Loading state: small spinner -->
+                <!-- Loading state: small spinner. Active only while shown (see ProviderCard.UpdateUI): the card is updated
+                     in place, and a collapsed but active ring would keep animating -->
                 <ProgressRing
                     x:Name="StatusLoading"
                     Width="14"
                     Height="14"
-                    IsActive="True"
+                    IsActive="False"
                     Visibility="Collapsed"/>
             </Grid>
         </Grid>

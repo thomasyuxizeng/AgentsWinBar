@@ -20,21 +20,21 @@ namespace CodexBarWin;
 /// <summary>
 /// One provider in the taskbar strip.
 /// </summary>
-public sealed class TaskbarItem
+public sealed class TaskbarItem : InPlaceRow
 {
     public string Name { get; set; } = string.Empty;
     public Microsoft.UI.Xaml.Media.Brush StatusBrush { get; set; } = null!;
     public Visibility IncidentVisibility { get; set; }
     public string StatusDescription { get; set; } = string.Empty;
-    public Geometry Icon { get; set; } = null!;
+    [KeepOnUpdate] public Geometry Icon { get; set; } = null!;
     public double SessionPercent { get; set; }
     public double WeeklyPercent { get; set; }
     /// <summary>The selected windows, including their session-only ResetDetectedAtUtc signals.</summary>
     public UsageWindow? SessionWindow { get; set; }
     public UsageWindow? WeeklyWindow { get; set; }
     /// <summary>The reset stamps the bars may show (null while a reset is held back until the strip is on screen again).</summary>
-    public DateTime? SessionResetStamp { get; set; }
-    public DateTime? WeeklyResetStamp { get; set; }
+    [UpdateLast] public DateTime? SessionResetStamp { get; set; }
+    [UpdateLast] public DateTime? WeeklyResetStamp { get; set; }
     /// <summary>The strip's memory of the resets it played, shared by every bar it creates (see UsageMeter.ResetHost).</summary>
     public ResetHostState? ResetHost { get; set; }
     /// <summary>Identifies each bar across rebuilds, so a reset the strip already played is not played again.</summary>
@@ -76,12 +76,22 @@ public sealed partial class TaskbarWindow : Window
     private static readonly TimeSpan ActiveTick = TimeSpan.FromSeconds(2);
     private static readonly TimeSpan HiddenTick = TimeSpan.FromSeconds(5);   // hidden for a fullscreen app
     private static readonly TimeSpan LockedTick = TimeSpan.FromSeconds(30);   // locked screen: only watch for the unlock
+    // The lock screen covers the strip, so noticing a lock a few ticks late changes nothing visible; the Locked event and
+    // the foreground watcher still react at once, and the reset gate asks for the lock state itself
+    private const int LockPollEveryTicks = 5;
+    // The taskbar position is re-read when Windows reports a change (TaskbarChangeWatcher), on a foreground change and,
+    // as a fallback, every 15 ticks (about 30 s)
+    private const int TaskbarPollEveryTicks = 15;
 
     private readonly MainViewModel _viewModel;
     private readonly ISessionStateSource _sessionState;
     private readonly IntPtr _hwnd;
     private readonly DispatcherTimer _keepOnTopTimer;
     private int _tickCount;
+    private int _lockPollCount;
+    private TaskbarChangeWatcher? _taskbarChangeWatcher;
+    private bool _taskbarBoundsStale = true;
+    private (int Left, int Top, int Right, int Bottom, WindowZOrder.TaskbarEdge Edge)? _taskbarBounds;
     private bool _roundedRightEnd;
     private bool _hiddenForFullscreen;
     private bool _wasLocked;
@@ -152,7 +162,8 @@ public sealed partial class TaskbarWindow : Window
             }
 
             // Unlock events don't reliably reach the app, so a locked screen slows the timer down instead of stopping it
-            if (_sessionState.IsLocked)
+            var pollLock = _wasLocked || ++_lockPollCount % LockPollEveryTicks == 0;
+            if (pollLock && _sessionState.IsLocked)
             {
                 _wasLocked = true;
                 SyncResetGate();
@@ -174,9 +185,10 @@ public sealed partial class TaskbarWindow : Window
             {
                 Rebuild();
             }
+            if (_tickCount % TaskbarPollEveryTicks == 0 || _taskbarChangeWatcher is not { IsActive: true }) _taskbarBoundsStale = true;
 
             Reposition();
-            WindowZOrder.AssertTopmost(_hwnd);
+            WindowZOrder.AssertTopmostIfCovered(_hwnd);
         };
 
         App.Windows.Add(this);
@@ -196,6 +208,8 @@ public sealed partial class TaskbarWindow : Window
         WindowZOrder.RemoveSystemBorder(_hwnd);
         WindowZOrder.RestoreForeground(previousForeground);
 
+        _taskbarChangeWatcher ??= new TaskbarChangeWatcher(_hwnd, () => _taskbarBoundsStale = true);
+        _taskbarBoundsStale = true;
         Reposition();
         WindowZOrder.AssertTopmost(_hwnd);
 
@@ -211,8 +225,9 @@ public sealed partial class TaskbarWindow : Window
             UpdateFullscreenVisibility();
             if (!_hiddenForFullscreen && !_sessionState.IsLocked && AppWindow.IsVisible)
             {
+                _taskbarBoundsStale = true;
                 Reposition();
-                WindowZOrder.AssertTopmost(_hwnd);
+                WindowZOrder.AssertTopmostIfCovered(_hwnd);
             }
         });
         _shown = true;
@@ -302,6 +317,7 @@ public sealed partial class TaskbarWindow : Window
         }
 
         _tickCount = 0;
+        _taskbarBoundsStale = true;
         Rebuild();
         Reposition();
         WindowZOrder.AssertTopmost(_hwnd);
@@ -329,6 +345,7 @@ public sealed partial class TaskbarWindow : Window
             if (!_closed && !_sessionState.IsLocked)
             {
                 _tickCount = 0;
+                _taskbarBoundsStale = true;
                 Rebuild();
                 Reposition();
                 WindowZOrder.AssertTopmost(_hwnd);
@@ -472,7 +489,7 @@ public sealed partial class TaskbarWindow : Window
     }
 
     /// <summary>
-    /// A rebuild recreates every bar, which would cut a running reset animation short: while one of this window's bars
+    /// A rebuild updates or recreates the bars, which would cut a running reset animation short: while one of this window's bars
     /// plays, the rebuild waits until it is over (the bars it then creates do not replay it, see UsageMeter.ResetKey).
     /// </summary>
     private bool DeferRebuildWhileResetPlays()
@@ -509,13 +526,16 @@ public sealed partial class TaskbarWindow : Window
         }
         _lastSignature = signature;
 
-        var primary = new SolidColorBrush(isLight ? ColorHelper.FromArgb(255, 32, 32, 32) : ColorHelper.FromArgb(255, 240, 240, 240));
+        var primary = isLight ? LightPrimaryBrush : DarkPrimaryBrush;
 
         // Always wide enough for "100%" (numbers are right-aligned), so a value reaching 100% or dropping back
         // after a reset does not change the strip's width
         var numberColumn = new GridLength(Math.Ceiling(OverlayWindow.MeasureNumber("100%")) + 1);
 
-        Items.Clear();
+        var next = new List<TaskbarItem>(_viewModel.Providers.Count);
+        // Same providers in the same order: the bars on the strip are updated in place and keep their icons
+        var names = _viewModel.Providers.Select(p => ProviderIcons.GetDisplayName(p.Provider)).ToList();
+        var inPlace = names.Count > 0 && Items.Select(item => item.Name).SequenceEqual(names);
         foreach (var data in _viewModel.Providers)
         {
             var name = ProviderIcons.GetDisplayName(data.Provider);
@@ -528,10 +548,10 @@ public sealed partial class TaskbarWindow : Window
             var firstText = Cell(first?.Window, data.IsLoading);
             var secondText = Cell(second?.Window, data.IsLoading);
 
-            Items.Add(new TaskbarItem
+            next.Add(new TaskbarItem
             {
                 Name = name,
-                Icon = ProviderIcons.GetGeometry(data.Provider),
+                Icon = inPlace ? Items[next.Count].Icon : ProviderIcons.GetGeometry(data.Provider),
                 StatusBrush = Controls.ProviderStatusVisuals.Brush(data.ServiceStatus),
                 IncidentVisibility = ProviderStatusPresentation.IsIncident(data.ServiceStatus) ? Visibility.Visible : Visibility.Collapsed,
                 StatusDescription = StatusDetailCaption.Tooltip(data.ServiceStatus, nowUtc),
@@ -557,6 +577,8 @@ public sealed partial class TaskbarWindow : Window
             });
         }
 
+        InPlaceRow.Apply(Items, next, item => item.Name);
+
         Reposition();
     }
 
@@ -575,10 +597,18 @@ public sealed partial class TaskbarWindow : Window
     /// </summary>
     private static SolidColorBrush? WarningBrush(UsageWindow? window) => window?.Percent switch
     {
-        >= UsageThresholds.Critical => new SolidColorBrush(ColorHelper.FromArgb(255, 232, 17, 35)),
-        >= UsageThresholds.Warning => new SolidColorBrush(ColorHelper.FromArgb(255, 255, 185, 0)),
+        >= UsageThresholds.Critical => _criticalBrush ??= new SolidColorBrush(ColorHelper.FromArgb(255, 232, 17, 35)),
+        >= UsageThresholds.Warning => _warningBrush ??= new SolidColorBrush(ColorHelper.FromArgb(255, 255, 185, 0)),
         _ => null
     };
+
+    // Created on first use (on the UI thread) and shared by every rebuild, so an update in place keeps the same brush
+    private static SolidColorBrush? _criticalBrush;
+    private static SolidColorBrush? _warningBrush;
+    private static SolidColorBrush? _lightPrimaryBrush;
+    private static SolidColorBrush? _darkPrimaryBrush;
+    private static SolidColorBrush LightPrimaryBrush => _lightPrimaryBrush ??= new SolidColorBrush(ColorHelper.FromArgb(255, 32, 32, 32));
+    private static SolidColorBrush DarkPrimaryBrush => _darkPrimaryBrush ??= new SolidColorBrush(ColorHelper.FromArgb(255, 240, 240, 240));
 
     /// <summary>
     /// Places the strip over the bottom-left of the taskbar (or the screen's bottom-left if the
@@ -587,7 +617,12 @@ public sealed partial class TaskbarWindow : Window
     private void Reposition()
     {
         var scale = WindowZOrder.GetScale(_hwnd);
-        var bar = WindowZOrder.GetTaskbarBounds() is { Edge: WindowZOrder.TaskbarEdge.Bottom } b ? b : ((int, int, int, int, WindowZOrder.TaskbarEdge)?)null;
+        if (_taskbarBoundsStale)
+        {
+            _taskbarBounds = WindowZOrder.GetTaskbarBounds();
+            _taskbarBoundsStale = false;
+        }
+        var bar = _taskbarBounds is { Edge: WindowZOrder.TaskbarEdge.Bottom } b ? b : ((int, int, int, int, WindowZOrder.TaskbarEdge)?)null;
         var screen = bar == null ? DisplayArea.Primary.OuterBounds : default;
 
         var contentChanged = _lastRepositionSignature != _lastSignature;
@@ -597,10 +632,10 @@ public sealed partial class TaskbarWindow : Window
 
         if (!contentChanged && !environmentChanged && _hasTarget)
         {
-            var position = AppWindow.Position;
-            var size = AppWindow.Size;
-            if (position.X == _lastTarget.X && position.Y == _lastTarget.Y &&
-                size.Width == _lastTarget.Width && size.Height == _lastTarget.Height)
+            // A plain Win32 query: this runs on every tick
+            if (WindowZOrder.TryGetWindowRect(_hwnd, out var current) &&
+                current.Left == _lastTarget.X && current.Top == _lastTarget.Y &&
+                current.Right - current.Left == _lastTarget.Width && current.Bottom - current.Top == _lastTarget.Height)
             {
                 return;
             }
@@ -706,6 +741,8 @@ public sealed partial class TaskbarWindow : Window
         _displayState.Changed -= OnDisplayStateChanged;
         _foregroundWatcher?.Dispose();
         _foregroundWatcher = null;
+        _taskbarChangeWatcher?.Dispose();
+        _taskbarChangeWatcher = null;
         _viewModel.Providers.CollectionChanged -= OnProvidersChanged;
         _acrylicController?.Dispose();
         _acrylicController = null;

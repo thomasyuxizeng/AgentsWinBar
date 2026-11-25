@@ -86,6 +86,73 @@ internal static class WindowZOrder
         SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
     }
 
+    private const long WS_EX_TOPMOST = 0x00000008;
+    private const uint GW_HWNDPREV = 3;
+    private const int DWMWA_CLOAKED = 14;
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct Rect
+    {
+        public int Left;
+        public int Top;
+        public int Right;
+        public int Bottom;
+    }
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetWindow(IntPtr hWnd, uint uCmd);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool IsWindowVisible(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetWindowRect(IntPtr hWnd, out Rect rect);
+
+    [DllImport("dwmapi.dll", PreserveSig = true)]
+    private static extern int DwmGetWindowAttribute(IntPtr hwnd, int attribute, out int value, int size);
+
+    /// <summary>
+    /// <see cref="AssertTopmost"/>, but only when it would change what is on screen (see <see cref="ZOrderCoverage"/>):
+    /// the periodic re-raise of the strip and the overlay then costs a short z-order walk instead of a window move.
+    /// Returns true when the window was raised.
+    /// </summary>
+    public static bool AssertTopmostIfCovered(IntPtr hwnd)
+    {
+        var isTopmost = (GetWindowLongPtr(hwnd, GWL_EXSTYLE).ToInt64() & WS_EX_TOPMOST) != 0;
+        var bounds = TryGetWindowRect(hwnd, out var rect) ? rect : default;
+        if (!ZOrderCoverage.NeedsRaise(isTopmost, bounds, WindowsAbove(hwnd))) return false;
+        AssertTopmost(hwnd);
+        return true;
+    }
+
+    /// <summary>The window's outer rectangle in physical screen pixels (what AppWindow.Position and Size report).</summary>
+    public static bool TryGetWindowRect(IntPtr hwnd, out ScreenRect bounds)
+    {
+        if (GetWindowRect(hwnd, out var rect))
+        {
+            bounds = new ScreenRect(rect.Left, rect.Top, rect.Right, rect.Bottom);
+            return true;
+        }
+        bounds = default;
+        return false;
+    }
+
+    private static IEnumerable<WindowAbove> WindowsAbove(IntPtr hwnd)
+    {
+        for (var above = GetWindow(hwnd, GW_HWNDPREV); above != IntPtr.Zero; above = GetWindow(above, GW_HWNDPREV))
+        {
+            var visible = IsWindowVisible(above);
+            var bounds = visible && TryGetWindowRect(above, out var rect) ? rect : default;
+            var window = above;
+            yield return new WindowAbove(visible, bounds, () => IsCloaked(window));
+        }
+    }
+
+    private static bool IsCloaked(IntPtr hwnd) =>
+        DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, out var cloaked, sizeof(int)) == 0 && cloaked != 0;
+
     /// <summary>
     /// Brings the window to the foreground even when another app owns the foreground.
     /// </summary>

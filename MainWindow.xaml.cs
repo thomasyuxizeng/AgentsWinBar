@@ -336,7 +336,10 @@ public sealed partial class MainWindow : Window
         // Initialize tray icon for this window
         _trayIcon.ForceCreate();
 
-        if (_settingsService.Settings.StartMinimized) HideWindow();
+        // App activated the window (off-screen) at launch. HideWindow() only hides a flyout that is open, so a minimized
+        // start hides it here: otherwise the window stays shown off-screen, rendering and holding its surfaces, until
+        // the flyout is first opened and closed. Same call as the end of the hide animation.
+        if (_settingsService.Settings.StartMinimized) WindowExtensions.Hide(this);
         else ShowWindow();
 
         // Always-on overlay (restores the saved on/off state, and follows later settings changes)
