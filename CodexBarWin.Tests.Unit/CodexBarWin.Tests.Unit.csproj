@@ -89,6 +89,7 @@
     <Compile Include="..\Helpers\CostFormatter.cs" Link="Linked\CostFormatter.cs" />
     <Compile Include="..\Helpers\CostSeriesBuilder.cs" Link="Linked\CostSeriesBuilder.cs" />
     <Compile Include="..\Models\CostData.cs" Link="Linked\CostData.cs" />
+    <Compile Include="..\Services\Native\Cost\*.cs" Link="Linked\NativeCost\%(Filename)%(Extension)" />
     <Compile Include="..\Models\UsageHistorySample.cs" Link="Linked\UsageHistorySample.cs" />
     <Compile Include="..\Helpers\BurndownBuilder.cs" Link="Linked\BurndownBuilder.cs" />
     <Compile Include="..\Services\UsageHistoryStore.cs" Link="Linked\UsageHistoryStore.cs" />
