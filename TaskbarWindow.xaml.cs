@@ -122,17 +122,22 @@ public sealed partial class TaskbarWindow : Window
     private readonly MainViewModel _viewModel;
     private readonly ISessionStateSource _sessionState;
     private readonly IntPtr _hwnd;
-    private readonly DispatcherTimer _keepOnTopTimer;
+    private readonly object _timerLock = new();
+    private readonly object _stateLock = new();
+    private System.Threading.Timer? _pollTimer;
+    private bool _pollEnabled;
+    private int _pollBusy;
     private int _tickCount;
     private int _lockPollCount;
     private TaskbarChangeWatcher? _taskbarChangeWatcher;
-    private bool _taskbarBoundsStale = true;
+    private volatile bool _taskbarWatcherActive;
+    private volatile bool _taskbarBoundsStale = true;
     private (int Left, int Top, int Right, int Bottom, WindowZOrder.TaskbarEdge Edge)? _taskbarBounds;
     private bool _roundedRightEnd;
-    private bool _hiddenForFullscreen;
-    private bool _wasLocked;
+    private volatile bool _hiddenForFullscreen;
+    private volatile bool _wasLocked;
     private bool _shown;
-    private bool _closed;
+    private volatile bool _closed;
     private readonly IDisplayStateSource _displayState;
     private readonly ResetPlaybackGate _resetGate = new();
     // Owned here and handed to every bar a rebuild creates: which resets already played and whether one is playing now
@@ -188,46 +193,6 @@ public sealed partial class TaskbarWindow : Window
         _displayState.Changed += OnDisplayStateChanged;
         Rebuild();
 
-        // The taskbar re-raises itself when clicked, so keep reasserting our position and z-order.
-        _keepOnTopTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
-        _keepOnTopTimer.Tick += (_, _) =>
-        {
-            if (_closed || (!AppWindow.IsVisible && !_hiddenForFullscreen))
-            {
-                _keepOnTopTimer.Stop();
-                return;
-            }
-
-            // Unlock events don't reliably reach the app, so a locked screen slows the timer down instead of stopping it
-            var pollLock = _wasLocked || ++_lockPollCount % LockPollEveryTicks == 0;
-            if (pollLock && _sessionState.IsLocked)
-            {
-                _wasLocked = true;
-                SyncResetGate();
-                SetTickInterval(LockedTick);
-                return;
-            }
-
-            if (_wasLocked)
-            {
-                ResumeAfterLock();
-                return;
-            }
-
-            UpdateFullscreenVisibility();
-            if (_hiddenForFullscreen) return;
-
-            // Time keeps passing between data refreshes, so refresh the time layer about every 30s
-            if (++_tickCount % 15 == 0)
-            {
-                Rebuild();
-            }
-            if (_tickCount % TaskbarPollEveryTicks == 0 || _taskbarChangeWatcher is not { IsActive: true }) _taskbarBoundsStale = true;
-
-            Reposition();
-            WindowZOrder.AssertTopmostIfCovered(_hwnd);
-        };
-
         App.Windows.Add(this);
         App.ApplyTheme();
         Closed += OnClosed;
@@ -246,6 +211,7 @@ public sealed partial class TaskbarWindow : Window
         WindowZOrder.RestoreForeground(previousForeground);
 
         _taskbarChangeWatcher ??= new TaskbarChangeWatcher(_hwnd, () => _taskbarBoundsStale = true);
+        _taskbarWatcherActive = _taskbarChangeWatcher.IsActive;
         _taskbarBoundsStale = true;
         Reposition();
         WindowZOrder.AssertTopmost(_hwnd);
@@ -260,7 +226,7 @@ public sealed partial class TaskbarWindow : Window
             }
 
             UpdateFullscreenVisibility();
-            if (!_hiddenForFullscreen && !_sessionState.IsLocked && AppWindow.IsVisible)
+            if (!_hiddenForFullscreen && !_sessionState.IsLocked && WindowZOrder.IsWindowVisible(_hwnd))
             {
                 _taskbarBoundsStale = true;
                 Reposition();
@@ -285,7 +251,7 @@ public sealed partial class TaskbarWindow : Window
     /// switched on late does not hold back (and later replay) resets that were already on the bars.
     /// </summary>
     private bool IsOnScreen() =>
-        !_shown || (!_closed && AppWindow.IsVisible && !_hiddenForFullscreen && !_sessionState.IsLocked && _displayState.IsOn);
+        !_shown || (!_closed && WindowZOrder.IsWindowVisible(_hwnd) && !_hiddenForFullscreen && !_sessionState.IsLocked && _displayState.IsOn);
 
     /// <summary>
     /// Tells the reset gate whether the strip is on screen. Coming back with resets held releases them after the gate's
@@ -333,8 +299,137 @@ public sealed partial class TaskbarWindow : Window
     private void SetTickInterval(TimeSpan interval)
     {
         if (_closed) return;
-        if (_keepOnTopTimer.Interval != interval) _keepOnTopTimer.Interval = interval;
-        if (!_keepOnTopTimer.IsEnabled) _keepOnTopTimer.Start();
+        lock (_timerLock)
+        {
+            if (_closed) return;
+            _pollEnabled = true;
+            _pollTimer ??= new System.Threading.Timer(OnPollTimerCallback, null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+            _pollTimer.Change(interval, Timeout.InfiniteTimeSpan);
+        }
+    }
+
+    private void ReschedulePoll(TimeSpan interval)
+    {
+        lock (_timerLock)
+        {
+            if (_closed || !_pollEnabled || _pollTimer == null) return;
+            _pollTimer.Change(interval, Timeout.InfiniteTimeSpan);
+        }
+    }
+
+    private void OnPollTimerCallback(object? _)
+    {
+        if (Interlocked.CompareExchange(ref _pollBusy, 1, 0) != 0) return;
+        try
+        {
+            if (_closed) return;
+            if (!WindowZOrder.IsWindowVisible(_hwnd) && !_hiddenForFullscreen)
+            {
+                lock (_timerLock) _pollEnabled = false;
+                return;
+            }
+
+            var wasLocked = _wasLocked;
+            var pollLock = wasLocked || (Interlocked.Increment(ref _lockPollCount) % LockPollEveryTicks == 0);
+            if (pollLock && _sessionState.IsLocked)
+            {
+                if (!wasLocked)
+                {
+                    _wasLocked = true;
+                    DispatcherQueue.TryEnqueue(() =>
+                    {
+                        try { if (!_closed) SyncResetGate(); }
+                        catch { }
+                    });
+                }
+                ReschedulePoll(LockedTick);
+                return;
+            }
+
+            if (wasLocked)
+            {
+                DispatcherQueue.TryEnqueue(() =>
+                {
+                    try { ResumeAfterLock(); }
+                    catch { }
+                });
+                ReschedulePoll(ActiveTick);
+                return;
+            }
+
+            var fullscreen = WindowZOrder.IsFullscreenAppActive();
+            if (fullscreen != _hiddenForFullscreen)
+            {
+                DispatcherQueue.TryEnqueue(() =>
+                {
+                    try { if (!_closed && !_sessionState.IsLocked) UpdateFullscreenVisibility(); }
+                    catch { }
+                });
+                ReschedulePoll(fullscreen ? HiddenTick : ActiveTick);
+                return;
+            }
+
+            if (fullscreen)
+            {
+                ReschedulePoll(HiddenTick);
+                return;
+            }
+
+            var tick = Interlocked.Increment(ref _tickCount);
+            var timeTick = tick % 15 == 0;
+            var pollTaskbar = tick % TaskbarPollEveryTicks == 0 || !_taskbarWatcherActive || _taskbarBoundsStale;
+
+            var needsUiWork = timeTick || pollTaskbar;
+            if (!needsUiWork)
+            {
+                double lastScale;
+                RectInt32 lastTarget;
+                bool hasTarget;
+                lock (_stateLock)
+                {
+                    lastScale = _lastScale;
+                    lastTarget = _lastTarget;
+                    hasTarget = _hasTarget;
+                }
+
+                if (!hasTarget || WindowZOrder.GetScale(_hwnd) != lastScale ||
+                    !WindowZOrder.TryGetWindowRect(_hwnd, out var rect) ||
+                    rect.Left != lastTarget.X || rect.Top != lastTarget.Y ||
+                    rect.Right - rect.Left != lastTarget.Width || rect.Bottom - rect.Top != lastTarget.Height)
+                {
+                    needsUiWork = true;
+                }
+            }
+
+            var needsRaise = !needsUiWork && WindowZOrder.NeedsRaise(_hwnd);
+            if (needsUiWork || needsRaise)
+            {
+                DispatcherQueue.TryEnqueue(() =>
+                {
+                    try { RunActiveMaintenance(timeTick, pollTaskbar); }
+                    catch { }
+                });
+            }
+
+            ReschedulePoll(ActiveTick);
+        }
+        catch { ReschedulePoll(ActiveTick); }
+        finally { Volatile.Write(ref _pollBusy, 0); }
+    }
+
+    private void RunActiveMaintenance(bool timeTick, bool pollTaskbar)
+    {
+        if (_closed || _wasLocked || _hiddenForFullscreen || !WindowZOrder.IsWindowVisible(_hwnd)) return;
+        if (timeTick)
+        {
+            Rebuild();
+        }
+        if (pollTaskbar)
+        {
+            _taskbarBoundsStale = true;
+        }
+        Reposition();
+        WindowZOrder.AssertTopmostIfCovered(_hwnd);
     }
 
     /// <summary>
@@ -343,7 +438,7 @@ public sealed partial class TaskbarWindow : Window
     private void ResumeAfterLock()
     {
         if (_closed || _sessionState.IsLocked) return;
-        if (!_hiddenForFullscreen && !AppWindow.IsVisible) return;   // hidden on purpose; ShowStrip restarts the timer
+        if (!_hiddenForFullscreen && !WindowZOrder.IsWindowVisible(_hwnd)) return;   // hidden on purpose; ShowStrip restarts the timer
 
         _wasLocked = false;
         UpdateFullscreenVisibility();
@@ -353,7 +448,7 @@ public sealed partial class TaskbarWindow : Window
             return;
         }
 
-        _tickCount = 0;
+        Interlocked.Exchange(ref _tickCount, 0);
         _taskbarBoundsStale = true;
         Rebuild();
         Reposition();
@@ -381,7 +476,7 @@ public sealed partial class TaskbarWindow : Window
             AppWindow.Show(false);
             if (!_closed && !_sessionState.IsLocked)
             {
-                _tickCount = 0;
+                Interlocked.Exchange(ref _tickCount, 0);
                 _taskbarBoundsStale = true;
                 Rebuild();
                 Reposition();
@@ -397,8 +492,11 @@ public sealed partial class TaskbarWindow : Window
         {
             try
             {
-                if (_closed || !_keepOnTopTimer.IsEnabled) return;
+                bool enabled;
+                lock (_timerLock) enabled = _pollEnabled;
+                if (_closed || !enabled) return;
                 _wasLocked = true;
+                SyncResetGate();
                 SetTickInterval(LockedTick);
             }
             catch { }
@@ -469,61 +567,11 @@ public sealed partial class TaskbarWindow : Window
         DispatcherQueue.TryEnqueue(Rebuild);
     }
 
-    internal static int RoundTimePercent(double? elapsed)
-    {
-        if (elapsed is not { } value || !double.IsFinite(value) || value < 0)
-        {
-            return -1;
-        }
-        return (int)Math.Clamp(Math.Round(value, MidpointRounding.AwayFromZero), 0, 100);
-    }
-
-    private static int WarningBrushKind(UsageWindow? window) => window?.Percent switch
-    {
-        >= UsageThresholds.Critical => 2,
-        >= UsageThresholds.Warning => 1,
-        _ => 0
-    };
+    internal static int RoundTimePercent(double? elapsed) => WidgetSignature.RoundTimePercent(elapsed);
 
     internal static string ComputeSignature(IEnumerable<UsageData> providers, bool isLight, DateTime nowUtc,
-        Func<string, DateTime?, DateTime?>? resetStamp = null)
-    {
-        DateTime? Stamp(string bar, DateTime? detectedAtUtc) => resetStamp == null ? detectedAtUtc : resetStamp(bar, detectedAtUtc);
-        var sb = new System.Text.StringBuilder();
-        sb.Append(isLight ? 'L' : 'D');
-        foreach (var data in providers)
-        {
-            var bars = WidgetBarSelector.Pick(data, nowUtc);
-            var first = bars.ElementAtOrDefault(0);
-            var second = bars.ElementAtOrDefault(1);
-            var firstText = Cell(first?.Window, data.IsLoading);
-            var secondText = Cell(second?.Window, data.IsLoading);
-
-            sb.Append('|').Append(data.Provider)
-              .Append(';').Append(data.IsLoading)
-              .Append(';').Append(data.ServiceStatus?.Indicator)
-              .Append(';').Append(StatusDetailCaption.Tooltip(data.ServiceStatus, nowUtc))
-              .Append(';').Append(first?.Window.Percent ?? 0)
-              .Append(';').Append(firstText)
-              .Append(';').Append(RoundTimePercent(first?.Window.ElapsedPercent))
-              .Append(';').Append(first?.TooltipText)
-              .Append(';').Append(first?.Accent)
-              .Append(';').Append(first?.Window.ResetFromUsedPercent)
-              .Append(';').Append(Stamp(data.Provider + "|first", first?.Window.ResetDetectedAtUtc)?.Ticks)
-              .Append(';').Append(BarLabel(data, first))
-              .Append(';').Append(WarningBrushKind(first?.Window))
-              .Append(';').Append(second?.Window.Percent ?? 0)
-              .Append(';').Append(secondText)
-              .Append(';').Append(RoundTimePercent(second?.Window.ElapsedPercent))
-              .Append(';').Append(second?.TooltipText)
-              .Append(';').Append(second?.Accent)
-              .Append(';').Append(second?.Window.ResetFromUsedPercent)
-              .Append(';').Append(Stamp(data.Provider + "|second", second?.Window.ResetDetectedAtUtc)?.Ticks)
-              .Append(';').Append(BarLabel(data, second))
-              .Append(';').Append(WarningBrushKind(second?.Window));
-        }
-        return sb.ToString();
-    }
+        Func<string, DateTime?, DateTime?>? resetStamp = null) =>
+        WidgetSignature.ComputeTaskbarSignature(providers, isLight, nowUtc, resetStamp);
 
     /// <summary>
     /// A rebuild updates or recreates the bars, which would cut a running reset animation short: while one of this window's bars
@@ -567,7 +615,7 @@ public sealed partial class TaskbarWindow : Window
 
         // Always wide enough for "100%" (numbers are right-aligned), so a value reaching 100% or dropping back
         // after a reset does not change the strip's width
-        var numberColumn = new GridLength(Math.Ceiling(OverlayWindow.MeasureNumber("100%")) + 1);
+        var numberColumn = new GridLength(Math.Ceiling(OverlayWindow.MeasureNumber("100%", WindowZOrder.GetScale(_hwnd))) + 1);
 
         var next = new List<TaskbarItem>(_viewModel.Providers.Count);
         // Same providers in the same order: the bars on the strip are updated in place and keep their icons
@@ -680,10 +728,13 @@ public sealed partial class TaskbarWindow : Window
             return;
         }
 
-        _lastScale = scale;
         _lastTaskbarBounds = bar;
         _lastScreenBounds = screen;
         _lastRepositionSignature = _lastSignature;
+        lock (_stateLock)
+        {
+            _lastScale = scale;
+        }
 
         var count = Math.Max(1, Items.Count);
 
@@ -732,8 +783,11 @@ public sealed partial class TaskbarWindow : Window
             target = new RectInt32(screen.X, screen.Y + screen.Height - height, width, height);
         }
 
-        _lastTarget = target;
-        _hasTarget = true;
+        lock (_stateLock)
+        {
+            _lastTarget = target;
+            _hasTarget = true;
+        }
 
         var currentPos = AppWindow.Position;
         var currentSize = AppWindow.Size;
@@ -781,7 +835,12 @@ public sealed partial class TaskbarWindow : Window
     private void OnClosed(object sender, WindowEventArgs args)
     {
         _closed = true;
-        _keepOnTopTimer.Stop();
+        lock (_timerLock)
+        {
+            _pollEnabled = false;
+            _pollTimer?.Dispose();
+            _pollTimer = null;
+        }
         _rebuildHold?.Stop();
         _releaseTimer?.Stop();
         _sessionState.Locked -= OnSessionLocked;

@@ -22,6 +22,9 @@ public static class ZOrderCoverage
     /// <summary>Past this many windows above ours, raise without looking further (a cheap bound on the walk).</summary>
     public const int MaxWindowsAbove = 256;
 
+    public static bool OverlapsVisible(bool isVisible, ScreenRect aboveBounds, ScreenRect ownBounds) =>
+        isVisible && aboveBounds.Intersects(ownBounds);
+
     public static bool NeedsRaise(bool isTopmost, ScreenRect bounds, IEnumerable<WindowAbove> windowsAbove)
     {
         if (!isTopmost || bounds.IsEmpty) return true;
@@ -29,7 +32,7 @@ public static class ZOrderCoverage
         foreach (var above in windowsAbove)
         {
             if (++count > MaxWindowsAbove) return true;
-            if (above.IsVisible && above.Bounds.Intersects(bounds) && !above.IsCloaked()) return true;
+            if (OverlapsVisible(above.IsVisible, above.Bounds, bounds) && !above.IsCloaked()) return true;
         }
         return false;
     }

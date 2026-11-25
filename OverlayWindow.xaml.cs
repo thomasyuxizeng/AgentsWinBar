@@ -78,13 +78,17 @@ public sealed partial class OverlayWindow : Window
     private readonly ISettingsService _settingsService;
     private readonly ISessionStateSource _sessionState;
     private readonly IntPtr _hwnd;
-    private readonly DispatcherTimer _topmostTimer;
+    private readonly object _timerLock = new();
+    private readonly object _stateLock = new();
+    private System.Threading.Timer? _pollTimer;
+    private bool _pollEnabled;
+    private int _pollBusy;
     private int _tickCount;
     private int _lockPollCount;
-    private bool _hiddenForFullscreen;
-    private bool _wasLocked;
+    private volatile bool _hiddenForFullscreen;
+    private volatile bool _wasLocked;
     private bool _shown;
-    private bool _closed;
+    private volatile bool _closed;
     private readonly IDisplayStateSource _displayState;
     private readonly ResetPlaybackGate _resetGate = new();
     // Owned here and handed to every row a rebuild creates: which resets already played and whether one is playing now
@@ -133,46 +137,6 @@ public sealed partial class OverlayWindow : Window
         Rebuild();
         PositionWindow();
 
-        // Reassert topmost periodically as a safety net; the foreground watcher handles the immediate cases.
-        _topmostTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
-        _topmostTimer.Tick += (_, _) =>
-        {
-            if (_closed || (!AppWindow.IsVisible && !_hiddenForFullscreen))
-            {
-                _topmostTimer.Stop();
-                return;
-            }
-
-            // Unlock events don't reliably reach the app, so a locked screen slows the timer down instead of stopping it
-            var pollLock = _wasLocked || ++_lockPollCount % LockPollEveryTicks == 0;
-            if (pollLock && _sessionState.IsLocked)
-            {
-                _wasLocked = true;
-                SyncResetGate();
-                SetTickInterval(LockedTick);
-                return;
-            }
-
-            if (_wasLocked)
-            {
-                ResumeAfterLock();
-                return;
-            }
-
-            UpdateFullscreenVisibility();
-            if (_hiddenForFullscreen) return;
-
-            // Time keeps passing between data refreshes, so refresh the time layer about every 30s
-            if (++_tickCount % 15 == 0)
-            {
-                Rebuild();
-                ClampToScreen();   // a monitor change can strand the overlay off-screen, and Rebuild skips it for an unchanged signature
-            }
-
-            ApplySize();   // follows display scale changes (e.g. remote desktop)
-            WindowZOrder.AssertTopmostIfCovered(_hwnd);
-        };
-
         App.Windows.Add(this);
         App.ApplyTheme();
         Closed += OnClosed;
@@ -202,7 +166,7 @@ public sealed partial class OverlayWindow : Window
             }
 
             UpdateFullscreenVisibility();
-            if (!_hiddenForFullscreen && !_sessionState.IsLocked && AppWindow.IsVisible)
+            if (!_hiddenForFullscreen && !_sessionState.IsLocked && WindowZOrder.IsWindowVisible(_hwnd))
             {
                 WindowZOrder.AssertTopmostIfCovered(_hwnd);
             }
@@ -225,7 +189,7 @@ public sealed partial class OverlayWindow : Window
     /// switched on late does not hold back (and later replay) resets that were already on the bars.
     /// </summary>
     private bool IsOnScreen() =>
-        !_shown || (!_closed && AppWindow.IsVisible && !_hiddenForFullscreen && !_sessionState.IsLocked && _displayState.IsOn);
+        !_shown || (!_closed && WindowZOrder.IsWindowVisible(_hwnd) && !_hiddenForFullscreen && !_sessionState.IsLocked && _displayState.IsOn);
 
     /// <summary>
     /// Tells the reset gate whether the overlay is on screen. Coming back with resets held releases them after the gate's
@@ -273,8 +237,132 @@ public sealed partial class OverlayWindow : Window
     private void SetTickInterval(TimeSpan interval)
     {
         if (_closed) return;
-        if (_topmostTimer.Interval != interval) _topmostTimer.Interval = interval;
-        if (!_topmostTimer.IsEnabled) _topmostTimer.Start();
+        lock (_timerLock)
+        {
+            if (_closed) return;
+            _pollEnabled = true;
+            _pollTimer ??= new System.Threading.Timer(OnPollTimerCallback, null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+            _pollTimer.Change(interval, Timeout.InfiniteTimeSpan);
+        }
+    }
+
+    private void ReschedulePoll(TimeSpan interval)
+    {
+        lock (_timerLock)
+        {
+            if (_closed || !_pollEnabled || _pollTimer == null) return;
+            _pollTimer.Change(interval, Timeout.InfiniteTimeSpan);
+        }
+    }
+
+    private void OnPollTimerCallback(object? _)
+    {
+        if (Interlocked.CompareExchange(ref _pollBusy, 1, 0) != 0) return;
+        try
+        {
+            if (_closed) return;
+            if (!WindowZOrder.IsWindowVisible(_hwnd) && !_hiddenForFullscreen)
+            {
+                lock (_timerLock) _pollEnabled = false;
+                return;
+            }
+
+            var wasLocked = _wasLocked;
+            var pollLock = wasLocked || (Interlocked.Increment(ref _lockPollCount) % LockPollEveryTicks == 0);
+            if (pollLock && _sessionState.IsLocked)
+            {
+                if (!wasLocked)
+                {
+                    _wasLocked = true;
+                    DispatcherQueue.TryEnqueue(() =>
+                    {
+                        try { if (!_closed) SyncResetGate(); }
+                        catch { }
+                    });
+                }
+                ReschedulePoll(LockedTick);
+                return;
+            }
+
+            if (wasLocked)
+            {
+                DispatcherQueue.TryEnqueue(() =>
+                {
+                    try { ResumeAfterLock(); }
+                    catch { }
+                });
+                ReschedulePoll(ActiveTick);
+                return;
+            }
+
+            var fullscreen = WindowZOrder.IsFullscreenAppActive();
+            if (fullscreen != _hiddenForFullscreen)
+            {
+                DispatcherQueue.TryEnqueue(() =>
+                {
+                    try { if (!_closed && !_sessionState.IsLocked) UpdateFullscreenVisibility(); }
+                    catch { }
+                });
+                ReschedulePoll(fullscreen ? HiddenTick : ActiveTick);
+                return;
+            }
+
+            if (fullscreen)
+            {
+                ReschedulePoll(HiddenTick);
+                return;
+            }
+
+            var tick = Interlocked.Increment(ref _tickCount);
+            var timeTick = tick % 15 == 0;
+
+            var needsUiWork = timeTick;
+            if (!needsUiWork)
+            {
+                double lastScale;
+                SizeInt32 lastTargetSize;
+                bool hasTargetSize;
+                lock (_stateLock)
+                {
+                    lastScale = _lastScale;
+                    lastTargetSize = _lastTargetSize;
+                    hasTargetSize = _hasTargetSize;
+                }
+
+                if (!hasTargetSize || WindowZOrder.GetScale(_hwnd) != lastScale ||
+                    !WindowZOrder.TryGetWindowRect(_hwnd, out var rect) ||
+                    rect.Right - rect.Left != lastTargetSize.Width || rect.Bottom - rect.Top != lastTargetSize.Height)
+                {
+                    needsUiWork = true;
+                }
+            }
+
+            var needsRaise = !needsUiWork && WindowZOrder.NeedsRaise(_hwnd);
+            if (needsUiWork || needsRaise)
+            {
+                DispatcherQueue.TryEnqueue(() =>
+                {
+                    try { RunActiveMaintenance(timeTick); }
+                    catch { }
+                });
+            }
+
+            ReschedulePoll(ActiveTick);
+        }
+        catch { ReschedulePoll(ActiveTick); }
+        finally { Volatile.Write(ref _pollBusy, 0); }
+    }
+
+    private void RunActiveMaintenance(bool timeTick)
+    {
+        if (_closed || _wasLocked || _hiddenForFullscreen || !WindowZOrder.IsWindowVisible(_hwnd)) return;
+        if (timeTick)
+        {
+            Rebuild();
+            ClampToScreen();
+        }
+        ApplySize();
+        WindowZOrder.AssertTopmostIfCovered(_hwnd);
     }
 
     /// <summary>
@@ -283,7 +371,7 @@ public sealed partial class OverlayWindow : Window
     private void ResumeAfterLock()
     {
         if (_closed || _sessionState.IsLocked) return;
-        if (!_hiddenForFullscreen && !AppWindow.IsVisible) return;   // hidden on purpose; ShowOverlay restarts the timer
+        if (!_hiddenForFullscreen && !WindowZOrder.IsWindowVisible(_hwnd)) return;   // hidden on purpose; ShowOverlay restarts the timer
 
         _wasLocked = false;
         UpdateFullscreenVisibility();
@@ -293,7 +381,7 @@ public sealed partial class OverlayWindow : Window
             return;
         }
 
-        _tickCount = 0;
+        Interlocked.Exchange(ref _tickCount, 0);
         Rebuild();
         ApplySize();
         WindowZOrder.AssertTopmost(_hwnd);
@@ -320,7 +408,7 @@ public sealed partial class OverlayWindow : Window
             AppWindow.Show(false);
             if (!_closed && !_sessionState.IsLocked)
             {
-                _tickCount = 0;
+                Interlocked.Exchange(ref _tickCount, 0);
                 Rebuild();
                 ApplySize();
                 WindowZOrder.AssertTopmost(_hwnd);
@@ -335,8 +423,11 @@ public sealed partial class OverlayWindow : Window
         {
             try
             {
-                if (_closed || !_topmostTimer.IsEnabled) return;
+                bool enabled;
+                lock (_timerLock) enabled = _pollEnabled;
+                if (_closed || !enabled) return;
                 _wasLocked = true;
+                SyncResetGate();
                 SetTickInterval(LockedTick);
             }
             catch { }
@@ -407,53 +498,11 @@ public sealed partial class OverlayWindow : Window
         DispatcherQueue.TryEnqueue(Rebuild);
     }
 
-    internal static int RoundTimePercent(double? elapsed)
-    {
-        if (elapsed is not { } value || !double.IsFinite(value) || value < 0)
-        {
-            return -1;
-        }
-        return (int)Math.Clamp(Math.Round(value, MidpointRounding.AwayFromZero), 0, 100);
-    }
+    internal static int RoundTimePercent(double? elapsed) => WidgetSignature.RoundTimePercent(elapsed);
 
     internal static string ComputeSignature(IEnumerable<UsageData> providers, DateTime nowUtc,
-        Func<string, DateTime?, DateTime?>? resetStamp = null)
-    {
-        DateTime? Stamp(string bar, DateTime? detectedAtUtc) => resetStamp == null ? detectedAtUtc : resetStamp(bar, detectedAtUtc);
-        var sb = new System.Text.StringBuilder();
-        foreach (var data in providers)
-        {
-            var bars = WidgetBarSelector.Pick(data, nowUtc);
-            var first = bars.ElementAtOrDefault(0);
-            var second = bars.ElementAtOrDefault(1);
-
-            (double Percent, string Text) Cell(WidgetBar? bar) =>
-                bar != null ? (bar.Window.Percent, bar.Window.PercentText) : (0, data.IsLoading ? "…" : "–");
-
-            var firstCell = Cell(first);
-            var secondCell = Cell(second);
-
-            sb.Append('|').Append(data.Provider)
-              .Append(';').Append(data.IsLoading)
-              .Append(';').Append(data.ServiceStatus?.Indicator)
-              .Append(';').Append(StatusDetailCaption.Tooltip(data.ServiceStatus, nowUtc))
-              .Append(';').Append(firstCell.Percent)
-              .Append(';').Append(firstCell.Text)
-              .Append(';').Append(RoundTimePercent(first?.Window.ElapsedPercent))
-              .Append(';').Append(first?.TooltipText)
-              .Append(';').Append(first?.Accent)
-              .Append(';').Append(first?.Window.ResetFromUsedPercent)
-              .Append(';').Append(Stamp(data.Provider + "|first", first?.Window.ResetDetectedAtUtc)?.Ticks)
-              .Append(';').Append(secondCell.Percent)
-              .Append(';').Append(secondCell.Text)
-              .Append(';').Append(RoundTimePercent(second?.Window.ElapsedPercent))
-              .Append(';').Append(second?.TooltipText)
-              .Append(';').Append(second?.Accent)
-              .Append(';').Append(second?.Window.ResetFromUsedPercent)
-              .Append(';').Append(Stamp(data.Provider + "|second", second?.Window.ResetDetectedAtUtc)?.Ticks);
-        }
-        return sb.ToString();
-    }
+        Func<string, DateTime?, DateTime?>? resetStamp = null) =>
+        WidgetSignature.ComputeOverlaySignature(providers, nowUtc, resetStamp);
 
     /// <summary>
     /// A rebuild updates or recreates the rows, which would cut a running reset animation short: while one of this window's bars
@@ -500,9 +549,10 @@ public sealed partial class OverlayWindow : Window
         // right-aligned, so the "%" signs line up and the gap to the bar is NumberGapDip next to a 3-digit
         // value and one digit wider next to a 2-digit one. Only a text wider than "100%" (never produced by
         // the percent formatting) could still widen a column.
-        var widest = MeasureNumber("100%");
-        var sessionText = rows.Select(r => MeasureNumber(r.SessionText)).DefaultIfEmpty(0).Max();
-        var weeklyText = rows.Select(r => MeasureNumber(r.WeeklyText)).DefaultIfEmpty(0).Max();
+        var scale = WindowZOrder.GetScale(_hwnd);
+        var widest = MeasureNumber("100%", scale);
+        var sessionText = rows.Select(r => MeasureNumber(r.SessionText, scale)).DefaultIfEmpty(0).Max();
+        var weeklyText = rows.Select(r => MeasureNumber(r.WeeklyText, scale)).DefaultIfEmpty(0).Max();
         var sessionWidth = Math.Ceiling(Math.Max(widest, sessionText)) + 1 + NumberGapDip;
         var weeklyWidth = Math.Ceiling(Math.Max(widest, weeklyText)) + 1 + NumberGapDip;
 
@@ -523,11 +573,31 @@ public sealed partial class OverlayWindow : Window
         ClampToScreen();
     }
 
-    internal static double MeasureNumber(string text)
+    [ThreadStatic]
+    private static Dictionary<(double Scale, string Text), double>? _measuredNumberCache;
+    [ThreadStatic]
+    private static Microsoft.UI.Xaml.Controls.TextBlock? _measureProbe;
+
+    internal static double MeasureNumber(string text, double scale = 1.0)
     {
-        var block = new Microsoft.UI.Xaml.Controls.TextBlock { Text = text, FontSize = 11 };
-        block.Measure(new Windows.Foundation.Size(double.PositiveInfinity, double.PositiveInfinity));
-        return block.DesiredSize.Width;
+        var cache = _measuredNumberCache ??= new Dictionary<(double Scale, string Text), double>();
+        var key = (scale, text);
+        if (cache.TryGetValue(key, out var cached))
+        {
+            return cached;
+        }
+
+        _measureProbe ??= new Microsoft.UI.Xaml.Controls.TextBlock { FontSize = 11 };
+        _measureProbe.Text = text;
+        _measureProbe.Measure(new Windows.Foundation.Size(double.PositiveInfinity, double.PositiveInfinity));
+        var width = _measureProbe.DesiredSize.Width;
+
+        if (cache.Count >= 256)
+        {
+            cache.Clear();
+        }
+        cache[key] = width;
+        return width;
     }
 
     private static OverlayRow ToRow(UsageData data, DateTime nowUtc, Func<string, DateTime?, DateTime?> resetStamp)
@@ -590,7 +660,10 @@ public sealed partial class OverlayWindow : Window
             return;
         }
 
-        _lastScale = scale;
+        lock (_stateLock)
+        {
+            _lastScale = scale;
+        }
         _lastApplySizeSignature = _lastSignature;
 
         var rows = Math.Max(1, Rows.Count);
@@ -602,8 +675,11 @@ public sealed partial class OverlayWindow : Window
         var heightDip = Math.Max(rows * RowHeightDip + VerticalPaddingDip, measured.Height);
 
         var target = new SizeInt32((int)Math.Ceiling(widthDip * scale), (int)Math.Ceiling(heightDip * scale));
-        _lastTargetSize = target;
-        _hasTargetSize = true;
+        lock (_stateLock)
+        {
+            _lastTargetSize = target;
+            _hasTargetSize = true;
+        }
 
         var currentSize = AppWindow.Size;
         if (currentSize.Width != target.Width || currentSize.Height != target.Height)
@@ -692,7 +768,12 @@ public sealed partial class OverlayWindow : Window
     private void OnClosed(object sender, WindowEventArgs args)
     {
         _closed = true;
-        _topmostTimer.Stop();
+        lock (_timerLock)
+        {
+            _pollEnabled = false;
+            _pollTimer?.Dispose();
+            _pollTimer = null;
+        }
         _rebuildHold?.Stop();
         _releaseTimer?.Stop();
         _sessionState.Locked -= OnSessionLocked;

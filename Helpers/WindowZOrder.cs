@@ -102,9 +102,9 @@ internal static class WindowZOrder
     [DllImport("user32.dll")]
     private static extern IntPtr GetWindow(IntPtr hWnd, uint uCmd);
 
-    [DllImport("user32.dll")]
+    [DllImport("user32.dll", EntryPoint = "IsWindowVisible")]
     [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool IsWindowVisible(IntPtr hWnd);
+    private static extern bool NativeIsWindowVisible(IntPtr hWnd);
 
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
@@ -113,6 +113,29 @@ internal static class WindowZOrder
     [DllImport("dwmapi.dll", PreserveSig = true)]
     private static extern int DwmGetWindowAttribute(IntPtr hwnd, int attribute, out int value, int size);
 
+    /// <summary>Plain Win32 visibility query avoiding WinRT AppWindow.IsVisible COM calls.</summary>
+    public static bool IsWindowVisible(IntPtr hwnd) => hwnd != IntPtr.Zero && NativeIsWindowVisible(hwnd);
+
+    /// <summary>
+    /// Zero-allocation z-order check for whether <paramref name="hwnd"/> needs to be raised above overlapping visible
+    /// uncloaked windows or lost its topmost flag. Safe to call from a background polling thread.
+    /// </summary>
+    public static bool NeedsRaise(IntPtr hwnd)
+    {
+        var isTopmost = (GetWindowLongPtr(hwnd, GWL_EXSTYLE).ToInt64() & WS_EX_TOPMOST) != 0;
+        if (!isTopmost || !TryGetWindowRect(hwnd, out var bounds) || bounds.IsEmpty) return true;
+
+        var count = 0;
+        for (var above = GetWindow(hwnd, GW_HWNDPREV); above != IntPtr.Zero; above = GetWindow(above, GW_HWNDPREV))
+        {
+            if (++count > ZOrderCoverage.MaxWindowsAbove) return true;
+            if (!NativeIsWindowVisible(above)) continue;
+            if (!TryGetWindowRect(above, out var aboveBounds)) continue;
+            if (ZOrderCoverage.OverlapsVisible(true, aboveBounds, bounds) && !IsCloaked(above)) return true;
+        }
+        return false;
+    }
+
     /// <summary>
     /// <see cref="AssertTopmost"/>, but only when it would change what is on screen (see <see cref="ZOrderCoverage"/>):
     /// the periodic re-raise of the strip and the overlay then costs a short z-order walk instead of a window move.
@@ -120,9 +143,7 @@ internal static class WindowZOrder
     /// </summary>
     public static bool AssertTopmostIfCovered(IntPtr hwnd)
     {
-        var isTopmost = (GetWindowLongPtr(hwnd, GWL_EXSTYLE).ToInt64() & WS_EX_TOPMOST) != 0;
-        var bounds = TryGetWindowRect(hwnd, out var rect) ? rect : default;
-        if (!ZOrderCoverage.NeedsRaise(isTopmost, bounds, WindowsAbove(hwnd))) return false;
+        if (!NeedsRaise(hwnd)) return false;
         AssertTopmost(hwnd);
         return true;
     }
@@ -137,17 +158,6 @@ internal static class WindowZOrder
         }
         bounds = default;
         return false;
-    }
-
-    private static IEnumerable<WindowAbove> WindowsAbove(IntPtr hwnd)
-    {
-        for (var above = GetWindow(hwnd, GW_HWNDPREV); above != IntPtr.Zero; above = GetWindow(above, GW_HWNDPREV))
-        {
-            var visible = IsWindowVisible(above);
-            var bounds = visible && TryGetWindowRect(above, out var rect) ? rect : default;
-            var window = above;
-            yield return new WindowAbove(visible, bounds, () => IsCloaked(window));
-        }
     }
 
     private static bool IsCloaked(IntPtr hwnd) =>
