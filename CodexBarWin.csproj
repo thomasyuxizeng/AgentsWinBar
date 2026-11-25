@@ -32,6 +32,14 @@
     <None Remove="CodexBarWin.Tests.Unit\**" />
   </ItemGroup>
 
+  <!-- Exclude standalone tool projects (e.g. tools\NativeProbe) from the app build -->
+  <ItemGroup>
+    <Compile Remove="tools\**" />
+    <Content Remove="tools\**" />
+    <EmbeddedResource Remove="tools\**" />
+    <None Remove="tools\**" />
+  </ItemGroup>
+
   <!-- Version Management (MinVer) -->
   <PropertyGroup>
     <MinVerTagPrefix>v</MinVerTagPrefix>
