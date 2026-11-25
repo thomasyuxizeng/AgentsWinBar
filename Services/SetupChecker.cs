@@ -12,21 +12,33 @@ public partial class SetupChecker : ISetupChecker
     private readonly IWslService _wslService;
     private readonly ILogger<SetupChecker> _logger;
     private readonly ISetupMemoService? _memo;
+    private readonly ISettingsService? _settings;
 
     public static readonly Version MinCodexBarVersion = new("0.17.0");
 
     public SetupChecker(
         IWslService wslService,
         ILogger<SetupChecker> logger,
-        ISetupMemoService? memo = null)
+        ISetupMemoService? memo = null,
+        ISettingsService? settings = null)
     {
         _wslService = wslService;
         _logger = logger;
         _memo = memo;
+        _settings = settings;
     }
 
     public async Task<SetupStatus> CheckAsync(CancellationToken ct = default)
     {
+        // Native usage needs neither WSL nor the CodexBar CLI: do not start WSL, do not block startup or onboarding,
+        // and leave the CLI setup memo as it is for a later switch back to "wsl".
+        if (_settings?.Settings is { } settings && settings.AllEnabledUsageNative())
+        {
+            ct.ThrowIfCancellationRequested();
+            _logger.LogInformation("Usage is read natively for every enabled provider; WSL setup check skipped");
+            return new SetupStatus { UsageIsNative = true, IsReady = true };
+        }
+
         SetupStatus status;
         try
         {

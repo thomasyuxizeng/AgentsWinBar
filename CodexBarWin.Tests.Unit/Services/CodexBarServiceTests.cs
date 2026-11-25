@@ -1548,7 +1548,7 @@ public class CodexBarServiceTests
         {
             await frame.Task.WaitAsync(TimeSpan.FromSeconds(5));
             if (completeStatus) status.SetResult(new() { Indicator = ProviderStatusIndicator.Minor });
-            (await first.WaitAsync(TimeSpan.FromSeconds(2))).Should().BeTrue();
+            (await first.WaitAsync(CodexBarService.StatusDeadline + TimeSpan.FromSeconds(2))).Should().BeTrue();
             stream.Current.Provider.Should().Be("claude");
             stream.Current.Session!.Percent.Should().Be(20);
             if (completeStatus) stream.Current.ServiceStatus!.Indicator.Should().Be(ProviderStatusIndicator.Minor);

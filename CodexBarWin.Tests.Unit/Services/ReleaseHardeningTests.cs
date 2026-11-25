@@ -65,7 +65,7 @@ public class ReleaseHardeningTests
                 data = readings.Single();
             }
             else data = (await service.GetAllUsageAsync()).Single();
-            watch.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(2));
+            watch.Elapsed.Should().BeLessThan(CodexBarService.StatusDeadline + TimeSpan.FromSeconds(1.5));
             data.Session!.Percent.Should().Be(42);
             token.IsCancellationRequested.Should().BeFalse();
             _fallback.Verify(f => f.GetStatusAsync(It.IsAny<CancellationToken>()), Times.Once);

@@ -1,12 +1,14 @@
 using System.Text.Json;
 using CodexBarWin.Helpers;
 using CodexBarWin.Models;
+using CodexBarWin.Services.Native;
 using Microsoft.Extensions.Logging;
 
 namespace CodexBarWin.Services;
 
 /// <summary>
-/// Service for interacting with codexbar CLI via WSL.
+/// Usage readings per provider: read natively (<see cref="INativeUsageService"/>, the default) or through the
+/// codexbar CLI in WSL. Both routes produce the CLI's JSON and share one interpretation path. Cost scans use WSL.
 /// </summary>
 public class CodexBarService : ICodexBarService
 {
@@ -41,8 +43,13 @@ public class CodexBarService : ICodexBarService
     private readonly UsageHistoryStore? _history;
     private readonly IGeminiStatusFallback? _geminiStatusFallback;
     private readonly IProviderIncidentFetcher? _incidentFetcher;
-    internal static readonly TimeSpan StatusBudget = TimeSpan.FromMilliseconds(500);
-    internal static readonly TimeSpan GeminiStatusBudget = StatusBudget;
+    private readonly INativeUsageService? _nativeUsage;
+    /// <summary>
+    /// A prefetched provider status may take this long, counted from the moment its prefetch started. A usage read
+    /// that took longer adds no extra wait.
+    /// </summary>
+    public static readonly TimeSpan StatusDeadline = TimeSpan.FromSeconds(4);
+    private sealed record StatusPrefetch(long StartedAt, Task<ProviderStatus?> Task);
     /// <summary>
     /// TTL of the WSL codexbar shim cache (600 seconds / 10 minutes), shared with tools/wsl/codexbar-shim.sh.
     /// Replays younger than this TTL represent normal operation and are not considered stale.
@@ -89,8 +96,10 @@ public class CodexBarService : ICodexBarService
         IProviderIncidentFetcher? incidentFetcher = null,
         ICostLedger? costLedger = null,
         IEarlyResetStore? earlyResetStore = null,
-        IToastNotifier? toastNotifier = null)
+        IToastNotifier? toastNotifier = null,
+        INativeUsageService? nativeUsage = null)
     {
+        _nativeUsage = nativeUsage;
         _history = history;
         _costStore = costStore;
         _costLedger = costLedger;
@@ -465,13 +474,21 @@ public class CodexBarService : ICodexBarService
         var normalizedProvider = ProviderConstants.ValidateAndNormalize(provider);
         var generation = BeginProviderRefresh(normalizedProvider);
         ProviderStatus? prefetchedStatus = null;
-        Dictionary<string, Task<ProviderStatus?>> prefetchTasks = [];
+        Dictionary<string, StatusPrefetch> prefetchTasks = [];
         try
         {
             prefetchTasks = StartProviderStatusPrefetches([normalizedProvider], ct);
             ct.ThrowIfCancellationRequested();
-            var source = ProviderConstants.GetSource(normalizedProvider);
-            var result = await _wslService.ExecuteAsync($"codexbar --provider {normalizedProvider} --format json --source {source} --status", ct);
+            WslResult result;
+            if (UsesNativeUsage(normalizedProvider))
+            {
+                result = await FetchNativeResultAsync(normalizedProvider, ct);
+            }
+            else
+            {
+                var source = ProviderConstants.GetSource(normalizedProvider);
+                result = await _wslService.ExecuteAsync($"codexbar --provider {normalizedProvider} --format json --source {source} --status", ct);
+            }
             prefetchedStatus = await AwaitPrefetchedStatusAsync(normalizedProvider, prefetchTasks, ct);
             ct.ThrowIfCancellationRequested();
 
@@ -553,14 +570,70 @@ public class CodexBarService : ICodexBarService
     {
         var normalized = ProviderConstants.ValidateAndNormalize(provider);
         var source = ProviderConstants.GetSource(normalized);
+        var verbose = normalized == "gemini" ? " --verbose" : "";
+        return new($"codexbar usage --provider {normalized} --format json --source {source} --status{verbose}",
+            UsageTimeout(normalized));
+    }
+
+    /// <summary>Usage deadline per provider, shared by both routes.</summary>
+    private TimeSpan UsageTimeout(string provider)
+    {
+        var source = ProviderConstants.GetSource(provider);
         var settings = _settingsService.Settings.Timeouts;
         var first = Volatile.Read(ref _isFirstFetch) == 1;
         var seconds = source == "cli"
             ? (first ? settings.CliProviderFirstFetchTimeoutSeconds : settings.CliProviderTimeoutSeconds)
             : (first ? settings.StandardProviderFirstFetchTimeoutSeconds : settings.StandardProviderTimeoutSeconds);
-        var verbose = normalized == "gemini" ? " --verbose" : "";
-        return new($"codexbar usage --provider {normalized} --format json --source {source} --status{verbose}",
-            TimeSpan.FromSeconds(seconds));
+        return TimeSpan.FromSeconds(seconds);
+    }
+
+    /// <summary>
+    /// True when the provider's usage source is "native" and a native reader is available. Without a native reader
+    /// (a service constructed without one, as in older tests) every provider uses the WSL route.
+    /// </summary>
+    private bool UsesNativeUsage(string provider) =>
+        _nativeUsage != null && _settingsService.Settings.UsesNativeUsage(provider);
+
+    /// <summary>True when no enabled provider reads usage through WSL.</summary>
+    private bool AllUsageNative() =>
+        _nativeUsage != null && _settingsService.Settings.AllEnabledUsageNative();
+
+    /// <summary>
+    /// Reads a provider natively and wraps its CLI-shaped JSON the way a successful WSL command arrives, so it goes
+    /// through <see cref="InterpretProviderResult"/> exactly like CLI output.
+    /// </summary>
+    private async Task<WslResult> FetchNativeResultAsync(string provider, CancellationToken ct)
+    {
+        var json = await _nativeUsage!.FetchUsageJsonAsync(ProviderConstants.ValidateAndNormalize(provider), ct);
+        return new WslResult { Success = true, Output = json, ExitCode = 0 };
+    }
+
+    /// <summary>One native read within the provider's usage deadline; a timeout gives the same error as a CLI timeout.</summary>
+    private async Task<UsageData> FetchNativeProviderAsync(string provider, Dictionary<string, StatusPrefetch> prefetchTasks,
+        long generation, CancellationToken ct)
+    {
+        WslResult? result = null;
+        string? error = null;
+        using (var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct))
+        {
+            deadline.CancelAfter(UsageTimeout(provider));
+            try
+            {
+                result = await FetchNativeResultAsync(provider, deadline.Token);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch (OperationCanceledException) { error = "Request timed out"; }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Native usage read failed for {Provider}", provider);
+                error = "Unexpected error occurred";
+            }
+        }
+        var status = await AwaitPrefetchedStatusAsync(provider, prefetchTasks, ct);
+        ct.ThrowIfCancellationRequested();
+        return result != null
+            ? InterpretProviderResult(provider, result, status, generation)
+            : ProviderError(provider, error!, status, generation);
     }
 
     private async Task<IReadOnlyList<UsageData>> FetchAllProvidersAsync(IReadOnlyList<string> providers,
@@ -613,7 +686,15 @@ public class CodexBarService : ICodexBarService
             var generations = providers.Select(BeginProviderRefresh).ToArray();
             var prefetchTasks = StartProviderStatusPrefetches(providers, ct);
             ct.ThrowIfCancellationRequested();
-            var commands = providers.Select(BuildProviderCommand).ToArray();
+            // Providers set to "native" are read in parallel over HTTPS; only providers set to "wsl" go to the WSL
+            // batch. With no "wsl" provider the refresh never touches IWslService.
+            var wsl = Enumerable.Range(0, providers.Count).Where(i => !UsesNativeUsage(providers[i])).ToArray();
+            var nativeReads = Enumerable.Range(0, providers.Count).Where(i => !wsl.Contains(i))
+                .Select(async i => Complete(i, await FetchNativeProviderAsync(providers[i], prefetchTasks, generations[i], ct)))
+                .ToArray();
+            var commandFor = new WslBatchCommand?[providers.Count];
+            foreach (var i in wsl) commandFor[i] = BuildProviderCommand(providers[i]);
+            var commands = wsl.Select(i => commandFor[i]!).ToArray();
             var retryInIndividualShell = new bool[providers.Count];
             var publications = new Task?[providers.Count];
             async Task PublishAsync(int index, WslResult result)
@@ -634,53 +715,58 @@ public class CodexBarService : ICodexBarService
                     RecordBatchFallback(providers[index], "Command failed (exit code 127)");
                 }
                 var pStatus = await AwaitPrefetchedStatusAsync(providers[index], prefetchTasks, ct);
-                Complete(index, await FetchProviderAsync(providers[index], commands[index], pStatus, generations[index], ct));
+                Complete(index, await FetchProviderAsync(providers[index], commandFor[index]!, pStatus, generations[index], ct));
             }
-            try
+            async Task RunWslBatchAsync()
             {
-                var batch = await _wslService.ExecuteBatchAsync(commands, (index, result) =>
+                try
+                {
+                    var batch = await _wslService.ExecuteBatchAsync(commands, (position, result) =>
+                    {
+                        ct.ThrowIfCancellationRequested();
+                        if (position < 0 || position >= commands.Length)
+                            throw new InvalidDataException("WSL batch returned an invalid command index");
+                        var index = wsl[position];
+                        // The nested batch shell cannot see aliases or unexported functions from .bashrc.
+                        if (result.ExitCode == 127)
+                        {
+                            retryInIndividualShell[index] = true;
+                            return;
+                        }
+                        SchedulePublication(index, result);
+                    }, ct);
+                    ct.ThrowIfCancellationRequested();
+                    if (batch == null || batch.Count != commands.Length)
+                        throw new InvalidDataException("WSL batch returned an incomplete result list");
+                    for (var position = 0; position < batch.Count; position++)
+                    {
+                        var index = wsl[position];
+                        if (results[index] != null) continue;
+                        if (batch[position].ExitCode == 127)
+                        {
+                            retryInIndividualShell[index] = true;
+                        }
+                        else
+                        {
+                            SchedulePublication(index, batch[position]);
+                        }
+                    }
+                    await Task.WhenAll(publications.OfType<Task>());
+                    await Task.WhenAll(wsl.Where(i => results[i] == null && retryInIndividualShell[i]).Select(RetryProviderAsync));
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+                catch (Exception ex)
                 {
                     ct.ThrowIfCancellationRequested();
-                    if (index < 0 || index >= results.Length)
-                        throw new InvalidDataException("WSL batch returned an invalid command index");
-                    // The nested batch shell cannot see aliases or unexported functions from .bashrc.
-                    if (result.ExitCode == 127)
-                    {
-                        retryInIndividualShell[index] = true;
-                        return;
-                    }
-                    SchedulePublication(index, result);
-                }, ct);
-                ct.ThrowIfCancellationRequested();
-                if (batch == null || batch.Count != commands.Length)
-                    throw new InvalidDataException("WSL batch returned an incomplete result list");
-                for (var i = 0; i < batch.Count; i++)
-                {
-                    if (results[i] != null) continue;
-                    if (batch[i].ExitCode == 127)
-                    {
-                        retryInIndividualShell[i] = true;
-                    }
-                    else
-                    {
-                        SchedulePublication(i, batch[i]);
-                    }
+                    _logger.LogWarning(ex, "WSL batch unavailable; retrying unfinished providers individually");
+                    RecordBatchFallback("wsl", ex.Message);
+                    await Task.WhenAll(publications.OfType<Task>());
+                    await Task.WhenAll(wsl.Where(i => results[i] == null).Select(RetryProviderAsync));
                 }
-                await Task.WhenAll(publications.OfType<Task>());
-                await Task.WhenAll(Enumerable.Range(0, providers.Count)
-                    .Where(i => results[i] == null && retryInIndividualShell[i]).Select(RetryProviderAsync));
+                finally { await Task.WhenAll(publications.OfType<Task>()); }
             }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-            catch (Exception ex)
-            {
-                ct.ThrowIfCancellationRequested();
-                _logger.LogWarning(ex, "WSL batch unavailable; retrying unfinished providers individually");
-                RecordBatchFallback("wsl", ex.Message);
-                await Task.WhenAll(publications.OfType<Task>());
-                await Task.WhenAll(Enumerable.Range(0, providers.Count).Where(i => results[i] == null)
-                    .Select(RetryProviderAsync));
-            }
-            finally { await Task.WhenAll(publications.OfType<Task>()); }
+            var wslRun = wsl.Length > 0 ? RunWslBatchAsync() : Task.CompletedTask;
+            await Task.WhenAll(nativeReads.Append(wslRun));
         }
         ct.ThrowIfCancellationRequested();
         Interlocked.Exchange(ref _isFirstFetch, 0);
@@ -774,9 +860,9 @@ public class CodexBarService : ICodexBarService
             : result.Error.Trim(), prefetchedStatus, generation, result.ExitCode);
     }
 
-    private Dictionary<string, Task<ProviderStatus?>> StartProviderStatusPrefetches(IReadOnlyList<string> providers, CancellationToken ct)
+    private Dictionary<string, StatusPrefetch> StartProviderStatusPrefetches(IReadOnlyList<string> providers, CancellationToken ct)
     {
-        var tasks = new Dictionary<string, Task<ProviderStatus?>>(StringComparer.OrdinalIgnoreCase);
+        var tasks = new Dictionary<string, StatusPrefetch>(StringComparer.OrdinalIgnoreCase);
         if (_settingsService.Settings.DeveloperModeEnabled || providers.Count == 0 ||
             (_incidentFetcher == null && _geminiStatusFallback == null))
         {
@@ -797,25 +883,32 @@ public class CodexBarService : ICodexBarService
                     string.Equals(p, "codex", StringComparison.OrdinalIgnoreCase) ||
                     string.Equals(p, "gemini", StringComparison.OrdinalIgnoreCase))
                 {
-                    tasks[p] = FetchProviderStatusAsync(p, ct);
+                    tasks[p] = new(_timeProvider.GetTimestamp(), FetchProviderStatusAsync(p, ct));
                 }
             }
             else if (_geminiStatusFallback != null && string.Equals(p, "gemini", StringComparison.OrdinalIgnoreCase))
             {
-                tasks[p] = FetchProviderStatusAsync(p, ct);
+                tasks[p] = new(_timeProvider.GetTimestamp(), FetchProviderStatusAsync(p, ct));
             }
         }
         return tasks;
     }
 
-    private async Task<ProviderStatus?> AwaitPrefetchedStatusAsync(string provider, Dictionary<string, Task<ProviderStatus?>> prefetchTasks, CancellationToken ct)
+    /// <summary>
+    /// Waits for a prefetched status until <see cref="StatusDeadline"/> after its prefetch started. When that time has
+    /// already passed (a slow usage read), a finished status is used and an unfinished one is not waited for.
+    /// </summary>
+    private async Task<ProviderStatus?> AwaitPrefetchedStatusAsync(string provider, Dictionary<string, StatusPrefetch> prefetchTasks, CancellationToken ct)
     {
-        if (!prefetchTasks.TryGetValue(provider, out var task))
+        if (!prefetchTasks.TryGetValue(provider, out var prefetch))
             return null;
 
         try
         {
-            return await task.WaitAsync(StatusBudget, ct).ConfigureAwait(false);
+            var remaining = StatusDeadline - _timeProvider.GetElapsedTime(prefetch.StartedAt);
+            if (remaining <= TimeSpan.Zero)
+                return prefetch.Task.IsCompleted ? await prefetch.Task.ConfigureAwait(false) : null;
+            return await prefetch.Task.WaitAsync(remaining, ct).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (Exception ex)
@@ -1161,8 +1254,13 @@ public class CodexBarService : ICodexBarService
         catch (Exception ex) { _logger.LogDebug(ex, "Failed to record alert in activity log"); }
     }
 
+    /// <summary>Version reported when no enabled provider reads usage through the CLI.</summary>
+    public const string NativeVersion = "native";
+
     public async Task<string?> GetVersionAsync(CancellationToken ct = default)
     {
+        // Native usage needs no CLI: report the route instead of starting WSL on every dashboard build.
+        if (AllUsageNative()) return NativeVersion;
         try
         {
             var result = await _wslService.ExecuteAsync("codexbar --version", ct);
@@ -1177,6 +1275,7 @@ public class CodexBarService : ICodexBarService
 
     public async Task<bool> IsAvailableAsync(CancellationToken ct = default)
     {
+        if (AllUsageNative()) return true;
         try
         {
             var result = await _wslService.ExecuteAsync("which codexbar", ct);

@@ -695,7 +695,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     Providers.Add(new UsageData
                     {
                         Provider = config.Id,
-                        Error = "Connection error. Check WSL status.",
+                        Error = ProviderConstants.IsValidProvider(config.Id) && _settingsService.Settings.UsesNativeUsage(config.Id)
+                            ? "Connection error. Check your network connection."
+                            : "Connection error. Check WSL status.",
                         FetchedAt = DateTime.UtcNow
                     });
                 }

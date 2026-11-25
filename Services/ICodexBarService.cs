@@ -33,12 +33,12 @@ public interface ICodexBarService
     IAsyncEnumerable<UsageData> GetAllUsageStreamAsync(CancellationToken ct = default);
 
     /// <summary>
-    /// Gets the version of codexbar CLI.
+    /// Gets the version of codexbar CLI, or "native" when no enabled provider reads usage through it (no WSL call).
     /// </summary>
     Task<string?> GetVersionAsync(CancellationToken ct = default);
 
     /// <summary>
-    /// Checks if codexbar CLI is available.
+    /// Checks if codexbar CLI is available; true without a WSL call when no enabled provider needs it.
     /// </summary>
     Task<bool> IsAvailableAsync(CancellationToken ct = default);
 }

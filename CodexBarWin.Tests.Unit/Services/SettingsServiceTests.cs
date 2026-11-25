@@ -40,6 +40,48 @@ public class SettingsServiceTests
         service.Settings.ResetAnimationMode.Should().Be(ResetAnimationMode.WhenNotBatterySaver);
     }
 
+    [TestMethod]
+    public async Task LoadAsync_FileWrittenBeforeUsageSources_LoadsNativeForEveryProvider()
+    {
+        await File.WriteAllTextAsync(_testSettingsPath, """{"version":1,"refreshIntervalSeconds":300,"providers":[{"id":"claude","isEnabled":true}]}""");
+        var service = new TestableSettingsService(_mockLogger.Object, _testDirectory);
+
+        await service.LoadAsync();
+
+        service.Settings.RefreshIntervalSeconds.Should().Be(300);
+        service.Settings.UsageSources.Should().HaveCount(3).And.OnlyContain(kv => kv.Value == UsageSource.Native);
+        service.Settings.AllEnabledUsageNative().Should().BeTrue();
+    }
+
+    [TestMethod]
+    public async Task LoadAsync_UsageSourcesWithUnknownValue_NormalizesToNative()
+    {
+        await File.WriteAllTextAsync(_testSettingsPath, """{"usageSources":{"claude":"WSL","codex":"bogus","openai":"wsl"}}""");
+        var service = new TestableSettingsService(_mockLogger.Object, _testDirectory);
+
+        await service.LoadAsync();
+
+        service.Settings.GetUsageSource("claude").Should().Be(UsageSource.Wsl);
+        service.Settings.GetUsageSource("codex").Should().Be(UsageSource.Native);
+        service.Settings.GetUsageSource("gemini").Should().Be(UsageSource.Native);
+        service.Settings.UsageSources.Keys.Should().BeEquivalentTo(["claude", "codex", "gemini"]);
+    }
+
+    [TestMethod]
+    public async Task SaveAndLoadAsync_UsageSourceWsl_PersistsInSettingsJson()
+    {
+        var service = new TestableSettingsService(_mockLogger.Object, _testDirectory);
+        service.Settings.UsageSources["gemini"] = UsageSource.Wsl;
+        await service.SaveAsync();
+
+        var json = await File.ReadAllTextAsync(_testSettingsPath);
+        json.Should().Contain("\"usageSources\"").And.Contain("\"gemini\": \"wsl\"");
+        var loaded = new TestableSettingsService(_mockLogger.Object, _testDirectory);
+        await loaded.LoadAsync();
+        loaded.Settings.GetUsageSource("gemini").Should().Be(UsageSource.Wsl);
+        loaded.Settings.GetUsageSource("claude").Should().Be(UsageSource.Native);
+    }
+
     private Mock<ILogger<SettingsService>> _mockLogger = null!;
     private string _testDirectory = null!;
     private string _testSettingsPath = null!;

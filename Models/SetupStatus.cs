@@ -15,10 +15,16 @@ public record SetupStatus
     public string? CodexBarError { get; init; }
     public bool IsReady { get; init; }
 
+    /// <summary>
+    /// Every enabled provider reads usage natively, so neither WSL nor the CodexBar CLI was checked or is needed.
+    /// </summary>
+    public bool UsageIsNative { get; init; }
+
     public SetupStep CurrentStep
     {
         get
         {
+            if (UsageIsNative) return SetupStep.Ready;
             if (WslError == WslErrorType.NotInstalled) return SetupStep.InstallWsl;
             if (WslError == WslErrorType.NotRunning) return SetupStep.StartWsl;
             if (WslError != null) return SetupStep.FixWsl;

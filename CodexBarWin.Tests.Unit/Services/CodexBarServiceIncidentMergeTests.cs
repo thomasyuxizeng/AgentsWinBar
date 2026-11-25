@@ -261,11 +261,11 @@ public class CodexBarServiceIncidentMergeTests
                 Output = """{"provider":"claude","usage":{"primary":{"usedPercent":45}},"status":{"indicator":"minor","description":"Degraded"}}"""
             });
 
-        // Fetcher simulates a hang longer than StatusBudget (500ms)
+        // Fetcher simulates a hang longer than StatusDeadline (4 s from the start of the prefetch)
         _fetcher.Setup(f => f.GetIncidentAsync("claude", It.IsAny<CancellationToken>()))
             .Returns(async (string _, CancellationToken ct) =>
             {
-                await Task.Delay(2000, ct);
+                await Task.Delay(CodexBarService.StatusDeadline + TimeSpan.FromSeconds(3), ct);
                 return new ProviderStatus { Indicator = ProviderStatusIndicator.Minor };
             });
 
@@ -273,8 +273,8 @@ public class CodexBarServiceIncidentMergeTests
         var result = await service.GetUsageAsync("claude");
         sw.Stop();
 
-        // Refresh must not be delayed significantly beyond the ~500ms budget
-        sw.ElapsedMilliseconds.Should().BeLessThan(1500);
+        // Refresh must not be delayed significantly beyond the status deadline
+        sw.Elapsed.Should().BeLessThan(CodexBarService.StatusDeadline + TimeSpan.FromSeconds(1));
 
         result.Should().NotBeNull();
         result!.ServiceStatus.Should().NotBeNull();
@@ -402,13 +402,13 @@ public class CodexBarServiceIncidentMergeTests
                 Output = """{"provider":"claude","usage":{"primary":{"usedPercent":45}},"status":{"indicator":"minor","description":"Degraded"}}"""
             });
 
-        // Call 1: Status budget (500ms) expires while HTTP request is in-flight
+        // Call 1: Status deadline (4 s from the prefetch start) expires while HTTP request is in-flight
         var sw = Stopwatch.StartNew();
         var result1 = await service.GetUsageAsync("claude");
         sw.Stop();
 
-        // Must not be delayed significantly beyond the ~500ms budget
-        sw.ElapsedMilliseconds.Should().BeLessThan(1500);
+        // Must not be delayed significantly beyond the status deadline
+        sw.Elapsed.Should().BeLessThan(CodexBarService.StatusDeadline + TimeSpan.FromSeconds(1));
         result1.Should().NotBeNull();
         result1!.ServiceStatus!.IncidentTitle.Should().BeNull(); // Not yet available
         handler.Requests.Should().Be(1);

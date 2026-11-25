@@ -87,6 +87,32 @@ public class AppSettings
     public int? OverlayY { get; set; }
 
     /// <summary>
+    /// Usage source per provider id: "native" (default) or "wsl". Set in settings.json; files written before this
+    /// setting existed load as "native" for every provider.
+    /// </summary>
+    public Dictionary<string, string> UsageSources { get; set; } = UsageSource.Defaults();
+
+    /// <summary>The normalized usage source for a provider ("native" unless it is set to "wsl").</summary>
+    public string GetUsageSource(string providerId)
+    {
+        var provider = ProviderConstants.ValidateAndNormalize(providerId);
+        return UsageSources != null && UsageSources.TryGetValue(provider, out var value)
+            ? UsageSource.Normalize(value)
+            : UsageSource.Native;
+    }
+
+    /// <summary>True when the provider's usage is read natively.</summary>
+    public bool UsesNativeUsage(string providerId) => GetUsageSource(providerId) == UsageSource.Native;
+
+    /// <summary>
+    /// True when every enabled provider reads usage natively, so usage needs neither WSL nor the CodexBar CLI.
+    /// Also true when no provider is enabled.
+    /// </summary>
+    public bool AllEnabledUsageNative() => (Providers ?? [])
+        .Where(p => p != null && p.IsEnabled && ProviderConstants.IsValidProvider(p.Id))
+        .All(p => UsesNativeUsage(p.Id));
+
+    /// <summary>
     /// Repairs malformed persisted values before they reach timers, animations or shell commands.
     /// An explicitly empty provider list remains empty.
     /// </summary>
@@ -98,6 +124,7 @@ public class AppSettings
             .Select(p => p with { Id = ProviderConstants.ValidateAndNormalize(p.Id) })
             .DistinctBy(p => p.Id)
             .ToList();
+        UsageSources = NormalizeUsageSources(UsageSources);
         if (!Enum.IsDefined(Theme)) Theme = AppTheme.System;
         if (!Enum.IsDefined(ResetAnimationMode)) ResetAnimationMode = ResetAnimationMode.WhenNotBatterySaver;
         RefreshIntervalSeconds = ValidRange(RefreshIntervalSeconds, 86400, 120);
@@ -121,6 +148,23 @@ public class AppSettings
             !Uri.TryCreate(CodexBarGuideUrl, UriKind.Absolute, out var guide) ||
             (guide.Scheme != Uri.UriSchemeHttps && guide.Scheme != Uri.UriSchemeHttp))
             CodexBarGuideUrl = DefaultGuideUrl;
+    }
+
+    /// <summary>
+    /// Keeps one entry per allowed provider: invalid provider keys are dropped, missing providers and unknown values
+    /// become "native", and "WSL" in any case becomes "wsl".
+    /// </summary>
+    private static Dictionary<string, string> NormalizeUsageSources(Dictionary<string, string>? stored)
+    {
+        var result = UsageSource.Defaults();
+        foreach (var (key, value) in stored ?? [])
+        {
+            if (!ProviderConstants.IsValidProvider(key)) continue;
+            var provider = ProviderConstants.ValidateAndNormalize(key);
+            // A "wsl" entry wins over a duplicate key that differs only in case.
+            if (result[provider] != UsageSource.Wsl) result[provider] = UsageSource.Normalize(value);
+        }
+        return result;
     }
 
     private static int ValidRange(int value, int maximum, int fallback) =>

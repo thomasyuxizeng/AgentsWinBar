@@ -117,6 +117,24 @@ public partial class SetupViewModel : ObservableObject
             return;
         }
 
+        if (Status.UsageIsNative)
+        {
+            // Usage is read on Windows with the official tools' sign-ins; WSL and the CLI were not checked.
+            WslStatusIcon = "✅";
+            WslStatusText = "WSL not needed for usage";
+            CodexBarStatusIcon = "✅";
+            CodexBarStatusText = "Usage read natively on Windows";
+            IsReady = true;
+            HeaderIcon = "✅";
+            HeaderText = "Setup Complete";
+            InstructionText = "Make sure you're signed in to your AI tools on Windows:\n\n" +
+                              "  - Claude Code: claude login\n" +
+                              "  - Codex: codex login\n" +
+                              "  - Gemini: sign in to Antigravity";
+            Commands.Clear();
+            return;
+        }
+
         // Update WSL status
         if (Status.WslInstalled && Status.WslRunning)
         {

@@ -263,6 +263,10 @@ public partial class App : Application
         services.AddSingleton<ICostCacheStore, CostCacheStore>();
         services.AddSingleton<ICostLedger, CostLedger>();
         services.AddSingleton<IProviderIncidentFetcher, ProviderIncidentFetcher>();
+        // Native usage readers (one pooled HttpClient). Registered with a factory so DI uses the production
+        // constructor; CodexBarService routes providers whose usage source is "native" through it.
+        services.AddSingleton<Services.Native.INativeUsageService>(sp =>
+            new Services.Native.NativeUsageService(sp.GetRequiredService<ILoggerFactory>()));
         services.AddSingleton<ICodexBarService, CodexBarService>();
         services.AddSingleton<ISettingsService, SettingsService>();
         services.AddSingleton<IApiBillingService, ApiBillingService>();

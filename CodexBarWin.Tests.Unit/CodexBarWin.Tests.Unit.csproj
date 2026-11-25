@@ -97,6 +97,7 @@
     <Compile Include="..\Services\UsageChangeTracker.cs" Link="Linked\UsageChangeTracker.cs" />
     <Compile Include="..\Helpers\ProviderListSynchronizer.cs" Link="Linked\ProviderListSynchronizer.cs" />
     <Compile Include="..\Models\AppSettings.cs" Link="Linked\AppSettings.cs" />
+    <Compile Include="..\Models\UsageSource.cs" Link="Linked\UsageSource.cs" />
     <Compile Include="..\Models\UsageData.cs" Link="Linked\UsageData.cs" />
     <Compile Include="..\Models\SetupStatus.cs" Link="Linked\SetupStatus.cs" />
     <Compile Include="..\Models\ProviderConfig.cs" Link="Linked\ProviderConfig.cs" />

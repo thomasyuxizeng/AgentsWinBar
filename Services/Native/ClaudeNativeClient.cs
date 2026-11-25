@@ -56,16 +56,30 @@ public sealed class ClaudeNativeClient : INativeUsageClient
     private readonly ClaudeNativeOptions _options;
     private readonly TimeProvider _clock;
     private readonly Lock _gate = new();
+    private readonly IClaudeCooldownStore? _cooldownStore;
     private NativeUsageResult? _lastGood;
     private DateTimeOffset _blockedUntil;
 
-    public ClaudeNativeClient(HttpClient http, ILogger<ClaudeNativeClient> logger, ClaudeNativeOptions? options = null, TimeProvider? clock = null)
+    /// <summary>A saved cooldown further ahead than this (a damaged or hand-edited file) is shortened to it.</summary>
+    public static readonly TimeSpan MaxPersistedCooldown = TimeSpan.FromHours(24);
+
+    public ClaudeNativeClient(HttpClient http, ILogger<ClaudeNativeClient> logger, ClaudeNativeOptions? options = null,
+        TimeProvider? clock = null, IClaudeCooldownStore? cooldownStore = null)
     {
         _http = http;
         _logger = logger;
         _options = options ?? new ClaudeNativeOptions();
         _clock = clock ?? TimeProvider.System;
+        _cooldownStore = cooldownStore;
         ProviderId = ProviderConstants.ValidateAndNormalize("claude");
+        // A cooldown saved before a restart still applies.
+        if (_cooldownStore?.Load() is { } saved)
+        {
+            var cap = _clock.GetUtcNow() + MaxPersistedCooldown;
+            _blockedUntil = saved > cap ? cap : saved;
+            if (_blockedUntil > _clock.GetUtcNow())
+                _logger.LogInformation("Claude usage cooldown restored; not calling until {Until:o}", _blockedUntil);
+        }
     }
 
     public string ProviderId { get; }
@@ -143,6 +157,7 @@ public sealed class ClaudeNativeClient : INativeUsageClient
                 if (retryAfter > candidate) candidate = retryAfter.Value;
                 lock (_gate) { if (candidate > _blockedUntil) _blockedUntil = candidate; blockedUntil = _blockedUntil; }
                 _logger.LogWarning("Claude usage endpoint answered 429; cooling down until {Until:o}", blockedUntil);
+                if (_cooldownStore != null) await _cooldownStore.SaveAsync(blockedUntil, CancellationToken.None).ConfigureAwait(false);
                 return FromCacheOr(lastGood, Fail(NativeUsageStatus.RateLimited, status,
                     "Claude usage is rate limited right now; retrying shortly.") with { RetryAfter = blockedUntil, NetworkCalls = 1 });
             }

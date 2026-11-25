@@ -112,7 +112,7 @@ public class CodexBarServiceReviewRegressionTests
         Respond(Reading("claude", _clock.Now.UtcDateTime));
         try
         {
-            var results = await Service().GetAllUsageAsync().WaitAsync(TimeSpan.FromSeconds(2));
+            var results = await Service().GetAllUsageAsync().WaitAsync(CodexBarService.StatusDeadline + TimeSpan.FromSeconds(2));
             results.Single().ServiceStatus!.Indicator.Should().Be(ProviderStatusIndicator.Minor);
             results.Single().StatusIsStale.Should().BeFalse(); // Fresh CLI status succeeds independently.
             status.Task.IsCompleted.Should().BeFalse();
