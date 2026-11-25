@@ -149,8 +149,8 @@ Do **4 and 5 together** first. They remove the VM episode entirely (the 1.3-1.7 
 refresh), cut the app's own refresh work from ~2.5 s toward 0.1 s, and make setup a single MSIX with no WSL.
 Staging, because cost parity is not there yet:
 
-1. Usage reads go native first, per provider, behind a setting, with an in-process shadow mode that reads both
-   sources back to back and logs the pairs. WSL is then needed only for cost scans.
+1. Usage reads go native first, per provider, behind a setting that defaults to native (the owner accepts a few days
+   of breakage, 25 Nov). WSL is then needed only for cost scans.
 2. Native costs replace WSL once each provider reaches 1% daily parity on the logs on disk (the app's own ledger keeps
    older days), after the missing Codex days are found. Claude costs gain the most: the WSL scan has recorded no
    Claude day since 20 November.
@@ -227,13 +227,15 @@ shim's Claude route runs the Claude CLI when the token has expired. Native reads
 - **A provider moves its sign-in storage** (for example Codex keeping it in the OS keyring instead of `auth.json`).
   Mitigation: a clear "can't find your sign-in" state naming the file looked for.
 - **Rate limits on Claude's usage endpoint:** keep the shim's 10-minute cooldown after a 429, and persist it across
-  restarts. The shadow mode reads both sources from one app, so it never doubles the polling.
+  restarts. Never run both routes against Claude at the same time: any side-by-side reading of both sources doubles
+  the calls to that endpoint, even inside one app (an earlier revision of this memo said otherwise). Parity is checked
+  against readings the WSL route already saved, not by polling both.
 - **Pricing upkeep:** prices live in a data file the app can update without a release (bundled table plus overlay, or
   a models.dev fetch), and the UI shows the share of tokens left unpriced rather than counting them as $0.
 - **The WSL fallback decays:** nobody renews the WSL sign-ins once the default is native, so the fallback is good for
   one release at most. After that the fallback for a broken endpoint is option 3b (the official Windows tools).
 - **Token handling mistakes:** tests that the code never opens credential stores for writing; a Process Monitor check
-  on the credential locations during the shadow run.
+  on the credential locations during the first week of native readings.
 
 ## Verification (pass marks)
 
@@ -243,20 +245,22 @@ shim's Claude route runs the Claude CLI when the token has expired. Native reads
 | CPU per refresh, everything included | in-app refresh markers, 10+ refreshes, packaged app | 0.25 CPU-s or less |
 | Idle CPU, dashboard closed | same, 1 h; ETW trace for wake-ups | 2 CPU-s per hour or less |
 | Resident memory, dashboard closed | private working set and private bytes, 1 h median | 90 MB or less private working set (stretch 60) |
-| Usage parity | in-process shadow mode, 7 days or more (spans weekly resets) | within 3 points for pairs read within 30 s of each other, resets within 60 s |
+| Usage parity | first native readings against the last WSL readings saved in `cache.json` just before the switch (no double polling), then 7 days of native readings checked for weekly resets and early-reset detection | within 3 points (allowing for use between the two readings), resets within 60 s |
 | Cost parity | completed days on the logs on disk | each provider's daily total within 1%, unpriced share 0% |
 | Cost scan | probe, after a reboot (cold file cache) and warm | first scan 60 s or less cold with 2 workers, or resumable and invisible at background priority; 64 MB heap or less; update 100 ms CPU or less |
-| Sign-ins | static check on the credential code paths; Process Monitor on `.claude`, `.codex` and Credential Manager, plus entry hashes, over the shadow run | zero writes to those locations, hashes unchanged, agy still works |
+| Sign-ins | static check on the credential code paths; Process Monitor on `.claude`, `.codex` and Credential Manager, plus entry hashes, over the first week of native readings | zero writes to those locations, hashes unchanged, agy still works |
 | Setup | fresh install in Windows Sandbox | installs and runs without WSL, and shows a clean "not signed in" state |
 | Battery | `powercfg /srumutil`, rows for the app, vmmemWSL and the WSL service, a fresh baseline taken before the switch | 50% lower energy per day or better |
 
 ## Rollout
 
-1. Integrate option 4's usage reads behind two settings: usage source per provider (Native or WSL) and cost source
-   (Native or WSL), default WSL. Land option 5's fixes separately, each with a before-and-after CPU measurement.
-2. Run the in-process shadow mode for 7 days or more on this laptop: one app reads both sources back to back and logs
-   the pairs with their fetch times, so Claude's endpoint is not polled twice.
-3. Flip usage to native per provider when its pairs pass; revert automatically to WSL for a provider after 3
-   consecutive failed native reads that WSL answers.
-4. Flip costs to native when the cost parity mark passes; the installer stops requiring WSL.
-5. Measure again; decide on option 6 with the memory measurements described above.
+Revised 25 Nov after the owner accepted a few days of breakage and handed the work over ("take ownership"):
+
+1. Integrate option 4's usage reads behind two settings, usage source per provider (Native or WSL) and cost source
+   (Native or WSL), both defaulting to Native. The WSL route stays as a manual fallback setting for one release.
+   Land option 5's fixes as separate commits, each with a before-and-after CPU measurement.
+2. Before installing, save the WSL route's last `cache.json` readings; compare the first native readings against them
+   (no double polling of Claude). Then watch 7 days of native readings for weekly resets and early-reset detection.
+3. Costs switch to native in the same build if the cost parity mark passes on the logs on disk; otherwise cost scans
+   stay on WSL until it does. The installer stops requiring WSL once both are native.
+4. Measure again; decide on option 6 with the memory measurements described above.

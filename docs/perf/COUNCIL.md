@@ -238,12 +238,13 @@ running for another reason.
 
 - **Google:** does it rotate refresh tokens for agy's OAuth client, and do its terms let another app use that
   client? (Matters only if B5 keeps the refresh.)
-- **Anthropic:** do two pollers on one account share the OAuth usage endpoint's rate limit? No public document; the
-  shadow mode in A13 avoids needing the answer.
+- **Anthropic:** do two pollers on one account share the OAuth usage endpoint's rate limit? No public document. A side
+  agent pointed out (25 Nov) that the shadow mode proposed in A13 would itself poll Claude twice, so the rollout now
+  compares native readings against readings the WSL route already saved instead.
 - **OpenAI:** can Codex keep its sign-in in the OS keyring instead of `auth.json`? Codex's configuration reference
   settles it; if yes, the reader needs that path too.
 - **All three:** do the usage endpoints check the client version or OS in the user agent (`claude-code/2.1.0`;
-  `antigravity/hub/2.9.1 linux/amd64` sent from Windows)? Watch for it in the shadow run.
+  `antigravity/hub/2.9.1 linux/amd64` sent from Windows)? Watch for it in the first week of native readings.
 
 ## D. Checked and not upheld
 
@@ -280,7 +281,10 @@ running for another reason.
 2. Fix the spike code (A1, A3, A4, A9, A15, A20; A16 or removal per B5), with tests.
 3. Run the measurements that decide B1 to B3: private working set baseline, idle ETW trace, renewal test, windows
    destroyed, ReadyToRun on, cold two-worker scan, a clean guest rerun.
-4. Build stage 1: native usage behind a per-provider setting, with the in-process shadow mode.
+4. Build stage 1: native usage behind a per-provider setting.
+
+Update 25 Nov: the owner handed the work over and accepts a few days of breakage, so the rollout in `OPTIONS.md`
+now switches straight to native and drops the shadow run (which would also have doubled Claude's polling).
 
 ## Decisions (owner, 25 Nov 2026: "Yes, all of them")
 
