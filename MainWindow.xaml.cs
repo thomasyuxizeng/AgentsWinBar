@@ -128,9 +128,6 @@ public sealed partial class MainWindow : Window
     {
         InitializeComponent();
 
-        // Set up Acrylic backdrop (like OS system tray)
-        SetupAcrylicBackdrop();
-
         // Get services from DI
         _viewModel = App.Services.GetRequiredService<MainViewModel>();
         _viewModel.ExitRequested += OnExitRequested;
@@ -142,6 +139,9 @@ public sealed partial class MainWindow : Window
 
         // Configure window for flyout style (borderless)
         ConfigureWindow();
+
+        // Set up Acrylic backdrop (like OS system tray) after ConfigureWindow so a configure failure leaves no active controller
+        SetupAcrylicBackdrop();
 
         // Handle window keyboard events
         ContentFrame.KeyDown += OnKeyDown;
@@ -333,8 +333,17 @@ public sealed partial class MainWindow : Window
         // Set the icon using System.Drawing generated icon
         UpdateTrayIcon();
 
-        // Initialize tray icon for this window
-        _trayIcon.ForceCreate();
+        // Initialize tray icon for this window (may fail when running without an Explorer shell, e.g. virtual desktops)
+        try
+        {
+            _trayIcon.ForceCreate();
+        }
+        catch (Exception ex)
+        {
+            App.Services.GetRequiredService<ILogger<MainWindow>>().LogWarning(ex, "Tray icon could not be created");
+            _trayIcon.Dispose();
+            _trayIcon = null;
+        }
 
         // App activated the window (off-screen) at launch. HideWindow() only hides a flyout that is open, so a minimized
         // start hides it here: otherwise the window stays shown off-screen, rendering and holding its surfaces, until
@@ -741,11 +750,9 @@ public sealed partial class MainWindow : Window
             presenter.SetBorderAndTitleBar(true, false);
         }
 
-        // Hide from taskbar and Alt+Tab
-        appWindow.IsShownInSwitchers = false;
-
-        // Get window handle and apply rounded corners
+        // Get window handle, hide from taskbar and Alt+Tab, and apply rounded corners
         var hwnd = WindowNative.GetWindowHandle(this);
+        WindowZOrder.HideFromSwitchers(appWindow, hwnd);
         NativeMethods.ApplyRoundedCorners(hwnd);
 
         appWindow.Resize(new SizeInt32(WindowWidth, WindowHeight));

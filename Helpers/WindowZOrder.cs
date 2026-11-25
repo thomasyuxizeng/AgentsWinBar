@@ -242,6 +242,9 @@ internal static class WindowZOrder
     [DllImport("shell32.dll")]
     private static extern int SHQueryUserNotificationState(out int state);
 
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern IntPtr FindWindow(string? lpClassName, string? lpWindowName);
+
     // QUERY_USER_NOTIFICATION_STATE values that mean "a fullscreen app owns the screen"
     private const int QUNS_BUSY = 2;                    // fullscreen app (e.g. fullscreen video or game)
     private const int QUNS_RUNNING_D3D_FULL_SCREEN = 3; // exclusive-mode Direct3D game
@@ -254,7 +257,8 @@ internal static class WindowZOrder
     public static bool IsFullscreenAppActive()
     {
         return SHQueryUserNotificationState(out var state) == 0
-            && state is QUNS_BUSY or QUNS_RUNNING_D3D_FULL_SCREEN or QUNS_PRESENTATION_MODE;
+            && state is QUNS_BUSY or QUNS_RUNNING_D3D_FULL_SCREEN or QUNS_PRESENTATION_MODE
+            && FindWindow("Shell_TrayWnd", null) != IntPtr.Zero;
     }
 
     private const uint ABM_GETTASKBARPOS = 0x00000005;
@@ -335,6 +339,24 @@ internal static class WindowZOrder
             {
                 AttachThreadInput(currentThread, foregroundThread, false);
             }
+        }
+    }
+
+    /// <summary>
+    /// Hides the window from Alt+Tab and the taskbar switcher, falling back to <c>WS_EX_TOOLWINDOW</c> when
+    /// <see cref="Microsoft.UI.Windowing.AppWindow.IsShownInSwitchers"/> is not supported (e.g. unpackaged runs).
+    /// </summary>
+    public static void HideFromSwitchers(Microsoft.UI.Windowing.AppWindow appWindow, IntPtr hwnd)
+    {
+        try
+        {
+            appWindow.IsShownInSwitchers = false;
+        }
+        catch (Exception ex) when (ex is NotImplementedException or COMException)
+        {
+            var style = GetWindowLongPtr(hwnd, GWL_EXSTYLE).ToInt64();
+            style |= WS_EX_TOOLWINDOW;
+            SetWindowLongPtr(hwnd, GWL_EXSTYLE, new IntPtr(style));
         }
     }
 

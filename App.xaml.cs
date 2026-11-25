@@ -140,6 +140,7 @@ public partial class App : Application
         }
         catch (Exception ex)
         {
+            LogCrash("Application launch failed", ex);
             Services.GetRequiredService<ILogger<App>>().LogError(ex, "Application launch failed");
             ReleaseMutex();
             Exit();
