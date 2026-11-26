@@ -325,7 +325,7 @@ public sealed partial class DashboardPage : Page
                 panel = new DashboardProviderPanel { VerticalAlignment = VerticalAlignment.Top };
                 _panels[provider.Id] = panel;
             }
-            if (!DashboardContent.ProviderEquals(panel.Data, provider)) panel.Data = provider;
+            if (!DashboardContent.ProviderDisplayEquals(panel.Data, provider)) panel.Data = provider;
             else panel.RefreshTimes();
         }
 

@@ -30,6 +30,8 @@ public sealed class DashboardService : IDashboardService
     private GeminiApiSpendInfo? _geminiApi;
     private int _billingGeneration;
     private BillingScope? _billingScope;
+    private long _cachedHistoryRevision = -1;
+    private IReadOnlyList<UsageHistorySample> _cachedHistorySamples = [];
     private readonly record struct BillingScope(decimal Monthly, int Day, bool Developer);
 
     private BillingScope CurrentBillingScope() => new(
@@ -54,13 +56,19 @@ public sealed class DashboardService : IDashboardService
     {
         string? version;
         bool? available;
-        lock (_gate) { version = _cliVersion; available = _cliAvailable; }
+        IReadOnlyList<UsageHistorySample> historySamples;
+        lock (_gate)
+        {
+            version = _cliVersion;
+            available = _cliAvailable;
+            historySamples = _history.GetSamplesSnapshot(ref _cachedHistoryRevision, ref _cachedHistorySamples);
+        }
         long bytes = 0;
         try { var file = new FileInfo(_persistence.FilePath); if (file.Exists) bytes = file.Length; }
         catch (Exception ex) { _logger.LogDebug(ex, "History file size unavailable"); }
         return DashboardSnapshotBuilder.Build(new DashboardInputs
         {
-            Providers = providers, Settings = _settings.Settings, HistorySamples = _history.Samples,
+            Providers = providers, Settings = _settings.Settings, HistorySamples = historySamples,
             HistoryFileBytes = bytes, NowUtc = _clock.GetUtcNow().UtcDateTime, LastRefreshUtc = lastRefreshUtc,
             NextRefreshUtc = nextRefreshUtc, EffectiveRefreshInterval = effectiveRefreshInterval,
             CliVersion = version, CliAvailable = available, AppVersion = _appVersion,

@@ -54,6 +54,34 @@ public sealed class UsageHistoryStore
         }
     }
 
+    /// <summary>
+    /// Returns a snapshot of all samples, reusing <paramref name="cachedSamples"/> when <see cref="Revision"/>
+    /// still matches <paramref name="cachedRevision"/>.
+    /// </summary>
+    public IReadOnlyList<UsageHistorySample> GetSamplesSnapshot(
+        ref long cachedRevision,
+        ref IReadOnlyList<UsageHistorySample> cachedSamples)
+    {
+        lock (_gate)
+        {
+            if (_revision == cachedRevision) return cachedSamples;
+            IReadOnlyList<UsageHistorySample> snapshot;
+            if (_samples.Count == 0)
+            {
+                snapshot = [];
+            }
+            else
+            {
+                var result = new UsageHistorySample[_samples.Count];
+                for (var i = 0; i < _samples.Count; i++) result[i] = _samples[i].ToModel();
+                snapshot = result;
+            }
+            cachedRevision = _revision;
+            cachedSamples = snapshot;
+            return snapshot;
+        }
+    }
+
     /// <summary>Returns the samples added since the previous call (oldest first) and forgets them.</summary>
     public IReadOnlyList<UsageHistorySample> TakeUnsaved()
     {

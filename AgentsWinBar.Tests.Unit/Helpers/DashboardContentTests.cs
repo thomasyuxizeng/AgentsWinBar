@@ -239,4 +239,54 @@ public class DashboardContentTests
         DashboardContent.CostContentEquals(a, null).Should().BeFalse();
         DashboardContent.CostContentEquals(null, null).Should().BeTrue();
     }
+
+    [TestMethod]
+    public void ProviderDisplayEquals_AndIgnoringLoadingAndTime_BehavesAsExpected()
+    {
+        var a = Provider();
+        var ageOnly = a with
+        {
+            StaleAge = TimeSpan.FromMinutes(3),
+            Cost = a.Cost! with { StaleAge = TimeSpan.FromMinutes(4) }
+        };
+        DashboardContent.ProviderDisplayEquals(a, ageOnly).Should().BeTrue();
+        DashboardContent.ProviderDisplayEquals(a, ageOnly with { IsLoading = true }).Should().BeFalse();
+        DashboardContent.ProviderEqualsIgnoringLoadingAndTime(a, ageOnly with
+        {
+            IsLoading = true,
+            Windows =
+            [
+                a.Windows[0] with
+                {
+                    ElapsedPercent = 45,
+                    ResetText = "Resets in 1h",
+                    Pace = new PaceProjection(PaceKind.OnTrack, ProjectedUsedAtReset: 50),
+                    PaceSummary = "On track"
+                }
+            ]
+        }).Should().BeTrue();
+        DashboardContent.ProviderEqualsIgnoringLoadingAndTime(a, a with { DisplayName = "Changed" }).Should().BeFalse();
+        DashboardContent.ProviderEqualsIgnoringLoadingAndTime(a, a with { Windows = [a.Windows[0] with { UsedPercent = 55 }] }).Should().BeFalse();
+    }
+
+    [TestMethod]
+    public void CostDataEquals_EveryRecordPropertyMutation_ReturnsFalse()
+    {
+        var a = new CostData
+        {
+            Provider = "claude",
+            TodayCostUSD = 1m,
+            TodayTokens = 10,
+            Last30DaysCostUSD = 5m,
+            Last30DaysTokens = 50,
+            Daily = [Day()],
+            FetchedAt = new DateTime(2026, 10, 5, 0, 0, 0, DateTimeKind.Utc)
+        };
+        var same = a with { Daily = [Day()] };
+        DashboardContent.CostDataEquals(a, same).Should().BeTrue();
+        DashboardContent.CostDataEquals(a, a with { Daily = [Day() with { TotalCost = 9m }] }).Should().BeFalse();
+        DashboardContent.CostDataEquals(a, null).Should().BeFalse();
+        DashboardContent.CostDataEquals(null, null).Should().BeTrue();
+        Verify(new CostData(), DashboardContent.CostDataEquals);
+    }
 }

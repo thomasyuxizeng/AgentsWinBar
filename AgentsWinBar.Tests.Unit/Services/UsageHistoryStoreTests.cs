@@ -162,4 +162,25 @@ public class UsageHistoryStoreTests
         store.Add(Sample(10.2, 2) with { ResetsAt = reset.AddMinutes(5) }, Now.AddMinutes(2)).Should().BeTrue();
         store.Samples.Should().HaveCount(2);
     }
+
+    [TestMethod]
+    public void GetSamplesSnapshot_WhenRevisionUnchanged_ReusesCachedArrayAndRefreshesOnMutation()
+    {
+        var store = new UsageHistoryStore();
+        store.Add(Sample(10, 0), Now).Should().BeTrue();
+        long rev = -1;
+        IReadOnlyList<UsageHistorySample> cache = [];
+
+        var first = store.GetSamplesSnapshot(ref rev, ref cache);
+        var second = store.GetSamplesSnapshot(ref rev, ref cache);
+
+        first.Should().HaveCount(1);
+        ReferenceEquals(first, second).Should().BeTrue();
+
+        store.Add(Sample(20, 1), Now.AddMinutes(1)).Should().BeTrue();
+        var third = store.GetSamplesSnapshot(ref rev, ref cache);
+
+        third.Should().HaveCount(2);
+        ReferenceEquals(first, third).Should().BeFalse();
+    }
 }

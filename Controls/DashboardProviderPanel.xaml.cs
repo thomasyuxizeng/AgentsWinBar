@@ -189,7 +189,14 @@ public sealed partial class DashboardProviderPanel : UserControl
     private static void OnDataChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
     {
         var panel = (DashboardProviderPanel)d;
-        if (!panel._disposed && !panel._suppressFullRefresh) panel.Refresh();
+        if (panel._disposed || panel._suppressFullRefresh) return;
+        if (e.OldValue is DashboardProvider oldData && e.NewValue is DashboardProvider newData &&
+            DashboardContent.ProviderEqualsIgnoringLoadingAndTime(oldData, newData))
+        {
+            panel.RefreshTimesCore(newData, newData.Windows);
+            return;
+        }
+        panel.Refresh();
     }
 
     public void ApplyClockTick(DashboardProvider updated)

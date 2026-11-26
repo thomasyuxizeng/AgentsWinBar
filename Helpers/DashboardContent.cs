@@ -72,4 +72,28 @@ public static class DashboardContent
         string.Equals(a.DisplayName, b.DisplayName, StringComparison.Ordinal) &&
         SequenceEquals(a.Windows, b.Windows, GraphWindowEquals) &&
         GraphCostEquals(a.Cost, b.Cost);
+
+    public static bool WindowStaticEquals(DashboardWindow? a, DashboardWindow? b) =>
+        ReferenceEquals(a, b) || a != null && b != null &&
+        a with { ElapsedPercent = b.ElapsedPercent, ResetText = b.ResetText, Pace = b.Pace, PaceSummary = b.PaceSummary, History = b.History } == b &&
+        SeriesEquals(a.History, b.History);
+
+    public static bool ProviderDisplayEquals(DashboardProvider? a, DashboardProvider? b) =>
+        ReferenceEquals(a, b) || a != null && b != null &&
+        a with { StaleAge = b.StaleAge, Windows = b.Windows, Cost = b.Cost, GeminiApi = b.GeminiApi } == b &&
+        SequenceEquals(a.Windows, b.Windows, WindowEquals) &&
+        CostContentEquals(a.Cost, b.Cost) &&
+        GeminiApiEquals(a.GeminiApi, b.GeminiApi);
+
+    public static bool ProviderEqualsIgnoringLoadingAndTime(DashboardProvider? a, DashboardProvider? b) =>
+        ReferenceEquals(a, b) || a != null && b != null &&
+        a with { IsLoading = b.IsLoading, StaleAge = b.StaleAge, Windows = b.Windows, Cost = b.Cost, GeminiApi = b.GeminiApi } == b &&
+        SequenceEquals(a.Windows, b.Windows, WindowStaticEquals) &&
+        CostContentEquals(a.Cost, b.Cost) &&
+        GeminiApiEquals(a.GeminiApi, b.GeminiApi);
+
+    public static bool CostDataEquals(CostData? a, CostData? b) =>
+        ReferenceEquals(a, b) || a != null && b != null &&
+        a with { Daily = b.Daily } == b &&
+        SequenceEquals(a.Daily, b.Daily, DailyEquals);
 }

@@ -581,7 +581,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
                             break;
                         }
                     }
-                    if (index >= 0) Providers[index] = Providers[index] with { Cost = cost };
+                    if (index >= 0 && !DashboardContent.CostDataEquals(Providers[index].Cost, cost))
+                        Providers[index] = Providers[index] with { Cost = cost };
                 }
                 catch (Exception ex) { published.TrySetException(ex); }
                 finally { published.TrySetResult(); }
@@ -715,7 +716,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             // Everything is loading again (existing data stays visible while it refreshes)
             for (int i = 0; i < Providers.Count; i++)
             {
-                Providers[i] = Providers[i] with { IsLoading = true };
+                if (!Providers[i].IsLoading) Providers[i] = Providers[i] with { IsLoading = true };
             }
 
             // Stream results and update as they complete
