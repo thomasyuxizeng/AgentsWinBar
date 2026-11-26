@@ -22,6 +22,18 @@
             <Setter Property="FontWeight" Value="SemiBold"/>
             <Setter Property="Foreground" Value="{ThemeResource TextFillColorSecondaryBrush}"/>
         </Style>
+        <Style x:Key="ChartTitleStyle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="TextTrimming" Value="CharacterEllipsis"/>
+        </Style>
+        <Style x:Key="ChartUsedStyle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Foreground" Value="{ThemeResource TextFillColorSecondaryBrush}"/>
+        </Style>
+        <Style x:Key="ChartMissingStyle" TargetType="TextBlock" BasedOn="{StaticResource Caption}">
+            <Setter Property="Foreground" Value="{ThemeResource TextFillColorTertiaryBrush}"/>
+        </Style>
     </UserControl.Resources>
 
     <!-- One provider's charts: the usage history of each window, then the daily cost -->
@@ -34,41 +46,16 @@
         <StackPanel Spacing="16">
             <StackPanel Orientation="Horizontal" Spacing="10">
                 <Viewbox Width="18" Height="18" VerticalAlignment="Center">
-                    <PathIcon Data="{x:Bind views:DashboardFormat.Icon(Data.Id), Mode=OneWay}"
+                    <PathIcon x:Name="HeaderIcon"
                               Foreground="{ThemeResource TextFillColorPrimaryBrush}"/>
                 </Viewbox>
-                <TextBlock Text="{x:Bind Data.DisplayName, Mode=OneWay}" FontSize="16" FontWeight="SemiBold"
+                <TextBlock x:Name="HeaderTitle" FontSize="16" FontWeight="SemiBold"
                            VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
             </StackPanel>
 
-            <ItemsControl x:Name="WindowsChartsList" ItemsSource="{x:Bind Data.Windows, Mode=OneWay}" IsTabStop="False">
-                <ItemsControl.ItemsPanel>
-                    <ItemsPanelTemplate><StackPanel Spacing="16"/></ItemsPanelTemplate>
-                </ItemsControl.ItemsPanel>
-                <ItemsControl.ItemTemplate>
-                    <DataTemplate x:DataType="models:DashboardWindow">
-                        <StackPanel Spacing="6">
-                            <Grid ColumnSpacing="8">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="Auto"/>
-                                </Grid.ColumnDefinitions>
-                                <TextBlock Text="{x:Bind Title}" FontSize="13" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
-                                <TextBlock Grid.Column="1" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                           Text="{x:Bind views:DashboardFormat.Used(UsedPercent)}"/>
-                            </Grid>
-                            <controls:BurndownChart IsCompact="True" PlotHeight="88"
-                                                    Series="{x:Bind History}" Accent="{x:Bind Accent}"
-                                                    Visibility="{x:Bind views:DashboardFormat.VisSeriesReady(History)}"/>
-                            <TextBlock Style="{StaticResource Caption}" Foreground="{ThemeResource TextFillColorTertiaryBrush}"
-                                       Text="{x:Bind views:DashboardFormat.NoSeriesText(History)}"
-                                       Visibility="{x:Bind views:DashboardFormat.VisSeriesMissing(History)}"/>
-                        </StackPanel>
-                    </DataTemplate>
-                </ItemsControl.ItemTemplate>
-            </ItemsControl>
+            <StackPanel x:Name="WindowsChartsHost" Spacing="16"/>
 
-            <StackPanel Spacing="6" Visibility="{x:Bind views:DashboardFormat.Vis(HasCostChart), Mode=OneWay}">
+            <StackPanel x:Name="CostChartSection" Spacing="6" Visibility="Collapsed">
                 <Grid ColumnSpacing="8">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*"/>
@@ -77,13 +64,11 @@
                     <TextBlock Text="Daily cost" FontSize="13" FontWeight="SemiBold"/>
                     <TextBlock Grid.Column="1" Text="Last 30 days" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
                 </Grid>
-                <controls:DailyCostChart x:Name="CostChart" PlotHeight="88"
-                                         Series="{x:Bind Data.Cost.Daily, Mode=OneWay}"
-                                         Currency="{x:Bind Data.Cost.Currency, Mode=OneWay}"/>
+                <controls:DailyCostChart x:Name="CostChart" PlotHeight="88"/>
             </StackPanel>
 
-            <TextBlock Style="{StaticResource Caption}" Text="No graph data yet."
-                       Visibility="{x:Bind views:DashboardFormat.Vis(IsEmpty), Mode=OneWay}"/>
+            <TextBlock x:Name="EmptyMessage" Style="{StaticResource Caption}" Text="No graph data yet."
+                       Visibility="Collapsed"/>
         </StackPanel>
     </Border>
 </UserControl>

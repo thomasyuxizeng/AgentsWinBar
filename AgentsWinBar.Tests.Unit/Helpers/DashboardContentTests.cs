@@ -173,4 +173,59 @@ public class DashboardContentTests
         array.SetValue(type == typeof(BurndownPoint) ? new BurndownPoint(0, 0) : Activator.CreateInstance(type), 0);
         return array;
     }
+
+    [TestMethod]
+    public void GraphProviderEquals_TimeAndStatusOnlyChanges_ReturnsTrue()
+    {
+        var a = Provider();
+        var b = a with
+        {
+            IsLoading = true,
+            IsStale = true,
+            StaleAge = TimeSpan.FromMinutes(10),
+            FetchedAtUtc = a.FetchedAtUtc.AddMinutes(5),
+            Windows =
+            [
+                a.Windows[0] with
+                {
+                    ElapsedPercent = 55,
+                    ResetText = "Resets in 2h",
+                    Pace = new PaceProjection(PaceKind.OnTrack, ProjectedUsedAtReset: 50),
+                    PaceSummary = "On track"
+                }
+            ],
+            Cost = a.Cost! with
+            {
+                StaleAge = TimeSpan.FromMinutes(3),
+                TodayCost = 99m
+            }
+        };
+
+        DashboardContent.GraphProviderEquals(a, b).Should().BeTrue();
+    }
+
+    [TestMethod]
+    public void GraphProviderEquals_GraphVisibleChanges_ReturnsFalse()
+    {
+        var a = Provider();
+        DashboardContent.GraphProviderEquals(a, a with { Id = "codex" }).Should().BeFalse();
+        DashboardContent.GraphProviderEquals(a, a with { DisplayName = "Claude Code" }).Should().BeFalse();
+        DashboardContent.GraphProviderEquals(a, a with { Windows = [a.Windows[0] with { Key = "weekly" }] }).Should().BeFalse();
+        DashboardContent.GraphProviderEquals(a, a with { Windows = [a.Windows[0] with { Title = "Weekly" }] }).Should().BeFalse();
+        DashboardContent.GraphProviderEquals(a, a with { Windows = [a.Windows[0] with { UsedPercent = 25 }] }).Should().BeFalse();
+        DashboardContent.GraphProviderEquals(a, a with { Windows = [a.Windows[0] with { Accent = WindowAccent.Claude }] }).Should().BeFalse();
+        DashboardContent.GraphProviderEquals(a, a with { Windows = [a.Windows[0] with { History = a.Windows[0].History with { Message = "changed" } }] }).Should().BeFalse();
+        DashboardContent.GraphProviderEquals(a, a with { Cost = a.Cost! with { Currency = "EUR" } }).Should().BeFalse();
+        DashboardContent.GraphProviderEquals(a, a with { Cost = a.Cost! with { Daily = [Day() with { TotalCost = 5m }] } }).Should().BeFalse();
+        DashboardContent.GraphProviderEquals(a, a with { Cost = null }).Should().BeFalse();
+    }
+
+    [TestMethod]
+    public void GraphWindowEquals_AndGraphCostEquals_NullHandling_ReturnsExpectedResult()
+    {
+        DashboardContent.GraphWindowEquals(null, null).Should().BeTrue();
+        DashboardContent.GraphWindowEquals(Provider().Windows[0], null).Should().BeFalse();
+        DashboardContent.GraphCostEquals(null, null).Should().BeTrue();
+        DashboardContent.GraphCostEquals(Cost(), null).Should().BeFalse();
+    }
 }

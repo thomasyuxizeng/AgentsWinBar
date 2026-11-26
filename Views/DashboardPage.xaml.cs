@@ -331,7 +331,7 @@ public sealed partial class DashboardPage : Page
                     card = new DashboardGraphCard { VerticalAlignment = VerticalAlignment.Top };
                     _graphCards[provider.Id] = card;
                 }
-                if (!DashboardContent.ProviderEquals(card.Data, provider)) card.Data = provider;
+                if (!DashboardContent.GraphProviderEquals(card.Data, provider)) card.Data = provider;
             }
             else if (_graphCards.Remove(provider.Id, out var hiddenCard))
             {

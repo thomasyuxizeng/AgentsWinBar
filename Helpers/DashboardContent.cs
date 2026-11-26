@@ -47,4 +47,24 @@ public static class DashboardContent
         for (var i = 0; i < a.Count; i++) if (!equals(a[i], b[i])) return false;
         return true;
     }
+
+    public static bool GraphWindowEquals(DashboardWindow? a, DashboardWindow? b) =>
+        ReferenceEquals(a, b) || a != null && b != null &&
+        string.Equals(a.Key, b.Key, StringComparison.Ordinal) &&
+        string.Equals(a.Title, b.Title, StringComparison.Ordinal) &&
+        a.UsedPercent.Equals(b.UsedPercent) &&
+        a.Accent == b.Accent &&
+        SeriesEquals(a.History, b.History);
+
+    public static bool GraphCostEquals(DashboardCost? a, DashboardCost? b) =>
+        ReferenceEquals(a, b) || a != null && b != null &&
+        string.Equals(a.Currency, b.Currency, StringComparison.Ordinal) &&
+        SequenceEquals(a.Daily, b.Daily, DailyEquals);
+
+    public static bool GraphProviderEquals(DashboardProvider? a, DashboardProvider? b) =>
+        ReferenceEquals(a, b) || a != null && b != null &&
+        string.Equals(a.Id, b.Id, StringComparison.Ordinal) &&
+        string.Equals(a.DisplayName, b.DisplayName, StringComparison.Ordinal) &&
+        SequenceEquals(a.Windows, b.Windows, GraphWindowEquals) &&
+        GraphCostEquals(a.Cost, b.Cost);
 }
