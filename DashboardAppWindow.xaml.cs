@@ -88,6 +88,7 @@ public sealed partial class DashboardAppWindow : Window
 
         _viewModel.Providers.CollectionChanged += OnProvidersChanged;
         _viewModel.PropertyChanged += OnViewModelPropertyChanged;
+        _viewModel.ApiCreditsRefreshed += OnApiCreditsRefreshed;
         Closed += OnClosed;
         Activated += OnActivated;
         _appWindow.Changed += OnAppWindowChanged;
@@ -163,6 +164,10 @@ public sealed partial class DashboardAppWindow : Window
     }
 
     private void OnProvidersChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e) =>
+        Post(() => { _redrawTimer.Stop(); _redrawTimer.Start(); });
+
+    /// <summary>New API credits (for example after the Admin key changed in Settings): show them now, not at the next clock tick.</summary>
+    private void OnApiCreditsRefreshed(object? sender, EventArgs e) =>
         Post(() => { _redrawTimer.Stop(); _redrawTimer.Start(); });
 
     private void OnViewModelPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
@@ -360,6 +365,7 @@ public sealed partial class DashboardAppWindow : Window
         catch (Exception ex) { _logger.LogError(ex, "Dashboard timer cleanup failed"); }
         _viewModel.Providers.CollectionChanged -= OnProvidersChanged;
         _viewModel.PropertyChanged -= OnViewModelPropertyChanged;
+        _viewModel.ApiCreditsRefreshed -= OnApiCreditsRefreshed;
         try { _page?.Cleanup(); }
         catch (Exception ex) { _logger.LogError(ex, "Dashboard page cleanup failed"); }
         _page = null;

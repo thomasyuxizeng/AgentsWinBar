@@ -283,17 +283,23 @@
                     </StackPanel>
                 </StackPanel>
 
-                <!-- Rejected / Unavailable: the reason; no key: how to add one (in the details) -->
+                <!-- Rejected / Unavailable: the reason; no key: how to add one (in the details). Both lead to the Settings card. -->
                 <TextBlock Style="{StaticResource Caption}"
                            Text="{x:Bind Data.ApiCredits.Message, Mode=OneWay}"
                            Visibility="{x:Bind views:DashboardFormat.VisApiMessage(Data.ApiCredits), Mode=OneWay}"/>
                 <TextBlock Style="{StaticResource Caption}"
                            Text="{x:Bind views:DashboardFormat.ApiNoKeyText(Data.ApiCredits), Mode=OneWay}"
                            Visibility="{x:Bind views:DashboardFormat.VisApiNoKey(Data.ApiCredits), Mode=OneWay}"/>
-                <HyperlinkButton Content="Create an Admin key" Padding="0" FontSize="12"
-                                 AutomationProperties.Name="Create an Admin key"
-                                 NavigateUri="{x:Bind views:DashboardFormat.ApiAdminKeysUri()}"
-                                 Visibility="{x:Bind views:DashboardFormat.VisApiKeyLink(Data.ApiCredits), Mode=OneWay}"/>
+                <StackPanel Orientation="Horizontal" Spacing="12"
+                            Visibility="{x:Bind views:DashboardFormat.VisApiKeyLink(Data.ApiCredits), Mode=OneWay}">
+                    <Button x:Name="ApiOpenSettingsButton" Content="Open Settings" FontSize="12" Padding="10,4"
+                            Click="OnOpenApiSettingsClicked" VerticalAlignment="Center"
+                            AutomationProperties.Name="Open Settings to set up the Anthropic Admin key"
+                            ToolTipService.ToolTip="Set up or replace the Admin key in Settings"/>
+                    <HyperlinkButton Content="Create an Admin key" Padding="0" FontSize="12" VerticalAlignment="Center"
+                                     AutomationProperties.Name="Create an Admin key"
+                                     NavigateUri="{x:Bind views:DashboardFormat.ApiAdminKeysUri()}"/>
+                </StackPanel>
             </StackPanel>
 
             <!-- Gemini API spend this month (estimated from the local spend log; gemini provider only, hidden without a log) -->

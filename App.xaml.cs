@@ -354,6 +354,11 @@ public partial class App : Application
             new SettingsService(sp.GetRequiredService<ILogger<SettingsService>>(), testOverrides?.AppDataDirectory));
         services.AddSingleton<IApiBillingService>(sp => new ApiBillingService(sp.GetRequiredService<ISettingsService>(),
             sp.GetRequiredService<ILogger<ApiBillingService>>(), environmentReader: testEnvironment));
+        // The Settings "Anthropic API credits" card: tests, saves and removes the Admin key. A test run never writes
+        // this PC's environment.
+        Action<string, string?, EnvironmentVariableTarget>? testEnvironmentWriter = testOverrides is null ? null : (_, _, _) => { };
+        services.AddSingleton<IAdminKeyService>(sp => new AdminKeyService(sp.GetRequiredService<ILogger<AdminKeyService>>(),
+            testEnvironment, testEnvironmentWriter));
         services.AddSingleton<IGeminiSpendService>(sp => new GeminiSpendService(sp.GetRequiredService<ISettingsService>(),
             sp.GetRequiredService<ILogger<GeminiSpendService>>(), environmentReader: testEnvironment));
         services.AddSingleton<ISetupChecker, SetupChecker>();

@@ -54,6 +54,14 @@ public sealed partial class SettingsWindow : Window
         ContentFrame.Content = _settingsPage;
     }
 
+    /// <summary>Opens Settings (or brings the open window forward) scrolled to the Anthropic API credits card.</summary>
+    public static void OpenAtApiCredits()
+    {
+        var window = App.Windows.OfType<SettingsWindow>().FirstOrDefault() ?? new SettingsWindow();
+        window._settingsPage?.BringApiCreditsIntoView();
+        window.Activate();
+    }
+
     private void SetupTitleBar()
     {
         // Extend content into title bar

@@ -285,10 +285,13 @@ internal static class DashboardFormat
     public static string ApiUpdatedTip(ApiCreditsInfo? info) => info?.FetchedAtUtc is { } at ? $"Read from the Anthropic Cost API at {Local(at)}" : "Anthropic Cost API";
     public static Uri ApiBillingUri() => new(ApiCreditsInfo.BillingUrl);
     public static Uri ApiAdminKeysUri() => new(ApiCreditsInfo.AdminKeysUrl);
-    /// <summary>The one compact line shown without a key: what is missing and how to add it.</summary>
-    public static string ApiNoKeyText(ApiCreditsInfo? info) => $"{info?.Message} {ApiNoKeyHelp()}".Trim();
+    /// <summary>
+    /// The one compact line shown without a key (in the details): what is missing and where to add it. The state's own
+    /// message names the environment variable, so it is not shown here; Settings sets the key up instead.
+    /// </summary>
+    public static string ApiNoKeyText(ApiCreditsInfo? info) => ApiNoKeyHelp();
     public static string ApiNoKeyHelp() =>
-        $"Save it as the user environment variable {Services.ApiBillingService.AdminKeyEnvironmentVariable}. AgentsWinBar picks it up on the next refresh (restart it if you replaced an existing key).";
+        "No Anthropic Admin key is set up. Add one in Settings to see your organization's API spend against a monthly budget.";
 
     /// <summary>How far through the billing cycle (CycleStart to CycleEnd, whole UTC days) <paramref name="utcNow"/> is, 0-100; null when the cycle is unknown.</summary>
     public static double? ApiElapsedPercent(ApiCreditsInfo? info, DateTime utcNow)

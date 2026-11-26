@@ -173,6 +173,53 @@ public class MainViewModelTests
     }
 
     [TestMethod]
+    public async Task AdminKeyChanged_NoDashboardVisible_CancelsOldReadAndForcesNewOne()
+    {
+        var first = Signal(); var done = Signal(); var calls = 0; var refreshed = 0;
+        var firstToken = CancellationToken.None;
+        var dashboard = new Mock<IDashboardService>();
+        dashboard.Setup(s => s.RefreshApiCreditsAsync(true, It.IsAny<CancellationToken>()))
+            .Returns((bool _, CancellationToken ct) =>
+            {
+                if (Interlocked.Increment(ref calls) == 1) { firstToken = ct; return first.Task; }
+                return Task.CompletedTask;
+            });
+        var keys = new Mock<IAdminKeyService>();
+        _viewModel.Dispose();
+        _viewModel = new(_usage.Object, _settings.Object, new UsageAlertEvaluator(), _toast.Object,
+            _logger.Object, _history, _persistence, _activity, _session, _cache.Object, _memo.Object,
+            dashboardService: dashboard.Object, adminKeys: keys.Object);
+        _viewModel.ApiCreditsRefreshed += (_, _) => { Interlocked.Increment(ref refreshed); done.TrySetResult(); };
+
+        keys.Raise(k => k.KeyChanged += null, EventArgs.Empty);
+        calls.Should().Be(1);
+        keys.Raise(k => k.KeyChanged += null, EventArgs.Empty);
+        firstToken.IsCancellationRequested.Should().BeTrue();
+        first.TrySetResult();
+
+        await done.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        calls.Should().Be(2);
+        // The canceled read with the old key does not announce a refresh; only the new one does
+        refreshed.Should().Be(1);
+        dashboard.Verify(s => s.RefreshApiCreditsAsync(false, It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [TestMethod]
+    public void Dispose_AdminKeyChangedLater_DoesNotReadApiCredits()
+    {
+        var dashboard = new Mock<IDashboardService>();
+        var keys = new Mock<IAdminKeyService>();
+        _viewModel.Dispose();
+        _viewModel = new(_usage.Object, _settings.Object, new UsageAlertEvaluator(), _toast.Object,
+            _logger.Object, _history, _persistence, _activity, _session, _cache.Object, _memo.Object,
+            dashboardService: dashboard.Object, adminKeys: keys.Object);
+        _viewModel.Dispose();
+
+        keys.Raise(k => k.KeyChanged += null, EventArgs.Empty);
+        dashboard.Verify(s => s.RefreshApiCreditsAsync(It.IsAny<bool>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [TestMethod]
     public async Task ExitAsync_CompletedScanLedgerWritePending_WaitsBeforeExitRequested()
     {
         _viewModel.Dispose();
