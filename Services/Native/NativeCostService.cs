@@ -167,9 +167,11 @@ public sealed class NativeCostService : INativeTypedCostService, IDisposable
                 HistoryDays,
                 ct,
                 plan.FullListing ? null : plan.ChangedPaths);
-            _watcher.Complete(plan, succeeded: true);
+            // A rebuilt index was filled by a full listing even when only changed files were asked for.
+            var listed = plan.FullListing || result.IndexRebuilt;
+            _watcher.Complete(listed ? new CostScanPlan(true, []) : plan, succeeded: true);
             _logger.LogDebug("Native cost update ({Mode}): checked {Checked} files, read {Files} files and {Bytes} bytes",
-                plan.FullListing ? "full listing" : "changed files", result.DiscoveredFiles, result.FilesRead, result.BytesRead);
+                listed ? "full listing" : "changed files", result.DiscoveredFiles, result.FilesRead, result.BytesRead);
         }
         catch
         {

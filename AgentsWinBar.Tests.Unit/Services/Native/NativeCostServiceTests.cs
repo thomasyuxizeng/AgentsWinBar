@@ -236,6 +236,25 @@ public sealed class NativeCostServiceTests
     }
 
     [TestMethod]
+    public async Task FetchCostJsonAsync_WhenIndexIsRebuiltDuringAChangedFilesUpdate_ReportsEveryLog()
+    {
+        var log = Path.Combine(Claude, "a.jsonl");
+        File.WriteAllText(log, Lines(ClaudeLine("1", 100)));
+        File.WriteAllText(Path.Combine(Claude, "b.jsonl"), Lines(ClaudeLine("2", 50)));
+        using var service = Service();
+        await service.FetchCostJsonAsync(["claude"], Now);
+        using (var database = new CostIndexDatabase(Path.Combine(Data, NativeCostService.IndexFolderName, "index.sqlite")))
+            database.Execute("DROP TRIGGER usage_delete");
+        File.AppendAllText(log, Lines(ClaudeLine("3", 25)));
+        service.Watcher.NotifyChanged(CostProvider.Claude, log, created: false);
+
+        var report = Read((await service.FetchCostJsonAsync(["claude"], Now))["claude"]);
+
+        report.SessionTokens.Should().Be(175, "a rebuilt index must not be filled from the changed file alone");
+        service.Watcher.TakePlan().FullListing.Should().BeFalse("the rebuild listed everything, so the safety listing is not due");
+    }
+
+    [TestMethod]
     public void DefaultRoots_WhenGivenAProfile_CoversClaudeProjectsAndBothCodexFolders()
     {
         var roots = NativeCostService.DefaultRoots(@"C:\Users\someone");

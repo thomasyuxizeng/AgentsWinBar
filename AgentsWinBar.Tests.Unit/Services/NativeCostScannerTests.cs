@@ -300,6 +300,32 @@ public sealed partial class NativeCostScannerTests
         scanner.ReadReport(CostProvider.Claude, asOf: Today).SessionTokens.Should().Be(30);
     }
 
+    [TestMethod]
+    [DataRow("missing trigger")]
+    [DataRow("old version")]
+    public void UpdateAndReadReports_WhenIndexIsRebuiltDuringAChangedPathsUpdate_IndexesEveryLog(string damage)
+    {
+        var changed = Path.Combine(Claude, "a.jsonl");
+        File.WriteAllText(changed, ClaudeLine("1", 10) + "\n");
+        File.WriteAllText(Path.Combine(Claude, "b.jsonl"), ClaudeLine("2", 25) + "\n");
+        var scanner = Scanner();
+        IReadOnlyList<CostLogRoot> roots = [new(CostProvider.Claude, Claude), new(CostProvider.Codex, Codex)];
+        scanner.Update(roots, workers: 2);
+        using (var database = new CostIndexDatabase(IndexPath))
+            database.Execute(damage == "old version" ? "PRAGMA user_version=1" : "DROP TRIGGER usage_delete");
+        File.AppendAllText(changed, ClaudeLine("3", 40) + "\n");
+
+        var update = scanner.UpdateAndReadReports(
+            roots, workers: 2, [CostProvider.Claude], null, Today, 30, CancellationToken.None, changedPaths: [changed]);
+
+        update.Reports[CostProvider.Claude].SessionTokens.Should().Be(75, "the rebuilt index needs every log, not only the changed one");
+        update.ScanResult.FilesRead.Should().Be(2);
+        update.ScanResult.DiscoveredFiles.Should().Be(2);
+        update.ScanResult.IndexRebuilt.Should().BeTrue("the caller learns that the index was rebuilt");
+        scanner.UpdateAndReadReports(roots, workers: 2, [CostProvider.Claude], null, Today, 30, CancellationToken.None,
+            changedPaths: [changed]).ScanResult.IndexRebuilt.Should().BeFalse();
+    }
+
     // Review finding 10: a timestamp at the edge of the calendar is skipped instead of failing the whole scan.
     [TestMethod]
     [DataRow(9.0, "9999-12-31T20:00:00Z")]

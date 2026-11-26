@@ -8,8 +8,13 @@ using Microsoft.Win32.SafeHandles;
 namespace AgentsWinBar.Services.Native.Cost;
 
 /// <param name="SkippedPaths">The logs that could not be opened (locked or unreadable), or null when none were.</param>
+/// <param name="IndexRebuilt">
+/// An existing index failed validation (damaged, or of another version) and was replaced by an empty one. Every log
+/// was then listed, whatever the caller asked for, because only a full listing can fill a new index.
+/// </param>
 public sealed record CostScanResult(long FilesRead, long BytesRead, long MalformedLines, long OversizedLines,
-    long UnavailableFiles, int DiscoveredFiles, long DiscoveredBytes, IReadOnlyList<string>? SkippedPaths = null)
+    long UnavailableFiles, int DiscoveredFiles, long DiscoveredBytes, IReadOnlyList<string>? SkippedPaths = null,
+    bool IndexRebuilt = false)
 {
     public long SkippedFiles => UnavailableFiles;
 }
@@ -165,11 +170,18 @@ public sealed partial class NativeCostScanner
     {
         cancellationToken.ThrowIfCancellationRequested();
         Directory.CreateDirectory(Path.GetDirectoryName(_indexPath)!);
-        using var database = OpenForUpdate(cancellationToken);
+        using var database = OpenForUpdate(cancellationToken, out var indexRebuilt);
         using var index = new CostIndex(database);
         database.Execute("BEGIN IMMEDIATE");
         index.SetZone(zone, cancellationToken);
         database.Execute("COMMIT");
+        if (indexRebuilt && changedPaths is not null)
+        {
+            // A new index holds nothing: filling it from the changed files alone would report far too little
+            // while looking fresh. List every log instead.
+            _logger.LogInformation("The native cost index was rebuilt during an update of changed files; listing every log");
+            changedPaths = null;
+        }
 
         // A compressed archive stands for the plain log of the same name: one index entry, and the plain file wins.
         var candidates = new Dictionary<(CostProvider, CostKey), Discovered>();
@@ -272,7 +284,8 @@ public sealed partial class NativeCostScanner
         List<string>? skippedPaths = null;
         foreach (var input in inputs)
             if (input.Skipped) (skippedPaths ??= []).Add(input.Entry.Path);
-        var scanResult = new CostScanResult(opened, bytes, malformed, oversized, unavailable, files, size, skippedPaths);
+        var scanResult = new CostScanResult(opened, bytes, malformed, oversized, unavailable, files, size, skippedPaths,
+            indexRebuilt);
         var reports = ReadReportsFromIndex(index, reportProviders, pricing, asOf, historyDays, zone, cancellationToken);
         return (scanResult, reports);
 
@@ -611,8 +624,10 @@ public sealed partial class NativeCostScanner
         return index.ReadDays(provider, first, last, token);
     }
 
-    private CostIndexDatabase OpenForUpdate(CancellationToken token)
+    /// <param name="rebuilt">True when an existing index failed validation and was replaced by an empty one.</param>
+    private CostIndexDatabase OpenForUpdate(CancellationToken token, out bool rebuilt)
     {
+        rebuilt = false;
         if (File.Exists(_indexPath))
         {
             CostIndexDatabase? existing = null;
@@ -635,6 +650,7 @@ public sealed partial class NativeCostScanner
 
             token.ThrowIfCancellationRequested();
             _logger.LogInformation("Rebuilding native cost index");
+            rebuilt = true;
             File.Delete(_indexPath);
             File.Delete(_indexPath + "-journal");
             File.Delete(_indexPath + "-wal");
