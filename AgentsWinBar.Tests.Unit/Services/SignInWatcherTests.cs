@@ -37,6 +37,8 @@ public class SignInWatcherTests
         public Dictionary<string, DateTime?> Files { get; } = new(StringComparer.OrdinalIgnoreCase);
         public DateTime? Credential { get; set; }
         public string? CredentialTargetRead { get; private set; }
+        public Exception? WatchError { get; set; }
+        public Exception? TimerError { get; set; }
         public bool FoldersExist { get; set; } = true;
         public List<FakeTimer> Timers { get; } = [];
         public List<FakeWatch> Watches { get; } = [];
@@ -46,6 +48,7 @@ public class SignInWatcherTests
 
         public IDisposable? WatchFile(string path, Action changed)
         {
+            if (WatchError is { } error) throw error;
             if (!FoldersExist) return null;
             var watch = new FakeWatch(path, changed);
             Watches.Add(watch);
@@ -54,6 +57,7 @@ public class SignInWatcherTests
 
         public IDisposable StartTimer(TimeSpan dueTime, TimeSpan period, Action tick)
         {
+            if (TimerError is { } error) throw error;
             var timer = new FakeTimer(dueTime, period, tick);
             Timers.Add(timer);
             return timer;
@@ -96,6 +100,36 @@ public class SignInWatcherTests
         _signals.Watches.Single().Path.Should().Be(provider == "claude" ? ClaudeFile : CodexFile);
         _signals.Poll.Due.Should().Be(SignInWatcher.PollInterval);
         _watcher.IsPending(provider).Should().BeTrue();
+    }
+
+    [TestMethod]
+    public void Begin_WhenWatchSetupThrows_ClearsOnlyTheFailedProvider()
+    {
+        _watcher.Begin("gemini");
+        _signals.WatchError = new InvalidOperationException("Synthetic watcher failure.");
+
+        var begin = () => _watcher.Begin("claude");
+        begin.Should().Throw<InvalidOperationException>();
+
+        _watcher.IsPending("claude").Should().BeFalse();
+        _watcher.IsPending("gemini").Should().BeTrue();
+        _signals.Poll.Disposed.Should().BeFalse();
+    }
+
+    [TestMethod]
+    public void Begin_WhenPollSetupThrows_DisposesTheWatchAndAllowsRetry()
+    {
+        _signals.TimerError = new InvalidOperationException("Synthetic timer failure.");
+
+        var begin = () => _watcher.Begin("claude");
+        begin.Should().Throw<InvalidOperationException>();
+
+        _watcher.IsPending("claude").Should().BeFalse();
+        _signals.AnyLive.Should().BeFalse();
+        _signals.TimerError = null;
+        _watcher.Begin("claude");
+        _watcher.IsPending("claude").Should().BeTrue();
+        _signals.Poll.Disposed.Should().BeFalse();
     }
 
     [TestMethod]

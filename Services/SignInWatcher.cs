@@ -30,7 +30,7 @@ public interface ISignInSignals
     DateTime? FileStamp(string path);
     /// <summary>When a Windows Credential Manager entry was last written (UTC), or null when it does not exist.</summary>
     DateTime? CredentialStamp(string target);
-    /// <summary>Calls <paramref name="changed"/> when the file is created, changed or replaced. Null when its folder is missing.</summary>
+    /// <summary>Calls <paramref name="changed"/> when the file is created, changed or replaced. Null when the file cannot be watched.</summary>
     IDisposable? WatchFile(string path, Action changed);
     /// <summary>A timer: first call after <paramref name="dueTime"/>, then every <paramref name="period"/> (or once with
     /// <see cref="Timeout.InfiniteTimeSpan"/>).</summary>
@@ -83,17 +83,26 @@ public sealed class SignInWatcher(ISignInSignals signals, ILogger<SignInWatcher>
         lock (_gate)
         {
             if (_disposed) return;
-            End(id, keepPoll: true);
-            var now = signals.UtcNow;
-            var pending = new Pending
+            try
             {
-                Deadline = now + (id == "gemini" ? GeminiWindow : FileWindow),
-                StartStamp = Stamp(id),
-                NextRecheck = now + GeminiRecheckInterval
-            };
-            _pending[id] = pending;
-            if (CredentialFile(id) is { } path) pending.Watch = signals.WatchFile(path, () => OnFileChanged(id));
-            _poll ??= signals.StartTimer(PollInterval, PollInterval, Poll);
+                End(id, keepPoll: true);
+                var now = signals.UtcNow;
+                var pending = new Pending
+                {
+                    Deadline = now + (id == "gemini" ? GeminiWindow : FileWindow),
+                    StartStamp = Stamp(id),
+                    NextRecheck = now + GeminiRecheckInterval
+                };
+                _pending[id] = pending;
+                if (CredentialFile(id) is { } path)
+                    pending.Watch = signals.WatchFile(path, () => OnFileChanged(id, pending));
+                _poll ??= signals.StartTimer(PollInterval, PollInterval, Poll);
+            }
+            catch
+            {
+                End(id);
+                throw;
+            }
         }
         logger.LogInformation("Watching for a new {Provider} sign-in", id);
     }
@@ -128,11 +137,11 @@ public sealed class SignInWatcher(ISignInSignals signals, ILogger<SignInWatcher>
     private DateTime? Stamp(string id) =>
         CredentialFile(id) is { } path ? signals.FileStamp(path) : signals.CredentialStamp(GeminiCredentialTarget);
 
-    private void OnFileChanged(string id)
+    private void OnFileChanged(string id, Pending pending)
     {
         lock (_gate)
         {
-            if (!_pending.TryGetValue(id, out var pending) || pending.Settle != null) return;
+            if (!_pending.TryGetValue(id, out var current) || !ReferenceEquals(current, pending) || pending.Settle != null) return;
             pending.Settle = signals.StartTimer(SettleDelay, Timeout.InfiniteTimeSpan, () => Fire(id, pending));
         }
     }
@@ -188,15 +197,22 @@ public sealed class SignInWatcher(ISignInSignals signals, ILogger<SignInWatcher>
     /// <summary>Stops watching <paramref name="id"/>; stops the poll timer when nothing is pending. Call under the lock.</summary>
     private bool End(string id, bool keepPoll = false)
     {
-        if (!_pending.Remove(id, out var pending)) return false;
-        pending.Watch?.Dispose();
-        pending.Settle?.Dispose();
-        if (_pending.Count == 0 && !keepPoll)
+        var removed = _pending.Remove(id, out var pending);
+        try
         {
-            _poll?.Dispose();
-            _poll = null;
+            try { pending?.Watch?.Dispose(); }
+            finally { pending?.Settle?.Dispose(); }
         }
-        return true;
+        finally
+        {
+            if (_pending.Count == 0 && !keepPoll)
+            {
+                var poll = _poll;
+                _poll = null;
+                poll?.Dispose();
+            }
+        }
+        return removed;
     }
 }
 
@@ -227,18 +243,24 @@ public sealed class WindowsSignInSignals : ISignInSignals
 
     public IDisposable? WatchFile(string path, Action changed)
     {
-        var folder = Path.GetDirectoryName(path);
-        if (string.IsNullOrEmpty(folder) || !Directory.Exists(folder)) return null;
-        var watcher = new FileSystemWatcher(folder, Path.GetFileName(path))
+        FileSystemWatcher? watcher = null;
+        try
         {
-            NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.FileName | NotifyFilters.Size | NotifyFilters.CreationTime,
-            IncludeSubdirectories = false
-        };
-        watcher.Changed += (_, _) => changed();
-        watcher.Created += (_, _) => changed();
-        watcher.Renamed += (_, _) => changed();
-        watcher.EnableRaisingEvents = true;
-        return watcher;
+            var folder = Path.GetDirectoryName(path);
+            if (string.IsNullOrEmpty(folder) || !Directory.Exists(folder)) return null;
+            watcher = new FileSystemWatcher(folder, Path.GetFileName(path));
+            watcher.NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.FileName | NotifyFilters.Size | NotifyFilters.CreationTime;
+            watcher.Changed += (_, _) => changed();
+            watcher.Created += (_, _) => changed();
+            watcher.Renamed += (_, _) => changed();
+            watcher.EnableRaisingEvents = true;
+            return watcher;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            watcher?.Dispose();
+            return null;
+        }
     }
 
     public IDisposable StartTimer(TimeSpan dueTime, TimeSpan period, Action tick) =>
