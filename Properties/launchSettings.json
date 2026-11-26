@@ -1,9 +1,9 @@
 {
   "profiles": {
-    "CodexBarWin (Package)": {
+    "AgentsWinBar (Package)": {
       "commandName": "MsixPackage"
     },
-    "CodexBarWin (Unpackaged)": {
+    "AgentsWinBar (Unpackaged)": {
       "commandName": "Project"
     }
   }

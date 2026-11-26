@@ -1,9 +1,9 @@
 using System.Diagnostics;
 using System.Text;
-using CodexBarWin.Models;
+using AgentsWinBar.Models;
 using Microsoft.Extensions.Logging;
 
-namespace CodexBarWin.Services;
+namespace AgentsWinBar.Services;
 
 /// <summary>
 /// Service for executing commands in WSL.

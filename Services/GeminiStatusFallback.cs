@@ -1,10 +1,10 @@
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
-using CodexBarWin.Models;
+using AgentsWinBar.Models;
 using Microsoft.Extensions.Logging;
 
-namespace CodexBarWin.Services;
+namespace AgentsWinBar.Services;
 
 /// <summary>
 /// Fetches and caches the public Google Workspace Status incidents feed for Gemini (product npdyhgECDJ6tB66MxXyo)
@@ -19,7 +19,7 @@ public sealed class GeminiStatusFallback : IGeminiStatusFallback, IDisposable
     public static readonly TimeSpan NegativeCacheTtl = TimeSpan.FromSeconds(60);
     public static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(5);
     public const int MaxFeedBytes = 2 * 1024 * 1024;
-    public const string UserAgent = "CodexBarWin/1.0 (+https://github.com/steipete/CodexBar)";
+    public const string UserAgent = "AgentsWinBar/1.0 (+https://github.com/steipete/CodexBar)";
 
     private readonly HttpClient _httpClient;
     private readonly bool _disposeClient;

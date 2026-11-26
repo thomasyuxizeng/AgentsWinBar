@@ -1,4 +1,4 @@
-namespace CodexBarWin.Services;
+namespace AgentsWinBar.Services;
 
 /// <summary>
 /// Service for loading sample data files for development mode.

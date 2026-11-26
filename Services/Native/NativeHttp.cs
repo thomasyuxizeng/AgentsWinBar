@@ -4,7 +4,7 @@ using System.Net.Http.Headers;
 using System.Text.Json;
 using System.Text.Json.Serialization.Metadata;
 
-namespace CodexBarWin.Services.Native;
+namespace AgentsWinBar.Services.Native;
 
 /// <summary>
 /// Shared HTTP plumbing for the native usage clients: one pooled handler, no cookies, no redirects (a redirect could

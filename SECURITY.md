@@ -37,7 +37,7 @@ If you discover a security vulnerability, please report it responsibly:
 
 This security policy covers:
 
-- CodexBarWin application
+- AgentsWinBar application
 - Official releases and builds
 
 Third-party dependencies are covered by their respective security policies.

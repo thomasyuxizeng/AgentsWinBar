@@ -1,4 +1,4 @@
-namespace CodexBarWin.Helpers;
+namespace AgentsWinBar.Helpers;
 
 /// <summary>
 /// Helper methods for async operations.

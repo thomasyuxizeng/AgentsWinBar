@@ -1,5 +1,5 @@
-using CodexBarWin.Helpers;
-using CodexBarWin.Models;
+using AgentsWinBar.Helpers;
+using AgentsWinBar.Models;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.UI.Xaml;
@@ -7,7 +7,7 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Shapes;
 
-namespace CodexBarWin.Controls;
+namespace AgentsWinBar.Controls;
 
 public sealed partial class DailyCostChart : UserControl
 {

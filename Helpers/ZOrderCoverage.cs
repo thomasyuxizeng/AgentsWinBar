@@ -1,4 +1,4 @@
-namespace CodexBarWin.Helpers;
+namespace AgentsWinBar.Helpers;
 
 /// <summary>A window rectangle in physical screen pixels (right and bottom exclusive, like a Win32 RECT).</summary>
 public readonly record struct ScreenRect(int Left, int Top, int Right, int Bottom)

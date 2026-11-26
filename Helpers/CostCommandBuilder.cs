@@ -1,6 +1,6 @@
-using CodexBarWin.Models;
+using AgentsWinBar.Models;
 
-namespace CodexBarWin.Helpers;
+namespace AgentsWinBar.Helpers;
 
 /// <summary>Shell-safe Windows log paths, used only by cost scans.</summary>
 public static class CostCommandBuilder

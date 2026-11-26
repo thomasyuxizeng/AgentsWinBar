@@ -3,7 +3,7 @@ using System.Net;
 using System.Text;
 
 // Fake Claude, Codex and Antigravity (Gemini) usage endpoints on http://127.0.0.1:<port>/ for a Debug build of
-// CodexBarWin running on its CODEXBARWIN_TEST_* hooks. See README.md. Request headers are never printed: the app
+// AgentsWinBar running on its AGENTSWINBAR_TEST_* hooks. See README.md. Request headers are never printed: the app
 // sends its (fake) bearer token in Authorization.
 
 if (FakeOptions.Parse(args) is not { } options)

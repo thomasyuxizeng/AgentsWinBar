@@ -1,4 +1,4 @@
-namespace CodexBarWin.Helpers;
+namespace AgentsWinBar.Helpers;
 
 public sealed record ResetRefreshSchedule(TimeSpan Delay, DateTime? TargetResetAtUtc = null, bool IsRetry = false);
 public sealed record ResetRefreshAttempt(DateTime TriggeredAtUtc, bool RetryTriggered = false);

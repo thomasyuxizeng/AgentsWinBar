@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# codexbar shim for CodexBarWin. Installed as /usr/local/bin/codexbar inside WSL; the real CodexBar CLI
-# lives at /opt/codexbar/CodexBarCLI. CodexBarWin calls `codexbar --provider <id> --format json ...`.
+# codexbar shim for AgentsWinBar. Installed as /usr/local/bin/codexbar inside WSL; the real CodexBar CLI
+# lives at /opt/codexbar/CodexBarCLI. AgentsWinBar calls `codexbar --provider <id> --format json ...`.
 #
 # What it changes, and why:
 #   * gemini  -> the Gemini CLI login was shut down for individual Google accounts, so Gemini quota is

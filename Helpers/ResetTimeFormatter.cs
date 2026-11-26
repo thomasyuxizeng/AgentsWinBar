@@ -1,4 +1,4 @@
-namespace CodexBarWin.Helpers;
+namespace AgentsWinBar.Helpers;
 
 /// <summary>
 /// Formats a usage-window reset time as a short "Resets in ..." string.

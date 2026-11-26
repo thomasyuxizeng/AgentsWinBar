@@ -1,7 +1,7 @@
 using System.Text.RegularExpressions;
-using CodexBarWin.Models;
+using AgentsWinBar.Models;
 
-namespace CodexBarWin.Helpers;
+namespace AgentsWinBar.Helpers;
 
 /// <summary>
 /// Pure classification of final provider failures, after refresh/fallback routes have failed.

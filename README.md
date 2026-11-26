@@ -1,4 +1,4 @@
-# CodexBarWin
+# AgentsWinBar
 
 **See how much of your Claude, Codex and Gemini limits you have left, without opening anything.**
 
@@ -8,7 +8,7 @@ This is the Wave-OCE fork of [nek0der/CodexBarWin](https://github.com/nek0der/Co
 
 ## Install
 
-Tell your AI coding agent: `Install CodexBarWin from https://github.com/Wave-OCE/CodexBarWin — follow INSTALL.md`. Or run `powershell -ExecutionPolicy Bypass -File install.ps1` from a clone. See [INSTALL.md](INSTALL.md) for commands and exit codes.
+Tell your AI coding agent: `Install AgentsWinBar from https://github.com/thomasyuxizeng/AgentsWinBar — follow INSTALL.md`. Or run `powershell -ExecutionPolicy Bypass -File install.ps1` from a clone. See [INSTALL.md](INSTALL.md) for commands and exit codes.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE.txt)
 [![.NET](https://img.shields.io/badge/.NET-10.0-512BD4)](https://dotnet.microsoft.com/)
@@ -81,8 +81,8 @@ You need about 15 minutes the first time. The app runs on Windows; the usage dat
 Clone this repo, then from PowerShell in `tools\wsl`:
 
 ```powershell
-git clone https://github.com/Wave-OCE/CodexBarWin.git
-cd CodexBarWin\tools\wsl
+git clone https://github.com/thomasyuxizeng/AgentsWinBar.git
+cd AgentsWinBar\tools\wsl
 .\install-wsl-shim.ps1 -Distro Ubuntu-24.04
 ```
 
@@ -107,13 +107,13 @@ The app is a signed MSIX package. The signature is self-signed, so Windows needs
 **From a release** (when one is published):
 
 ```powershell
-gh release download --repo Wave-OCE/CodexBarWin --pattern "*.msix" --pattern "*.cer"
+gh release download --repo thomasyuxizeng/AgentsWinBar --pattern "*.msix" --pattern "*.cer"
 
 # Trust the certificate (administrator PowerShell)
-Import-Certificate -FilePath .\CodexBarWin-v*-Certificate.cer -CertStoreLocation Cert:\LocalMachine\TrustedPeople
+Import-Certificate -FilePath .\AgentsWinBar-v*-Certificate.cer -CertStoreLocation Cert:\LocalMachine\TrustedPeople
 
 # Install
-Add-AppxPackage .\CodexBarWin-v*-x64.msix
+Add-AppxPackage .\AgentsWinBar-v*-x64.msix
 ```
 
 Releases no longer include `CodexBarWin.appinstaller`. If you have one from an older release, don't use it: it points at the upstream project's releases and would install (and keep updating to) the upstream app, without the changes listed below.
@@ -125,12 +125,12 @@ Releases no longer include `CodexBarWin.appinstaller`. If you have one from an o
 $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject "CN=CodexBarWin OSS" `
   -KeyUsage DigitalSignature -CertStoreLocation Cert:\CurrentUser\My `
   -TextExtension @("2.5.29.37={text}1.3.6.1.5.5.7.3.3", "2.5.29.19={text}")
-Export-Certificate -Cert $cert -FilePath CodexBarWin.cer
-Import-Certificate -FilePath CodexBarWin.cer -CertStoreLocation Cert:\LocalMachine\TrustedPeople   # admin
+Export-Certificate -Cert $cert -FilePath AgentsWinBar.cer
+Import-Certificate -FilePath AgentsWinBar.cer -CertStoreLocation Cert:\LocalMachine\TrustedPeople   # admin
 
 # Build the package, sign it, install it
 # First set Identity Version in Package.appxmanifest to your chosen version, e.g. 0.9.6.0
-dotnet build CodexBarWin.csproj -c Release -p:Platform=x64 -p:UapAppxPackageBuildMode=SideloadOnly `
+dotnet build AgentsWinBar.csproj -c Release -p:Platform=x64 -p:UapAppxPackageBuildMode=SideloadOnly `
   -p:AppxBundle=Never -p:AppxPackageDir="AppPackages\" -p:AppxPackageSigningEnabled=false `
   -p:GenerateAppxPackageOnBuild=true -p:PublishReadyToRun=false
 signtool sign /fd SHA256 /sha1 $cert.Thumbprint (Get-ChildItem AppPackages -Filter *.msix -Recurse).FullName
@@ -146,7 +146,7 @@ The packaged app keeps its settings across updates.
 
 ### 5. Use it
 
-1. Launch **CodexBarWin** from the Start menu. It lives in the system tray (it may be under the `^` overflow).
+1. Launch **AgentsWinBar** from the Start menu. It lives in the system tray (it may be under the `^` overflow).
 2. Click the tray icon for the flyout. Click a provider card for details, the gear for **Settings**, or the dashboard button in the footer for the [full dashboard](#the-dashboard).
 3. In **Settings**, turn on what you want:
 
@@ -299,7 +299,7 @@ The full list is in the [changelog](CHANGELOG.md).
 ## How it works
 
 ```
-CodexBarWin (WinUI 3)  ->  wsl.exe  ->  codexbar shim  ->  CodexBar CLI  ->  Claude / Codex / Antigravity
+AgentsWinBar (WinUI 3)  ->  wsl.exe  ->  codexbar shim  ->  CodexBar CLI  ->  Claude / Codex / Antigravity
 ```
 
 The app runs `codexbar usage --provider <id> --format json` inside your WSL distro on a timer and draws the result. The shim sits in front of the real CLI and handles the provider-specific problems (Gemini via Antigravity, Claude rate limits and caching); everything else passes straight through. WSL itself shuts down when idle, which is why nothing in WSL can run as a background process: each refresh starts the command fresh.
@@ -320,11 +320,11 @@ Enable it in Settings, Providers. Codex and Gemini also need their sign-in from 
 
 ### "Part of this app has been blocked" / the app won't start
 
-That's Smart App Control or App Control for Business rejecting an unsigned build. Install the signed MSIX ([step 4](#4-install-the-app)). The app's crash log is at `%LOCALAPPDATA%\CodexBarWin\crash.log`.
+That's Smart App Control or App Control for Business rejecting an unsigned build. Install the signed MSIX ([step 4](#4-install-the-app)). The app's crash log is at `%LOCALAPPDATA%\AgentsWinBar\crash.log`.
 
 ### "The app package must be signed" or error `0x800B0109`
 
-The signing certificate isn't in **Trusted People** on the *Local Machine* store, or the certificate you trusted isn't the one that signed the package (releases from 1.0.0 share one certificate; earlier releases each had their own, so trust the `.cer` that came with that release). `install.ps1` handles this for you. Compare thumbprints: `Get-AuthenticodeSignature .\CodexBarWin.msix`.
+The signing certificate isn't in **Trusted People** on the *Local Machine* store, or the certificate you trusted isn't the one that signed the package (releases from 1.0.0 share one certificate; earlier releases each had their own, so trust the `.cer` that came with that release). `install.ps1` handles this for you. Compare thumbprints: `Get-AuthenticodeSignature .\AgentsWinBar.msix`.
 
 ### WSL won't install
 
@@ -336,11 +336,11 @@ Check `wsl --status`, then run the CLI by hand (see [step 3](#3-sign-in-to-each-
 
 ### Uninstall
 
-**Settings, Apps, Installed apps, CodexBarWin, Uninstall.** To remove the WSL side, delete `/opt/codexbar` and `/usr/local/bin/codexbar` inside the distro. To keep the CLI but drop the shim: `ln -sf /opt/codexbar/CodexBarCLI /usr/local/bin/codexbar`.
+**Settings, Apps, Installed apps, AgentsWinBar, Uninstall.** To remove the WSL side, delete `/opt/codexbar` and `/usr/local/bin/codexbar` inside the distro. To keep the CLI but drop the shim: `ln -sf /opt/codexbar/CodexBarCLI /usr/local/bin/codexbar`.
 
 ## Configuration
 
-Settings live in `settings.json`. For the packaged app it is under `%LOCALAPPDATA%\Packages\CodexBarWin_w05y65rx3mcz6\LocalCache\Local\CodexBarWin\`. Edit it with the app closed.
+Settings live in `settings.json`. For the packaged app it is under `%LOCALAPPDATA%\Packages\AgentsWinBar_w05y65rx3mcz6\LocalCache\Local\AgentsWinBar\`. Edit it with the app closed.
 
 ```json
 {
@@ -400,9 +400,9 @@ autoMemoryReclaim=gradual
 ## Development
 
 ```powershell
-dotnet restore CodexBarWin.sln
-dotnet build CodexBarWin.csproj -c Release -p:Platform=x64 -p:PublishReadyToRun=false
-dotnet test CodexBarWin.Tests.Unit -c Debug -p:Platform=x64
+dotnet restore AgentsWinBar.sln
+dotnet build AgentsWinBar.csproj -c Release -p:Platform=x64 -p:PublishReadyToRun=false
+dotnet test AgentsWinBar.Tests.Unit -c Debug -p:Platform=x64
 ```
 
 Stack: .NET 10, WinUI 3 (Windows App SDK 1.8), MVVM with CommunityToolkit, H.NotifyIcon, MSTest. Pure logic (pace, alerts, bar selection, formatting) is covered by unit tests; new files in `Services/`, `Models/` and `Helpers/` need tests and must be linked into the test project.

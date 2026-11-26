@@ -1,6 +1,6 @@
-using CodexBarWin.Models;
+using AgentsWinBar.Models;
 
-namespace CodexBarWin.Services;
+namespace AgentsWinBar.Services;
 
 /// <summary>
 /// Remembers when each usage window last changed, by comparing a fresh reading with the previous one.

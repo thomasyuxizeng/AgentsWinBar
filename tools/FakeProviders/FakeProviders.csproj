@@ -2,7 +2,7 @@
 
   <!--
     Fake usage endpoints for a Debug build of the app (see README.md). Not part of the solution and excluded from the
-    app build (CodexBarWin.csproj removes tools\**). Standalone: no app sources and no packages.
+    app build (AgentsWinBar.csproj removes tools\**). Standalone: no app sources and no packages.
     Build: dotnet build tools\FakeProviders -c Debug -nodeReuse:false
   -->
   <PropertyGroup>

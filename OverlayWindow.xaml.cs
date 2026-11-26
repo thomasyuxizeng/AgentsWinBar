@@ -1,9 +1,9 @@
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
-using CodexBarWin.Helpers;
-using CodexBarWin.Models;
-using CodexBarWin.Services;
-using CodexBarWin.ViewModels;
+using AgentsWinBar.Helpers;
+using AgentsWinBar.Models;
+using AgentsWinBar.Services;
+using AgentsWinBar.ViewModels;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.UI.Composition.SystemBackdrops;
@@ -13,7 +13,7 @@ using Microsoft.UI.Xaml.Input;
 using Windows.Graphics;
 using WinRT.Interop;
 
-namespace CodexBarWin;
+namespace AgentsWinBar;
 
 /// <summary>
 /// One line of the always-on overlay.
@@ -501,7 +501,7 @@ public sealed partial class OverlayWindow : Window
         }
 
         WindowZOrder.HideFromSwitchers(AppWindow, _hwnd);
-        AppWindow.Title = "CodexBarWin overlay";
+        AppWindow.Title = "AgentsWinBar overlay";
 
         NativeMethods.ApplyRoundedCorners(_hwnd);
         WindowZOrder.RemoveSystemBorder(_hwnd);

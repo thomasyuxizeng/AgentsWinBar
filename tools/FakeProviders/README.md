@@ -1,6 +1,6 @@
 # FakeProviders
 
-A local stand-in for the three usage endpoints the native readers call, so a **Debug** build of CodexBarWin can be
+A local stand-in for the three usage endpoints the native readers call, so a **Debug** build of AgentsWinBar can be
 tried against 401s, 429s, slow or broken answers without a real sign-in and without touching the real providers.
 
 It listens on `http://127.0.0.1:<port>/` only (no admin rights needed) and serves:
@@ -48,15 +48,15 @@ allow list has no loopback exception, so setting them cannot change the installe
 
 | Variable | Meaning |
 | --- | --- |
-| `CODEXBARWIN_TEST_PROFILE_ROOT` | Stands in for `%USERPROFILE%`: `.claude\.credentials.json`, `.codex\auth.json`, the cost logs (`.claude\projects`, `.codex\sessions`, `.codex\archived_sessions`) and `.claude\gemini-api\spend.jsonl` are read under it |
-| `CODEXBARWIN_TEST_APPDATA` | Stands in for `%LOCALAPPDATA%\CodexBarWin`: settings, caches, cost index and prices, `claude-cooldown.json`, `crash.log` |
-| `CODEXBARWIN_TEST_ANTIGRAVITY_CREDENTIAL_FILE` | A file with a fake Antigravity credential, read instead of Windows Credential Manager |
-| `CODEXBARWIN_TEST_CLAUDE_BASE_URL`, `..._CODEX_BASE_URL`, `..._ANTIGRAVITY_BASE_URL` | `http://127.0.0.1:<port>` and nothing else |
+| `AGENTSWINBAR_TEST_PROFILE_ROOT` | Stands in for `%USERPROFILE%`: `.claude\.credentials.json`, `.codex\auth.json`, the cost logs (`.claude\projects`, `.codex\sessions`, `.codex\archived_sessions`) and `.claude\gemini-api\spend.jsonl` are read under it |
+| `AGENTSWINBAR_TEST_APPDATA` | Stands in for `%LOCALAPPDATA%\AgentsWinBar`: settings, caches, cost index and prices, `claude-cooldown.json`, `crash.log` |
+| `AGENTSWINBAR_TEST_ANTIGRAVITY_CREDENTIAL_FILE` | A file with a fake Antigravity credential, read instead of Windows Credential Manager |
+| `AGENTSWINBAR_TEST_CLAUDE_BASE_URL`, `..._CODEX_BASE_URL`, `..._ANTIGRAVITY_BASE_URL` | `http://127.0.0.1:<port>` and nothing else |
 
 Rules (the app refuses to start in Debug when one is broken, rather than fall back to the real profile or hosts):
 paths must be absolute; a base URL must be exactly `http://127.0.0.1:<port>`; the Claude and Codex base URLs need
 `PROFILE_ROOT`, and the Antigravity base URL needs `ANTIGRAVITY_CREDENTIAL_FILE`, so a real token never goes over
-plain http; and every override needs `APPDATA`, so fake readings never land in the real data folder. While any variable is set, the app also uses the single-instance name `CodexBarWin_SingleInstance_Test`
+plain http; and every override needs `APPDATA`, so fake readings never land in the real data folder. While any variable is set, the app also uses the single-instance name `AgentsWinBar_SingleInstance_Test`
 (so it runs beside the installed app), never starts the real `claude` to renew a sign-in when the profile is fake, and
 reads no Anthropic admin key or spend-log setting from the environment.
 
@@ -81,28 +81,28 @@ set them at user level. Only Debug builds read them.
 
 ```powershell
 $vars = @{
-  CODEXBARWIN_TEST_PROFILE_ROOT                = "$fake\profile"
-  CODEXBARWIN_TEST_APPDATA                     = "$fake\data"
-  CODEXBARWIN_TEST_ANTIGRAVITY_CREDENTIAL_FILE = "$fake\antigravity.json"
-  CODEXBARWIN_TEST_CLAUDE_BASE_URL             = "http://127.0.0.1:18080"
-  CODEXBARWIN_TEST_CODEX_BASE_URL              = "http://127.0.0.1:18080"
-  CODEXBARWIN_TEST_ANTIGRAVITY_BASE_URL        = "http://127.0.0.1:18080"
+  AGENTSWINBAR_TEST_PROFILE_ROOT                = "$fake\profile"
+  AGENTSWINBAR_TEST_APPDATA                     = "$fake\data"
+  AGENTSWINBAR_TEST_ANTIGRAVITY_CREDENTIAL_FILE = "$fake\antigravity.json"
+  AGENTSWINBAR_TEST_CLAUDE_BASE_URL             = "http://127.0.0.1:18080"
+  AGENTSWINBAR_TEST_CODEX_BASE_URL              = "http://127.0.0.1:18080"
+  AGENTSWINBAR_TEST_ANTIGRAVITY_BASE_URL        = "http://127.0.0.1:18080"
 }
 $vars.GetEnumerator() | ForEach-Object { [Environment]::SetEnvironmentVariable($_.Key, $_.Value, 'User') }
 ```
 
 ### 3. Build and start a side-by-side Debug package
 
-Running `CodexBarWin.exe` from `bin` directly fails (the app needs package identity). Register the Debug layout as a
+Running `AgentsWinBar.exe` from `bin` directly fails (the app needs package identity). Register the Debug layout as a
 development package under another identity, so the installed app is left alone. Developer Mode must be on.
 
 ```powershell
-dotnet build CodexBarWin.csproj -c Debug -p:Platform=x64 -nodeReuse:false
+dotnet build AgentsWinBar.csproj -c Debug -p:Platform=x64 -nodeReuse:false
 $layout = "bin\x64\Debug\net10.0-windows10.0.19041.0\win-x64"
-(Get-Content "$layout\AppxManifest.xml" -Raw) -replace '<Identity Name="CodexBarWin"', '<Identity Name="CodexBarWinTest"' |
+(Get-Content "$layout\AppxManifest.xml" -Raw) -replace '<Identity Name="AgentsWinBar"', '<Identity Name="AgentsWinBarTest"' |
   Set-Content "$layout\AppxManifest.xml"
 Add-AppxPackage -Register "$layout\AppxManifest.xml"
-$family = (Get-AppxPackage CodexBarWinTest).PackageFamilyName
+$family = (Get-AppxPackage AgentsWinBarTest).PackageFamilyName
 explorer.exe "shell:AppsFolder\$family!App"
 ```
 
@@ -113,8 +113,8 @@ sources on Native (the default). The WSL route is not redirected.
 
 ```powershell
 curl.exe "http://127.0.0.1:18080/__stop"
-Get-Process CodexBarWin -ErrorAction SilentlyContinue | Where-Object Path -notlike '*\WindowsApps\*' | Stop-Process
-Get-AppxPackage CodexBarWinTest | Remove-AppxPackage
+Get-Process AgentsWinBar -ErrorAction SilentlyContinue | Where-Object Path -notlike '*\WindowsApps\*' | Stop-Process
+Get-AppxPackage AgentsWinBarTest | Remove-AppxPackage
 $vars.Keys | ForEach-Object { [Environment]::SetEnvironmentVariable($_, $null, 'User') }
 Remove-Item -Recurse -Force $fake
 ```
@@ -128,6 +128,6 @@ are on, so it makes no calls.
 
 ## Tests
 
-`CodexBarWin.Tests.Unit/Services/Native/NativeTestOverridesTests.cs` covers the variable parser (Debug), the Release
+`AgentsWinBar.Tests.Unit/Services/Native/NativeTestOverridesTests.cs` covers the variable parser (Debug), the Release
 stubs (`#if !DEBUG`; CI runs the tests in Release), the loopback allow list and one end-to-end read of all three
 providers over a loopback socket.

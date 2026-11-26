@@ -1,6 +1,6 @@
 using System.Diagnostics;
 
-namespace CodexBarWin.Services.Native;
+namespace AgentsWinBar.Services.Native;
 
 /// <summary>
 /// The outcome of one <c>agy models</c> run. It deliberately carries no output: nothing agy prints is kept or logged.

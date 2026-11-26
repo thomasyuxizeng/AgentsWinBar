@@ -1,4 +1,4 @@
-namespace CodexBarWin.Models;
+namespace AgentsWinBar.Models;
 
 /// <summary>
 /// Represents the setup status of the application.

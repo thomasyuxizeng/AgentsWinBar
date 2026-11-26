@@ -1,8 +1,8 @@
-using CodexBarWin.Models;
+using AgentsWinBar.Models;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 
-namespace CodexBarWin.Controls;
+namespace AgentsWinBar.Controls;
 
 /// <summary>One usage window on a dashboard provider panel. Binds to a <see cref="DashboardWindow"/>.</summary>
 public sealed partial class DashboardWindowRow : UserControl

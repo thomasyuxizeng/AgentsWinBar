@@ -1,4 +1,4 @@
-namespace CodexBarWin.Helpers;
+namespace AgentsWinBar.Helpers;
 
 /// <summary>Quiet caption for last-known-good data: empty when fresh, "Stale · last updated 12m ago" otherwise.</summary>
 public static class StaleCaption

@@ -1,6 +1,6 @@
-using CodexBarWin.Models;
+using AgentsWinBar.Models;
 
-namespace CodexBarWin.Services;
+namespace AgentsWinBar.Services;
 
 /// <summary>
 /// Fallback status fetcher for Gemini / Antigravity when the CLI outputs no status object.

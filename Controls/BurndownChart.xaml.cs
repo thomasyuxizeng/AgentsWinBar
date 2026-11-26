@@ -1,4 +1,4 @@
-using CodexBarWin.Helpers;
+using AgentsWinBar.Helpers;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.UI.Xaml;
@@ -8,7 +8,7 @@ using Microsoft.UI.Xaml.Shapes;
 using Windows.Foundation;
 using Windows.UI;
 
-namespace CodexBarWin.Controls;
+namespace AgentsWinBar.Controls;
 
 public sealed partial class BurndownChart : UserControl
 {

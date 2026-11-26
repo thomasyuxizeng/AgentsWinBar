@@ -1,7 +1,7 @@
-using CodexBarWin.Helpers;
-using CodexBarWin.Models;
+using AgentsWinBar.Helpers;
+using AgentsWinBar.Models;
 
-namespace CodexBarWin.Services;
+namespace AgentsWinBar.Services;
 
 /// <summary>
 /// A notification the user should see.

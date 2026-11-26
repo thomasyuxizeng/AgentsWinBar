@@ -1,4 +1,4 @@
-namespace CodexBarWin.Models;
+namespace AgentsWinBar.Models;
 
 /// <summary>
 /// Theme mode setting.
@@ -45,7 +45,7 @@ public class AnimationSettings
 /// </summary>
 public class AppSettings
 {
-    private const string DefaultGuideUrl = "https://github.com/Wave-OCE/CodexBarWin#quick-start";
+    private const string DefaultGuideUrl = "https://github.com/thomasyuxizeng/AgentsWinBar#quick-start";
     public int Version { get; set; } = 1;
     public List<ProviderConfig> Providers { get; set; } = [];
     public int RefreshIntervalSeconds { get; set; } = 120;

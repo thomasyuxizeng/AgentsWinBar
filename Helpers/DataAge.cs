@@ -1,4 +1,4 @@
-namespace CodexBarWin.Helpers;
+namespace AgentsWinBar.Helpers;
 
 /// <summary>
 /// A fetch can succeed while returning an old reading: the WSL shim serves its last good Claude result when

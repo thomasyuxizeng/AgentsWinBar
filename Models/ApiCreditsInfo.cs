@@ -1,4 +1,4 @@
-namespace CodexBarWin.Models;
+namespace AgentsWinBar.Models;
 
 public enum ApiCreditsState { Ok, NoKey, Rejected, Unavailable }
 

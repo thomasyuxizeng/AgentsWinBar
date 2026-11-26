@@ -1,4 +1,4 @@
-namespace CodexBarWin.Helpers;
+namespace AgentsWinBar.Helpers;
 
 /// <summary>
 /// Remembers usage-window resets that were detected while nobody could see the bars (the session was locked), so each

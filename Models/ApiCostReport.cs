@@ -1,6 +1,6 @@
 using System.Text.Json.Serialization;
 
-namespace CodexBarWin.Models;
+namespace AgentsWinBar.Models;
 
 public sealed record ApiCostReport
 {

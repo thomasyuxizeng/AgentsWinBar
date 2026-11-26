@@ -1,6 +1,6 @@
 using System.Globalization;
 
-namespace CodexBarWin.Helpers;
+namespace AgentsWinBar.Helpers;
 
 public static class TimestampFormatter
 {

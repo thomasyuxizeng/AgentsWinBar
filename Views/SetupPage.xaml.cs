@@ -1,10 +1,10 @@
-using CodexBarWin.ViewModels;
+using AgentsWinBar.ViewModels;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 
-namespace CodexBarWin.Views;
+namespace AgentsWinBar.Views;
 
 /// <summary>
 /// Page for guiding users through the setup process.

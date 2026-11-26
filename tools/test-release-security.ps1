@@ -181,8 +181,8 @@ if ($Group -eq 'Licenses') {
     Assert-True (([regex]::Matches($licenseWorkflow, 'if \(\$LASTEXITCODE -ne 0\)')).Count -eq 2) 'both report generators check native exit status'
     # nuget-license 4.x rejects --output-type ("Unrecognized option"); --output is the format and --file-output the target.
     Assert-True ($licenseWorkflow -notmatch '--output-type') 'workflow does not use the option nuget-license 4.x rejects'
-    Assert-True ($licenseWorkflow.Contains('nuget-license --input CodexBarWin.sln --output JsonPretty --file-output licenses.json')) 'JSON report uses valid nuget-license options'
-    Assert-True ($licenseWorkflow.Contains('nuget-license --input CodexBarWin.sln --output Table --file-output licenses.txt')) 'table report uses valid nuget-license options'
+    Assert-True ($licenseWorkflow.Contains('nuget-license --input AgentsWinBar.sln --output JsonPretty --file-output licenses.json')) 'JSON report uses valid nuget-license options'
+    Assert-True ($licenseWorkflow.Contains('nuget-license --input AgentsWinBar.sln --output Table --file-output licenses.txt')) 'table report uses valid nuget-license options'
     Assert-True ($licenseWorkflow.Contains('./tools/check-licenses.ps1 -ReportPath licenses.json')) 'workflow uses tested fail-closed policy'
     Assert-True ($licenseWorkflow.Contains('if-no-files-found: error')) 'empty artifact upload fails'
 }

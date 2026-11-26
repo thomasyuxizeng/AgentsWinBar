@@ -1,4 +1,4 @@
-namespace CodexBarWin.Helpers;
+namespace AgentsWinBar.Helpers;
 
 /// <summary>
 /// Pure string helpers that turn an early-reset marker on a window into the detail line and tooltip text.

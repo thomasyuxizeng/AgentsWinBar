@@ -1,10 +1,10 @@
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
-using CodexBarWin.Helpers;
-using CodexBarWin.Models;
+using AgentsWinBar.Helpers;
+using AgentsWinBar.Models;
 
-namespace CodexBarWin.Services;
+namespace AgentsWinBar.Services;
 
 /// <summary>
 /// Parser for Google Workspace Status incidents feed (incidents.json) targeting Gemini.

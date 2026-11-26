@@ -1,4 +1,4 @@
-namespace CodexBarWin.Helpers;
+namespace AgentsWinBar.Helpers;
 
 /// <summary>
 /// Decides which reset stamp a bar of the taskbar strip or the overlay may show. A reset the user could not see (the

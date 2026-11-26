@@ -1,7 +1,7 @@
-using CodexBarWin.Models;
-using CodexBarWin.Services;
+using AgentsWinBar.Models;
+using AgentsWinBar.Services;
 
-namespace CodexBarWin.Helpers;
+namespace AgentsWinBar.Helpers;
 
 /// <summary>
 /// Represents a detected early reset event for a usage window.

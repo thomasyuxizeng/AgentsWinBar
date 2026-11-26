@@ -1,6 +1,6 @@
-using CodexBarWin.Models;
+using AgentsWinBar.Models;
 
-namespace CodexBarWin.Services;
+namespace AgentsWinBar.Services;
 
 /// <summary>
 /// Interface for CodexBar CLI service.

@@ -1,7 +1,7 @@
 using Microsoft.Extensions.Logging;
 using Microsoft.Win32;
 
-namespace CodexBarWin.Services;
+namespace AgentsWinBar.Services;
 
 /// <summary>Forwards Windows session transitions; subscribers choose their execution context.</summary>
 [System.Runtime.Versioning.SupportedOSPlatform("windows")]

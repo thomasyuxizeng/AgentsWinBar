@@ -69,7 +69,7 @@ body:
   - type: input
     id: app-version
     attributes:
-      label: CodexBarWin Version
+      label: AgentsWinBar Version
       placeholder: e.g., 0.1.0
     validations:
       required: true

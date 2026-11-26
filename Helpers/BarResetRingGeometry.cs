@@ -1,6 +1,6 @@
 using System.Numerics;
 
-namespace CodexBarWin.Helpers;
+namespace AgentsWinBar.Helpers;
 
 /// <summary>
 /// Placement of the reset ring around a track, in the track's coordinates (DIPs, origin at the track's top-left).

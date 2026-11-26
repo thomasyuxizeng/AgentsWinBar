@@ -1,6 +1,6 @@
 using System.Text.Json.Serialization;
 
-namespace CodexBarWin.Models;
+namespace AgentsWinBar.Models;
 
 /// <summary>
 /// JSON serializer context for AOT-compatible serialization.
@@ -49,7 +49,7 @@ namespace CodexBarWin.Models;
 [JsonSerializable(typeof(EarlyResetStoreFile))]
 [JsonSerializable(typeof(EarlyResetEntry))]
 [JsonSerializable(typeof(List<EarlyResetEntry>))]
-[JsonSerializable(typeof(CodexBarWin.Helpers.EarlyReset))]
+[JsonSerializable(typeof(AgentsWinBar.Helpers.EarlyReset))]
 public partial class AppJsonSerializerContext : JsonSerializerContext
 {
 }

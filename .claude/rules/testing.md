@@ -30,5 +30,5 @@ Examples:
 ## Running Tests
 
 ```bash
-dotnet test CodexBarWin.Tests.Unit -c Debug -p:Platform=x64
+dotnet test AgentsWinBar.Tests.Unit -c Debug -p:Platform=x64
 ```

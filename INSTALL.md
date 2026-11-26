@@ -1,4 +1,4 @@
-# Install CodexBarWin - instructions for an AI agent
+# Install AgentsWinBar - instructions for an AI agent
 
 Run setup as the human's normal Windows user on Windows 11, x64 or ARM64. The default setup uses native Windows providers and requires no reboot.
 
@@ -13,12 +13,12 @@ Run the installer in ordinary Windows PowerShell, **outside your sandbox** (requ
 Clone the repository and allow up to 30 minutes for setup. Keep the command running through elevation.
 
 ```powershell
-git clone https://github.com/Wave-OCE/CodexBarWin.git
-cd CodexBarWin
+git clone https://github.com/thomasyuxizeng/AgentsWinBar.git
+cd AgentsWinBar
 powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1
 ```
 
-For private access, obtain access from the owner, have the human complete `gh auth login`, then use `gh repo clone Wave-OCE/CodexBarWin`. GitHub authentication is separate from setup's UAC prompt.
+For private access, obtain access from the owner, have the human complete `gh auth login`, then use `gh repo clone thomasyuxizeng/AgentsWinBar`. GitHub authentication is separate from setup's UAC prompt.
 
 Preview the install:
 
@@ -30,11 +30,11 @@ Setup verifies the release checksum and MSIX signer, installs or updates the app
 
 Setup detects providers from Windows tools and defaults to Claude and Codex when it detects none. Set the list explicitly with `-Providers claude,codex,gemini`. Other options include `-Repo owner/repo`, `-MsixPath <local-msix>`, and `-SkipApp` to check sign-ins without installing or launching the app. `-SkipWsl` remains accepted and has no effect.
 
-Setup stages its script, downloads, settings for reruns, and logs in `%LOCALAPPDATA%\CodexBarWin-Setup`. It reuses saved selections when rerun from there. Use `-Resume` to reload saved selections from the clone and restore `-SkipApp` if previously set. Explicit arguments override remembered ones.
+Setup stages its script, downloads, settings for reruns, and logs in `%LOCALAPPDATA%\AgentsWinBar-Setup`. It reuses saved selections when rerun from there. Use `-Resume` to reload saved selections from the clone and restore `-SkipApp` if previously set. Explicit arguments override remembered ones.
 
 ## Handle the result
 
-Read the summary, the process exit code, and the last line, `CODEXBARWIN_SETUP=<status>`.
+Read the summary, the process exit code, and the last line, `AGENTSWINBAR_SETUP=<status>`.
 
 | Exit | Status | Next action |
 | --- | --- | --- |
@@ -51,7 +51,7 @@ Only the human signs in. For Claude, run `claude` in a Windows terminal once and
 For a staged retry, run:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File "$env:LOCALAPPDATA\CodexBarWin-Setup\install.ps1"
+powershell -NoProfile -ExecutionPolicy Bypass -File "$env:LOCALAPPDATA\AgentsWinBar-Setup\install.ps1"
 ```
 
 ## Safety
@@ -63,7 +63,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "$env:LOCALAPPDATA\CodexBarW
 
 ## Verify
 
-Confirm the app launched and setup returned exit `0` with `CODEXBARWIN_SETUP=ok` after all selected sign-ins were present. A dry run previews the steps. Setup waits up to 120 seconds after launching the app and reports only the usage status for each selected provider.
+Confirm the app launched and setup returned exit `0` with `AGENTSWINBAR_SETUP=ok` after all selected sign-ins were present. A dry run previews the steps. Setup waits up to 120 seconds after launching the app and reports only the usage status for each selected provider.
 
 - `live` means setup found a current provider reading after launch.
 - `stale` means setup found an outdated reading or a rate-limit indication.
@@ -74,22 +74,30 @@ Confirm the app launched and setup returned exit `0` with `CODEXBARWIN_SETUP=ok`
 Update the clone and rerun setup. It installs the latest release over the current app and preserves existing settings and cost totals.
 
 ```powershell
-cd CodexBarWin
+cd AgentsWinBar
 git pull
 powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1
 ```
 
 Handle the result as for a first install. Administrator approval is needed only if the package signer needs trust or Windows App Runtime needs elevation.
 
-## Uninstall
+## Upgrading from CodexBarWin
 
-Remove the Windows app as the original user:
+The app was renamed from CodexBarWin. AgentsWinBar installs beside the old app and copies its data on first launch; setup never removes the old app. Once AgentsWinBar shows the human's data, the human can remove the old app as the original user:
 
 ```powershell
 Get-AppxPackage -Name CodexBarWin | Remove-AppxPackage
 ```
 
-Keep shared runtimes, provider tools, and sign-ins. If the human requests cleanup, remove `%LOCALAPPDATA%\CodexBarWin-Setup` and any remaining app settings under `%LOCALAPPDATA%\CodexBarWin` or the package's `LocalCache`.
+## Uninstall
+
+Remove the Windows app as the original user:
+
+```powershell
+Get-AppxPackage -Name AgentsWinBar | Remove-AppxPackage
+```
+
+Keep shared runtimes, provider tools, and sign-ins. If the human requests cleanup, remove `%LOCALAPPDATA%\AgentsWinBar-Setup` and any remaining app settings under `%LOCALAPPDATA%\AgentsWinBar` or the package's `LocalCache`.
 
 ## Optional: WSL fallback
 

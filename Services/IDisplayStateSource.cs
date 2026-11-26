@@ -1,4 +1,4 @@
-namespace CodexBarWin.Services;
+namespace AgentsWinBar.Services;
 
 /// <summary>Reports whether the display is on (the screen can be seen) and when that changes.</summary>
 public interface IDisplayStateSource

@@ -1,7 +1,7 @@
 using Microsoft.UI.Xaml.Markup;
 using Microsoft.UI.Xaml.Media;
 
-namespace CodexBarWin.Helpers;
+namespace AgentsWinBar.Helpers;
 
 /// <summary>
 /// Provider logos as vector geometry (16x16 path data from Bootstrap Icons and UXWing).

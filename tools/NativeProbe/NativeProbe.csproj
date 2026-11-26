@@ -2,7 +2,7 @@
 
   <!--
     Spike probe for the native usage readers. Not part of the solution and excluded from the app build
-    (CodexBarWin.csproj removes tools\**). Build: dotnet build tools\NativeProbe -c Release -nodeReuse:false
+    (AgentsWinBar.csproj removes tools\**). Build: dotnet build tools\NativeProbe -c Release -nodeReuse:false
   -->
   <PropertyGroup>
     <OutputType>Exe</OutputType>
@@ -24,6 +24,7 @@
   <ItemGroup>
     <Compile Include="..\..\Services\Native\*.cs" Exclude="..\..\Services\Native\NativeUsageDtoMapper.cs" Link="Native\%(Filename)%(Extension)" />
     <Compile Include="..\..\Models\ProviderConfig.cs" Link="Linked\ProviderConfig.cs" />
+    <Compile Include="..\..\Helpers\AppPaths.cs" Link="Linked\AppPaths.cs" />
   </ItemGroup>
 
 </Project>

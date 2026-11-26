@@ -1,7 +1,7 @@
 using System.Globalization;
-using CodexBarWin.Models;
+using AgentsWinBar.Models;
 
-namespace CodexBarWin.Helpers;
+namespace AgentsWinBar.Helpers;
 
 /// <summary>Reports only the provider/window identities captured when a targeted attempt began.</summary>
 public static class ResetRefreshOutcome

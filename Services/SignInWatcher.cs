@@ -1,8 +1,8 @@
 using System.Runtime.InteropServices;
-using CodexBarWin.Models;
+using AgentsWinBar.Models;
 using Microsoft.Extensions.Logging;
 
-namespace CodexBarWin.Services;
+namespace AgentsWinBar.Services;
 
 /// <summary>Asks for a refresh after a sign-in button was used. <see cref="CredentialChanged"/> is false for the
 /// periodic Gemini re-check, which only matters while the provider still shows as signed out.</summary>

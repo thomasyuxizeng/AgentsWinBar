@@ -1,4 +1,4 @@
-"""Split the WSL VM's memory during CodexBarWin refreshes between page cache, process memory and the rest.
+"""Split the WSL VM's memory during AgentsWinBar refreshes between page cache, process memory and the rest.
 
 Usage: python analyse_vm.py [DIR] [PREFIX] [HOST_CSV]  (defaults: this folder, vmmon, warm-vm.csv)
 Inputs: <PREFIX>.mem.csv, <PREFIX>.procs.csv (guest, from vm-monitor.sh) and HOST_CSV (host, optional).

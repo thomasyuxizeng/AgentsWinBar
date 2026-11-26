@@ -2,7 +2,7 @@ using System.Globalization;
 using System.Net;
 using Microsoft.Extensions.Logging;
 
-namespace CodexBarWin.Services.Native.Cost;
+namespace AgentsWinBar.Services.Native.Cost;
 
 /// <summary>
 /// Supplies the prices for cost reports: the bundled snapshot, or a newer copy of the models.dev catalog kept in

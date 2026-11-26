@@ -1,4 +1,4 @@
-namespace CodexBarWin.Services;
+namespace AgentsWinBar.Services;
 
 /// <summary>Which way <see cref="ISignInLauncher.Launch"/> opened the provider's sign-in.</summary>
 public enum SignInRoute

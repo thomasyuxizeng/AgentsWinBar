@@ -1,9 +1,9 @@
 using System.Text;
-using CodexBarWin.Helpers;
-using CodexBarWin.Models;
+using AgentsWinBar.Helpers;
+using AgentsWinBar.Models;
 using Microsoft.Extensions.Logging;
 
-namespace CodexBarWin.Services;
+namespace AgentsWinBar.Services;
 
 /// <summary>
 /// Reads this month's Gemini API spend from the local spend log.

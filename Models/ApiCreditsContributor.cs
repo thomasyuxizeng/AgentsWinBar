@@ -1,4 +1,4 @@
-namespace CodexBarWin.Models;
+namespace AgentsWinBar.Models;
 
 public sealed record ApiCreditsContributor
 {

@@ -1,4 +1,4 @@
-namespace CodexBarWin.Helpers;
+namespace AgentsWinBar.Helpers;
 
 /// <summary>
 /// Presentation string helpers for early reset badges, details, and notifications. Pure and English-only.

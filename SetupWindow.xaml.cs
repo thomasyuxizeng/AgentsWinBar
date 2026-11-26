@@ -1,6 +1,6 @@
-using CodexBarWin.Helpers;
-using CodexBarWin.ViewModels;
-using CodexBarWin.Views;
+using AgentsWinBar.Helpers;
+using AgentsWinBar.ViewModels;
+using AgentsWinBar.Views;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.UI;
@@ -10,7 +10,7 @@ using Microsoft.UI.Xaml;
 using Microsoft.Win32;
 using WinRT.Interop;
 
-namespace CodexBarWin;
+namespace AgentsWinBar;
 
 /// <summary>
 /// Window for the setup process.

@@ -1,4 +1,4 @@
-namespace CodexBarWin.Helpers;
+namespace AgentsWinBar.Helpers;
 
 /// <summary>
 /// Pure maths for the reset animation's "old fill" ghost when the previous usage comes from the data layer

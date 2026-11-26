@@ -3,7 +3,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 
-namespace CodexBarWin.Services.Native.Cost;
+namespace AgentsWinBar.Services.Native.Cost;
 
 internal readonly record struct CostKey(long First, long Second)
 {

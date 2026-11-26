@@ -1,4 +1,4 @@
-namespace CodexBarWin.Helpers;
+namespace AgentsWinBar.Helpers;
 
 /// <summary>
 /// Short display names for the extra usage windows the CLI reports. Titles reach every screen (flyout cards,

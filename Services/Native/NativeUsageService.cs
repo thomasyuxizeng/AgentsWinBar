@@ -1,8 +1,8 @@
 using System.Text.Json;
-using CodexBarWin.Models;
+using AgentsWinBar.Models;
 using Microsoft.Extensions.Logging;
 
-namespace CodexBarWin.Services.Native;
+namespace AgentsWinBar.Services.Native;
 
 /// <summary>Reads usage natively and returns it as the JSON the CodexBar CLI would have printed.</summary>
 public interface INativeUsageService

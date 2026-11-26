@@ -1,4 +1,4 @@
-namespace CodexBarWin.Helpers;
+namespace AgentsWinBar.Helpers;
 
 /// <summary>Normalizes external values before dashboard calculations and formatting.</summary>
 public static class DashboardValues

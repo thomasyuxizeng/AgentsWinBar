@@ -8,7 +8,7 @@ using Microsoft.UI.Xaml.Shapes;
 using Windows.UI;
 using Windows.UI.ViewManagement;
 
-namespace CodexBarWin.Helpers;
+namespace AgentsWinBar.Helpers;
 
 /// <summary>
 /// The "usage window reset" effect of one bar, in this order: a bright green ring draws itself around the track,

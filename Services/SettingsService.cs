@@ -1,7 +1,8 @@
-using CodexBarWin.Models;
+using AgentsWinBar.Helpers;
+using AgentsWinBar.Models;
 using Microsoft.Extensions.Logging;
 
-namespace CodexBarWin.Services;
+namespace AgentsWinBar.Services;
 
 /// <summary>
 /// Service for managing application settings.
@@ -21,8 +22,7 @@ public class SettingsService : ISettingsService
     {
         _logger = logger;
 
-        var appDataPath = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-        var appFolder = settingsDirectory ?? Path.Combine(appDataPath, "CodexBarWin");
+        var appFolder = settingsDirectory ?? AppPaths.DataDirectory;
         Directory.CreateDirectory(appFolder);
         SettingsFilePath = Path.Combine(appFolder, "settings.json");
     }

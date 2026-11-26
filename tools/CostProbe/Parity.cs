@@ -1,7 +1,7 @@
 using System.Diagnostics;
 using System.Globalization;
 using System.Text.Json;
-using CodexBarWin.Services.Native.Cost;
+using AgentsWinBar.Services.Native.Cost;
 using Microsoft.Extensions.Logging.Abstractions;
 
 /// <summary>
@@ -31,7 +31,7 @@ internal static class Parity
             : Path.Combine(Path.GetTempPath(), "CostProbe-parity-" + Guid.NewGuid().ToString("N"));
         var profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         var ledgerPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "Packages", "CodexBarWin_w05y65rx3mcz6", "LocalCache", "Local", "CodexBarWin", "cost-ledger.json");
+            "Packages", "AgentsWinBar_w05y65rx3mcz6", "LocalCache", "Local", "AgentsWinBar", "cost-ledger.json");
         CostLogRoot[] roots =
         [
             new(CostProvider.Claude, Path.Combine(profile, ".claude", "projects")),

@@ -1,4 +1,4 @@
-namespace CodexBarWin.Models;
+namespace AgentsWinBar.Models;
 
 /// <summary>Fetch validity is independent of numeric values: a successful zero is a real reading.</summary>
 public enum FetchOutcome { Unknown, Success, Unavailable, Failed }

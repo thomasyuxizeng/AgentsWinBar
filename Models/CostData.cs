@@ -1,4 +1,4 @@
-namespace CodexBarWin.Models;
+namespace AgentsWinBar.Models;
 
 /// <summary>Local log totals at list prices, not the provider's bill.</summary>
 public record CostData

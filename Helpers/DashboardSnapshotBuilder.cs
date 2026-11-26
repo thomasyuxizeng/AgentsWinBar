@@ -1,7 +1,7 @@
-using CodexBarWin.Models;
-using CodexBarWin.Services;
+using AgentsWinBar.Models;
+using AgentsWinBar.Services;
 
-namespace CodexBarWin.Helpers;
+namespace AgentsWinBar.Helpers;
 
 /// <summary>Captured state for a deterministic, UI-independent dashboard projection.</summary>
 public sealed record DashboardInputs

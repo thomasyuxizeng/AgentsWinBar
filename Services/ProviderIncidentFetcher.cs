@@ -2,10 +2,10 @@ using System.Buffers;
 using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Http.Headers;
-using CodexBarWin.Models;
+using AgentsWinBar.Models;
 using Microsoft.Extensions.Logging;
 
-namespace CodexBarWin.Services;
+namespace AgentsWinBar.Services;
 
 /// <summary>
 /// Fetches and caches public service status and open incident feeds for Claude, Codex/OpenAI, and Gemini.
@@ -22,7 +22,7 @@ public sealed class ProviderIncidentFetcher : IProviderIncidentFetcher, IDisposa
     public static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(5);
     public const int MaxFeedBytes = 2 * 1024 * 1024;
     private const int MaxPooledBufferBytes = 512 * 1024;
-    public const string UserAgent = "CodexBarWin/1.0 (+https://github.com/steipete/CodexBar)";
+    public const string UserAgent = "AgentsWinBar/1.0 (+https://github.com/steipete/CodexBar)";
 
     private sealed record CachedEntry(
         DateTimeOffset CachedAt,

@@ -1,13 +1,13 @@
 using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
-using CodexBarWin.Models;
-using CodexBarWin.Services;
+using AgentsWinBar.Models;
+using AgentsWinBar.Services;
 using Microsoft.Extensions.Logging;
 using Windows.ApplicationModel.DataTransfer;
 using Windows.System;
 
-namespace CodexBarWin.ViewModels;
+namespace AgentsWinBar.ViewModels;
 
 /// <summary>
 /// ViewModel for the setup page.
@@ -205,7 +205,7 @@ public partial class SetupViewModel : ObservableObject
         switch (Status?.CurrentStep)
         {
             case SetupStep.InstallWsl:
-                InstructionText = "CodexBarWin requires WSL to function.\n" +
+                InstructionText = "AgentsWinBar requires WSL to function.\n" +
                                   "Open PowerShell as Administrator and run:";
                 Commands.Add(new CommandItem("wsl --install -d Ubuntu", CopyCommand));
                 break;
@@ -231,7 +231,7 @@ public partial class SetupViewModel : ObservableObject
 
             case SetupStep.InstallCodexBar:
                 InstructionText = "Install the CodexBar CLI and Windows bridge in WSL.\n\n" +
-                                  "From your CodexBarWin source folder, run this in PowerShell " +
+                                  "From your AgentsWinBar source folder, run this in PowerShell " +
                                   "(replace Ubuntu-24.04 with your distribution name). " +
                                   "The README explains the required sign-ins.";
                 Commands.Add(new CommandItem(".\\tools\\wsl\\install-wsl-shim.ps1 -Distro Ubuntu-24.04", CopyCommand));

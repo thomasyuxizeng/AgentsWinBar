@@ -1,9 +1,9 @@
-using CodexBarWin.Models;
+using AgentsWinBar.Models;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 
-namespace CodexBarWin.Controls;
+namespace AgentsWinBar.Controls;
 
 /// <summary>One provider's charts on the dashboard's graphs section: usage history per window, then the daily cost. Binds to a <see cref="DashboardProvider"/>.</summary>
 public sealed partial class DashboardGraphCard : UserControl

@@ -1,6 +1,6 @@
-using CodexBarWin.Models;
+using AgentsWinBar.Models;
 
-namespace CodexBarWin.Helpers;
+namespace AgentsWinBar.Helpers;
 
 /// <summary>The per-provider "show graphs" choice on the dashboard, kept in <see cref="ProviderConfig.ShowGraphs"/>.</summary>
 public static class GraphVisibility

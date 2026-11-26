@@ -1,6 +1,6 @@
-using CodexBarWin.Helpers;
+using AgentsWinBar.Helpers;
 
-namespace CodexBarWin.Models;
+namespace AgentsWinBar.Models;
 
 /// <summary>
 /// Persisted root structure for early-resets.json.

@@ -1,4 +1,4 @@
-namespace CodexBarWin.Helpers;
+namespace AgentsWinBar.Helpers;
 
 /// <summary>
 /// Pure decision logic for the usage-bar reset animation: whether a new reset timestamp should make the bar play it.

@@ -1,7 +1,7 @@
-using CodexBarWin.Models;
-using CodexBarWin.Services;
+using AgentsWinBar.Models;
+using AgentsWinBar.Services;
 
-namespace CodexBarWin.Helpers;
+namespace AgentsWinBar.Helpers;
 
 /// <summary>Session-only reset signals. Never uses disk/cache baselines or persisted early-reset events.</summary>
 public sealed class UsageResetTracker

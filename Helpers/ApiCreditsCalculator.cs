@@ -1,8 +1,8 @@
 using System.Globalization;
 using System.Text.Json;
-using CodexBarWin.Models;
+using AgentsWinBar.Models;
 
-namespace CodexBarWin.Helpers;
+namespace AgentsWinBar.Helpers;
 
 public static class ApiCreditsCalculator
 {

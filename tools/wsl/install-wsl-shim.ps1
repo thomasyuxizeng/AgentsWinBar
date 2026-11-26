@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  Installs the CodexBar CLI and the CodexBarWin shim into a WSL distro, from Windows.
+  Installs the CodexBar CLI and the AgentsWinBar shim into a WSL distro, from Windows.
 
 .EXAMPLE
   .\install-wsl-shim.ps1 -Distro Ubuntu-24.04

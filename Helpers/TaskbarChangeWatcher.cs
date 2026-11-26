@@ -1,6 +1,6 @@
 using System.Runtime.InteropServices;
 
-namespace CodexBarWin.Helpers;
+namespace AgentsWinBar.Helpers;
 
 /// <summary>
 /// Calls back when the taskbar or the displays may have moved: work-area and other setting changes (WM_SETTINGCHANGE),

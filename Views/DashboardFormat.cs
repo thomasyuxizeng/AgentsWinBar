@@ -1,12 +1,12 @@
 using System.Globalization;
-using CodexBarWin.Helpers;
-using CodexBarWin.Models;
+using AgentsWinBar.Helpers;
+using AgentsWinBar.Models;
 using Microsoft.UI;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Media;
 using Windows.UI;
 
-namespace CodexBarWin.Views;
+namespace AgentsWinBar.Views;
 
 /// <summary>
 /// Presentation helpers for the dashboard: pure formatting of snapshot values for x:Bind function bindings.
@@ -288,7 +288,7 @@ internal static class DashboardFormat
     /// <summary>The one compact line shown without a key: what is missing and how to add it.</summary>
     public static string ApiNoKeyText(ApiCreditsInfo? info) => $"{info?.Message} {ApiNoKeyHelp()}".Trim();
     public static string ApiNoKeyHelp() =>
-        $"Save it as the user environment variable {Services.ApiBillingService.AdminKeyEnvironmentVariable}. CodexBarWin picks it up on the next refresh (restart it if you replaced an existing key).";
+        $"Save it as the user environment variable {Services.ApiBillingService.AdminKeyEnvironmentVariable}. AgentsWinBar picks it up on the next refresh (restart it if you replaced an existing key).";
 
     /// <summary>How far through the billing cycle (CycleStart to CycleEnd, whole UTC days) <paramref name="utcNow"/> is, 0-100; null when the cycle is unknown.</summary>
     public static double? ApiElapsedPercent(ApiCreditsInfo? info, DateTime utcNow)

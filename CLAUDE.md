@@ -1,4 +1,4 @@
-# CodexBarWin
+# AgentsWinBar
 
 If you were asked to install the app (not develop it), follow INSTALL.md instead.
 
@@ -11,9 +11,9 @@ Windows 11 WinUI 3 app for AI coding tool usage monitoring. Frontend for [CodexB
 ## Commands
 
 ```bash
-dotnet build CodexBarWin.csproj -c Release -p:Platform=x64 -p:PublishReadyToRun=false   # Build
-dotnet test CodexBarWin.Tests.Unit -c Debug -p:Platform=x64      # Test
-dotnet restore CodexBarWin.sln                                   # Restore
+dotnet build AgentsWinBar.csproj -c Release -p:Platform=x64 -p:PublishReadyToRun=false   # Build
+dotnet test AgentsWinBar.Tests.Unit -c Debug -p:Platform=x64      # Test
+dotnet restore AgentsWinBar.sln                                   # Restore
 ```
 
 ## Structure

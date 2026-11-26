@@ -1,4 +1,4 @@
-namespace CodexBarWin.Services;
+namespace AgentsWinBar.Services;
 
 /// <summary>A recent successful CLI setup check that avoids probing WSL on launch.</summary>
 public interface ISetupMemoService

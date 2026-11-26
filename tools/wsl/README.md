@@ -1,6 +1,6 @@
-# WSL setup for CodexBarWin
+# WSL setup for AgentsWinBar
 
-CodexBarWin reads usage by running the [CodexBar CLI](https://github.com/steipete/CodexBar) inside WSL.
+AgentsWinBar reads usage by running the [CodexBar CLI](https://github.com/steipete/CodexBar) inside WSL.
 This folder holds everything that has to exist inside WSL, so a fresh machine or a reinstalled distro can
 be set up in one step.
 
@@ -79,7 +79,7 @@ the `CODEXBAR_CODEX_HOME` line.
 - **Codex:** install the Linux CLI with `npm install -g @openai/codex` (it needs its own copy inside WSL:
   a Windows `codex` found on the PATH cannot run there), then run `codex login` and sign in with your
   ChatGPT account. If the browser redirect doesn't reach WSL, use `codex login --device-auth` instead.
-  Then turn Codex on in CodexBarWin under Settings, Providers.
+  Then turn Codex on in AgentsWinBar under Settings, Providers.
 - **Gemini:** install Antigravity's CLI with `curl -fsSL https://antigravity.google/cli/install.sh | bash`,
   run `agy` once and sign in with Google. Exit it straight away: it is an agent and will start working
   on anything you type.

@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-Installs CodexBarWin as the original Windows user, using native Windows providers by default.
+Installs AgentsWinBar as the original Windows user, using native Windows providers by default.
 .DESCRIPTION
 Run with a 30 minute timeout: powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1
 Use -WithWsl only for providers configured to use WSL. -Distro, -NoSignIn, and
@@ -30,7 +30,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-$stage = Join-Path $env:LOCALAPPDATA 'CodexBarWin-Setup'
+$stage = Join-Path $env:LOCALAPPDATA 'AgentsWinBar-Setup'
 $statePath = Join-Path $stage 'state.json'
 $script:state = $null
 $script:transcript = $false
@@ -99,7 +99,7 @@ try {
         if (-not [IO.Path]::IsPathRooted($plan.Runtime) -or [IO.Path]::GetExtension($plan.Runtime) -ine '.exe' -or $plan.RuntimeSha256 -notmatch '^[a-fA-F0-9]{64}$') { throw 'Invalid runtime plan.' }
         # Create with an explicit ACL under Program Files before copying any user-writable input.
         $protectedRoot = [IO.Path]::GetFullPath([Environment]::GetFolderPath('ProgramFiles')).TrimEnd('\') + '\'
-        $candidate = [IO.Path]::GetFullPath((Join-Path $protectedRoot ('CodexBarWin-Setup-' + [Guid]::NewGuid().ToString('N'))))
+        $candidate = [IO.Path]::GetFullPath((Join-Path $protectedRoot ('AgentsWinBar-Setup-' + [Guid]::NewGuid().ToString('N'))))
         if (-not $candidate.StartsWith($protectedRoot, [StringComparison]::OrdinalIgnoreCase) -or [IO.Directory]::Exists($candidate)) { throw 'Invalid protected staging path.' }
         $acl = New-Object Security.AccessControl.DirectorySecurity
         $acl.SetAccessRuleProtection($true, $false)
@@ -358,6 +358,26 @@ function Get-AppUsageStatus([string] $Path, [string] $Provider, [datetimeoffset]
         return 'none'
     }
 }
+# The data folder of the app's old name (CodexBarWin) that AgentsWinBar imports on its first launch, in the app's
+# order: the most recently written old packaged LocalCache with settings.json, then the old unpackaged folder.
+# Only file presence and write times are read, never contents. Returns $null when there is nothing to import.
+function Find-LegacyAppData([string] $LocalAppData) {
+    $packaged = @(Get-ChildItem -LiteralPath (Join-Path $LocalAppData 'Packages') -Directory -Filter 'CodexBarWin_*' -ErrorAction SilentlyContinue |
+        ForEach-Object { Join-Path $_.FullName 'LocalCache\Local\CodexBarWin' } |
+        Where-Object { Test-Path -LiteralPath (Join-Path $_ 'settings.json') -PathType Leaf } |
+        Sort-Object -Descending { (Get-ChildItem -LiteralPath $_ -File -ErrorAction SilentlyContinue | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1).LastWriteTimeUtc })
+    if ($packaged.Count) { return $packaged[0] }
+    $unpackaged = Join-Path $LocalAppData 'CodexBarWin'
+    if (Test-Path -LiteralPath (Join-Path $unpackaged 'settings.json') -PathType Leaf) { return $unpackaged }
+    return $null
+}
+# What the human is told when the old CodexBarWin package is still installed. Setup never removes it.
+function Get-LegacyAppNotice([bool] $HasData) {
+    $notice = 'The old CodexBarWin app is still installed. '
+    if ($HasData) { $notice += 'AgentsWinBar copies its settings, history and costs on its first launch (the old files stay in place). Once AgentsWinBar shows your data, ' }
+    else { $notice += 'When you no longer need it, ' }
+    return $notice + 'remove the old app in PowerShell with: Get-AppxPackage -Name CodexBarWin | Remove-AppxPackage'
+}
 function Resolve-Release {
     if (Get-Command gh -ErrorAction SilentlyContinue) {
         if ($DryRun -or (Invoke-Native 'gh' @('auth', 'status')).Code -eq 0) {
@@ -369,7 +389,7 @@ function Resolve-Release {
         }
     }
     try {
-        $public = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/latest" -UseBasicParsing -Headers @{ 'User-Agent' = 'CodexBarWin-Setup'; Accept = 'application/vnd.github+json' } -TimeoutSec 30
+        $public = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/latest" -UseBasicParsing -Headers @{ 'User-Agent' = 'AgentsWinBar-Setup'; Accept = 'application/vnd.github+json' } -TimeoutSec 30
         return [pscustomobject]@{ tagName = $public.tag_name; assets = $public.assets }
     } catch {
         Fail 40 "Cannot access the latest release for $Repo. If private, ask the owner for access and run 'gh auth login', then rerun; otherwise wait for the repository to become public."
@@ -397,7 +417,7 @@ function Read-Package([string] $Path) {
         try { [xml]$manifest = $reader.ReadToEnd() } finally { $reader.Dispose() }
         $identity = $manifest.SelectSingleNode("/*[local-name()='Package']/*[local-name()='Identity']")
         $application = $manifest.SelectSingleNode("/*[local-name()='Package']/*[local-name()='Applications']/*[local-name()='Application']")
-        if ($identity.Name -ne 'CodexBarWin' -or $identity.Publisher -ne 'CN=CodexBarWin OSS') { throw 'MSIX identity or publisher is not CodexBarWin.' }
+        if ($identity.Name -ne 'AgentsWinBar' -or $identity.Publisher -ne 'CN=CodexBarWin OSS') { throw 'MSIX identity or publisher is not AgentsWinBar.' }
         if ($identity.ProcessorArchitecture -and $identity.ProcessorArchitecture -ne 'neutral' -and $identity.ProcessorArchitecture -ine $arch) { throw 'MSIX architecture differs from the OS architecture.' }
         $runtime = $manifest.SelectSingleNode("/*[local-name()='Package']/*[local-name()='Dependencies']/*[local-name()='PackageDependency'][starts-with(@Name, 'Microsoft.WindowsAppRuntime.')]")
         $runtimeVersion = $null
@@ -435,7 +455,7 @@ try {
             $remote = Invoke-Native 'git' @('-C', $PSScriptRoot, 'remote', 'get-url', 'origin')
             if ($remote.Code -eq 0 -and $remote.Output -match 'github\.com[:/]([^/]+/[^/]+?)(?:\.git)?$') { $Repo = $Matches[1] }
         }
-        if (-not $Repo) { $Repo = 'Wave-OCE/CodexBarWin' }
+        if (-not $Repo) { $Repo = 'thomasyuxizeng/AgentsWinBar' }
     }
     if ($Repo -notmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$') { throw 'Repo must be a GitHub owner/repository name.' }
     if (-not $Providers) {
@@ -456,12 +476,15 @@ try {
     if (-not $nativeArch) { $nativeArch = $env:PROCESSOR_ARCHITEW6432 }
     if (-not $nativeArch) { $nativeArch = $env:PROCESSOR_ARCHITECTURE }
     if (-not $nativeArch) { Fail 50 'Unable to determine the native Windows OS architecture.' }
-    switch ($nativeArch.ToUpperInvariant()) { 'AMD64' { $arch = 'x64' }; 'X64' { $arch = 'x64' }; 'ARM64' { $arch = 'ARM64' }; default { Fail 50 'CodexBarWin requires an x64 or ARM64 Windows OS.' } }
+    switch ($nativeArch.ToUpperInvariant()) { 'AMD64' { $arch = 'x64' }; 'X64' { $arch = 'x64' }; 'ARM64' { $arch = 'ARM64' }; default { Fail 50 'AgentsWinBar requires an x64 or ARM64 Windows OS.' } }
     $build = [int](Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion').CurrentBuildNumber
     if ($build -lt 22000) { Fail 50 'Install Windows 11 (build 22000 or newer), then rerun.' }
-    $installed = @(Get-AppxPackage -Name 'CodexBarWin' -ErrorAction SilentlyContinue | Sort-Object Version -Descending | Select-Object -First 1)
+    $installed = @(Get-AppxPackage -Name 'AgentsWinBar' -ErrorAction SilentlyContinue | Sort-Object Version -Descending | Select-Object -First 1)
     $installedVersion = 'no current-user package visible'
     if ($installed.Count) { $installedVersion = [string]$installed[0].Version }
+    # The app's old name: its data is imported by AgentsWinBar's first launch; the old package is never removed here.
+    $legacyInstalled = @(Get-AppxPackage -Name 'CodexBarWin' -ErrorAction SilentlyContinue).Count -gt 0
+    $legacyData = Find-LegacyAppData $env:LOCALAPPDATA
     $runtimePresent = Runtime-Installed
     $windowsDescription = "Windows build $build; OS $arch; app $installedVersion; runtime $runtimeName "
     $enableWsl = $false
@@ -531,9 +554,9 @@ try {
         $script:human.Add($_.Exception.Message)
     }
     if ($release.tagName -notmatch '^v\d+\.\d+\.\d+$') { Fail 40 'Latest release tag must have the form v1.2.3.' }
-    $assetName = "CodexBarWin-$($release.tagName)-$arch.msix"
-    $checksumName = "CodexBarWin-$($release.tagName)-checksums.sha256"
-    if (-not @($release.assets | Where-Object { $_.name -ceq $checksumName }).Count) { $checksumName = 'CodexBarWin-checksums.sha256' }
+    $assetName = "AgentsWinBar-$($release.tagName)-$arch.msix"
+    $checksumName = "AgentsWinBar-$($release.tagName)-checksums.sha256"
+    if (-not @($release.assets | Where-Object { $_.name -ceq $checksumName }).Count) { $checksumName = 'AgentsWinBar-checksums.sha256' }
     if ($releaseAccessible -and -not $SkipApp -and -not $MsixPath -and -not @($release.assets | Where-Object { $_.name -ceq $assetName }).Count) { Fail 40 "Latest release lacks $assetName." }
     if ($releaseAccessible) { Phase 'Release access' "Latest release $($release.tagName) is accessible in $Repo." }
 
@@ -556,7 +579,7 @@ try {
         }
     }
     if ($DryRun) {
-        if (-not $releaseAccessible) { $assetName = "CodexBarWin-<latest-tag>-$arch.msix"; $checksumName = 'the versioned release checksums file (latest tag unverified)' }
+        if (-not $releaseAccessible) { $assetName = "AgentsWinBar-<latest-tag>-$arch.msix"; $checksumName = 'the versioned release checksums file (latest tag unverified)' }
         $trustPlan = 'unknown until the verified package is downloaded; use its actual signer, never the release .cer alone'
         $packagePath = $MsixPath
         if (-not $packagePath -and $releaseAccessible) { $candidate = Join-Path (Join-Path $stage 'downloads') $assetName; if (Test-Path -LiteralPath $candidate) { $packagePath = $candidate } }
@@ -588,7 +611,10 @@ try {
         }
         $releasePlan = $release.tagName
         if (-not $releaseAccessible) { $releasePlan = 'the latest release (tag unverified)' }
-        Phase 'App' "Would install/upgrade only if older than $releasePlan; current=$installedVersion; SkipApp=$SkipApp. Preseed only absent settings, then launch."
+        $legacyPlan = 'no CodexBarWin data to import'
+        if ($legacyData) { $legacyPlan = 'CodexBarWin data found; the app imports it on first launch instead of preseeded settings' }
+        Phase 'App' "Would install/upgrade only if older than $releasePlan; current=$installedVersion; SkipApp=$SkipApp. Preseed only absent settings, then launch. Old app installed=$legacyInstalled; $legacyPlan."
+        if ($legacyInstalled -and -not $SkipApp) { $script:human.Add((Get-LegacyAppNotice ([bool]$legacyData))) }
         if ($WithWsl) {
             Phase 'Sign-ins' "Not probed in DryRun because usage probes can write shim caches. Real run classifies live, stale, or no usage; only no usage opens one sign-in console unless NoSignIn=$NoSignIn. Stale/rate-limit results need no sign-in. NoWindowsSignIns=$NoWindowsSignIns."
         } else {
@@ -667,8 +693,8 @@ try {
             Assert-ReleaseSigner $signerThumbprint $ExpectedReleaseCertificateThumbprint -AllowDeveloperPackage:$AllowDeveloperPackage
             $certificateBase64 = [Convert]::ToBase64String($signer.Export([Security.Cryptography.X509Certificates.X509ContentType]::Cert))
             $trustNeeded = -not (Test-Path ('Cert:\LocalMachine\TrustedPeople\' + $signerThumbprint))
-            $cerName = "CodexBarWin-$($release.tagName)-Certificate.cer"
-            if (-not @($release.assets | Where-Object { $_.name -ceq $cerName }).Count) { $cerName = 'CodexBarWin-Certificate.cer' }
+            $cerName = "AgentsWinBar-$($release.tagName)-Certificate.cer"
+            if (-not @($release.assets | Where-Object { $_.name -ceq $cerName }).Count) { $cerName = 'AgentsWinBar-Certificate.cer' }
             if (@($release.assets | Where-Object { $_.name -ceq $cerName }).Count) {
                 $cer = Download-Asset $cerName $downloads
                 $published = New-Object Security.Cryptography.X509Certificates.X509Certificate2($cer)
@@ -743,7 +769,7 @@ try {
         }
         if ($WithWsl -and ($runtimeReboot -or $adminResult.Reboot -or $enabledNeedsReboot -or ($featurePending -and -not $wslRuns))) {
             Phase 'Reboot' 'Reboot, then run the same command again' $false
-            $script:human.Add('Reboot, then run the same command again. Staged alternative: powershell -NoProfile -ExecutionPolicy Bypass -File "$env:LOCALAPPDATA\CodexBarWin-Setup\install.ps1" -WithWsl')
+            $script:human.Add('Reboot, then run the same command again. Staged alternative: powershell -NoProfile -ExecutionPolicy Bypass -File "$env:LOCALAPPDATA\AgentsWinBar-Setup\install.ps1" -WithWsl')
             Finish 3010 'reboot'
         } else {
             if ($WithWsl) {
@@ -909,7 +935,7 @@ chmod 600 "$t"; mv "$t" "$p"
                             'gemini' { $url = 'https://antigravity.google/cli/install.sh'; $shell = 'bash' }
                         }
                         # Installers are downloaded before execution; failures cannot be hidden by a pipe.
-                        $providerInstall = 'set -e; t=$(mktemp); trap ''rm -f "$t"'' EXIT; curl -fsSL --retry 3 --connect-timeout 15 --max-time 300 ' + (Quote-Sh $url) + ' -o "$t"; ' + $shell + ' "$t"; mkdir -p "$HOME/.local/bin"; if ! grep -q ''# CodexBarWin setup PATH'' "$HOME/.bashrc"; then printf ''\n# CodexBarWin setup PATH\nexport PATH="$HOME/.local/bin:$HOME/.antigravity/bin:$PATH"\n'' >> "$HOME/.bashrc"; fi'
+                        $providerInstall = 'set -e; t=$(mktemp); trap ''rm -f "$t"'' EXIT; curl -fsSL --retry 3 --connect-timeout 15 --max-time 300 ' + (Quote-Sh $url) + ' -o "$t"; ' + $shell + ' "$t"; mkdir -p "$HOME/.local/bin"; if ! grep -q ''# AgentsWinBar setup PATH'' "$HOME/.bashrc"; then printf ''\n# AgentsWinBar setup PATH\nexport PATH="$HOME/.local/bin:$HOME/.antigravity/bin:$PATH"\n'' >> "$HOME/.bashrc"; fi'
                         Require-Native (Wsl $providerInstall $chosen -Timeout 900) "$provider Linux CLI installation failed"
                     }
                     if (-not (Linux-Tool $tool $chosen)) { throw "$provider did not resolve to a Linux CLI under bash -ic." }
@@ -924,7 +950,7 @@ chmod 600 "$t"; mv "$t" "$p"
                     # The deployment service can fail to open packages in new folders directly under %LOCALAPPDATA%
                     # (0x80073CF0 / 0x80070003, seen where Codex's Windows sandbox has changed that folder's ACLs),
                     # while %TEMP% works. Install from a fresh %TEMP% copy and re-check its hash after copying.
-                    $deployDirectory = Join-Path ([IO.Path]::GetTempPath()) ('CodexBarWin-deploy-' + [Guid]::NewGuid().ToString('N'))
+                    $deployDirectory = Join-Path ([IO.Path]::GetTempPath()) ('AgentsWinBar-deploy-' + [Guid]::NewGuid().ToString('N'))
                     New-Item -ItemType Directory -Path $deployDirectory -Force | Out-Null
                     try {
                         $deployMsix = Join-Path $deployDirectory (Split-Path $msix -Leaf)
@@ -933,13 +959,15 @@ chmod 600 "$t"; mv "$t" "$p"
                         Add-AppxPackage -Path $deployMsix -ForceApplicationShutdown
                     } finally { Remove-Item -LiteralPath $deployDirectory -Recurse -Force -ErrorAction SilentlyContinue }
                 }
-                $installed = @(Get-AppxPackage -Name CodexBarWin | Sort-Object Version -Descending | Select-Object -First 1)
-                if (-not $installed.Count) { throw 'CodexBarWin app registration could not be verified.' }
+                $installed = @(Get-AppxPackage -Name AgentsWinBar | Sort-Object Version -Descending | Select-Object -First 1)
+                if (-not $installed.Count) { throw 'AgentsWinBar app registration could not be verified.' }
                 # Full-trust packaged apps have LocalAppData redirected to LocalCache\Local.
-                $settingsDirectory = Join-Path $env:LOCALAPPDATA ("Packages\$($installed[0].PackageFamilyName)\LocalCache\Local\CodexBarWin")
+                $settingsDirectory = Join-Path $env:LOCALAPPDATA ("Packages\$($installed[0].PackageFamilyName)\LocalCache\Local\AgentsWinBar")
                 $settingsPath = Join-Path $settingsDirectory 'settings.json'
-                $unpackagedSettings = Join-Path $env:LOCALAPPDATA 'CodexBarWin\settings.json'
-                if (-not (Test-Path -LiteralPath $settingsPath) -and -not (Test-Path -LiteralPath $unpackagedSettings)) {
+                $unpackagedSettings = Join-Path $env:LOCALAPPDATA 'AgentsWinBar\settings.json'
+                $legacyData = Find-LegacyAppData $env:LOCALAPPDATA
+                # Preseeded settings would stop the app's one-time import of CodexBarWin data, so they wait for none.
+                if (-not (Test-Path -LiteralPath $settingsPath) -and -not (Test-Path -LiteralPath $unpackagedSettings) -and -not $legacyData) {
                     try {
                         New-Item -ItemType Directory -Path $settingsDirectory -Force | Out-Null
                         $settingsProviders = @(); $order = 0
@@ -950,7 +978,11 @@ chmod 600 "$t"; mv "$t" "$p"
                         try { $bytes = [Text.Encoding]::UTF8.GetBytes($settingsJson); $stream.Write($bytes, 0, $bytes.Length) } finally { $stream.Dispose() }
                     } catch { }
                 }
-                Phase 'App' "Installed version $($installed[0].Version); existing settings preserved."
+                $importPending = [bool]$legacyData -and -not (Test-Path -LiteralPath $settingsPath)
+                $appMessage = "Installed version $($installed[0].Version); existing settings preserved."
+                if ($importPending) { $appMessage += ' CodexBarWin settings, history and costs are imported on first launch.' }
+                Phase 'App' $appMessage
+                if ($legacyInstalled) { $script:human.Add((Get-LegacyAppNotice $importPending)) }
             } else { Phase 'App' 'Skipped by -SkipApp.' }
 
             if ($WithWsl) {
@@ -996,14 +1028,14 @@ chmod 600 "$t"; mv "$t" "$p"
                 try {
                     Start-Process -FilePath 'explorer.exe' -ArgumentList ('shell:AppsFolder\' + $installed[0].PackageFamilyName + '!' + $package.AppId) | Out-Null
                     $launched = $true
-                } catch { Write-Warning 'Automatic app launch failed; launch CodexBarWin from Start.' }
+                } catch { Write-Warning 'Automatic app launch failed; launch AgentsWinBar from Start.' }
             }
             if ($WithWsl) {
                 $stale = @($Providers | Where-Object { $usageStates[$_] -eq 'stale' })
                 if ($stale.Count) { Phase 'Stale usage' (($stale -join ', ') + ': temporarily stale (rate limit or provider issue), not a sign-in problem.') }
                 if ($pending.Count) {
                     Phase 'Sign-ins' ("Usage unavailable: " + ($pending -join ', ') + '. Sign-in or provider/network recovery may be needed.') $false
-                    $script:human.Add('Approve pending browser sign-ins when setup is rerun: powershell -NoProfile -ExecutionPolicy Bypass -File "$env:LOCALAPPDATA\CodexBarWin-Setup\install.ps1" -WithWsl')
+                    $script:human.Add('Approve pending browser sign-ins when setup is rerun: powershell -NoProfile -ExecutionPolicy Bypass -File "$env:LOCALAPPDATA\AgentsWinBar-Setup\install.ps1" -WithWsl')
                     if ($bridgeUsed -and $pending -contains 'codex') { $script:human.Add('Use Codex on Windows once to refresh its sign-in, or rerun install.ps1 -WithWsl -NoWindowsSignIns for a separate Linux sign-in.') }
                     Finish 20 'signin'
                 } else { Phase 'Sign-ins' 'Every selected provider has live or temporarily stale usage; no sign-in needed.'; Finish 0 'ok' }
@@ -1067,6 +1099,6 @@ chmod 600 "$t"; mv "$t" "$p"
     Write-Host "`nWhat the human still needs to do:"
     if ($script:human.Count) { foreach ($action in $script:human) { Write-Host "- $action" } } else { Write-Host '- Nothing.' }
     if ($script:transcript) { try { Stop-Transcript | Out-Null } catch { } }
-    Write-Host "CODEXBARWIN_SETUP=$($script:outcome)"
+    Write-Host "AGENTSWINBAR_SETUP=$($script:outcome)"
 }
 exit $script:exitCode

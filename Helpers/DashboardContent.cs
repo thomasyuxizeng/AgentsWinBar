@@ -1,6 +1,6 @@
-using CodexBarWin.Models;
+using AgentsWinBar.Models;
 
-namespace CodexBarWin.Helpers;
+namespace AgentsWinBar.Helpers;
 
 /// <summary>Ordered content equality for snapshot records whose lists otherwise compare by identity.</summary>
 public static class DashboardContent

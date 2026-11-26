@@ -1,9 +1,9 @@
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
-using CodexBarWin.Helpers;
-using CodexBarWin.Models;
-using CodexBarWin.Services;
-using CodexBarWin.ViewModels;
+using AgentsWinBar.Helpers;
+using AgentsWinBar.Models;
+using AgentsWinBar.Services;
+using AgentsWinBar.ViewModels;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.UI;
@@ -17,7 +17,7 @@ using Microsoft.UI.Xaml.Media;
 using Windows.Graphics;
 using WinRT.Interop;
 
-namespace CodexBarWin;
+namespace AgentsWinBar;
 
 /// <summary>
 /// One provider in the taskbar strip.
@@ -572,7 +572,7 @@ public sealed partial class TaskbarWindow : Window
         }
 
         WindowZOrder.HideFromSwitchers(AppWindow, _hwnd);
-        AppWindow.Title = "CodexBarWin taskbar display";
+        AppWindow.Title = "AgentsWinBar taskbar display";
 
         // Flush with the taskbar: square corners (no rounding) and, via the XAML, no border
         WindowZOrder.DisableRoundedCorners(_hwnd);

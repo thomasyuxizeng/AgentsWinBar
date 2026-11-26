@@ -1,6 +1,6 @@
-using CodexBarWin.Models;
+using AgentsWinBar.Models;
 
-namespace CodexBarWin.Services;
+namespace AgentsWinBar.Services;
 
 /// <summary>Thread-safe, in-memory history with no filesystem or WinUI dependencies.</summary>
 public sealed class UsageHistoryStore

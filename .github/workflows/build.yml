@@ -49,14 +49,14 @@ jobs:
             ${{ runner.os }}-nuget-
 
       - name: Restore dependencies
-        run: dotnet restore CodexBarWin.csproj -p:Platform=${{ matrix.platform }}
+        run: dotnet restore AgentsWinBar.csproj -p:Platform=${{ matrix.platform }}
 
       - name: Build
-        run: dotnet build CodexBarWin.csproj -c ${{ matrix.configuration }} -p:Platform=${{ matrix.platform }} -p:PublishReadyToRun=false --no-restore
+        run: dotnet build AgentsWinBar.csproj -c ${{ matrix.configuration }} -p:Platform=${{ matrix.platform }} -p:PublishReadyToRun=false --no-restore
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: CodexBarWin-${{ matrix.platform }}-${{ matrix.configuration }}
+          name: AgentsWinBar-${{ matrix.platform }}-${{ matrix.configuration }}
           path: bin/${{ matrix.platform }}/${{ matrix.configuration }}/net10.0-windows10.0.19041.0/
           retention-days: 7

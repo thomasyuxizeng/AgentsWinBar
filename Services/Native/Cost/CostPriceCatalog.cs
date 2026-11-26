@@ -2,7 +2,7 @@ using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
-namespace CodexBarWin.Services.Native.Cost;
+namespace AgentsWinBar.Services.Native.Cost;
 
 /// <summary>USD per million tokens for one model, as models.dev publishes it. Missing fields stay unknown.</summary>
 internal sealed record ModelPrice(decimal Input, decimal Output, decimal? CacheRead, decimal? CacheWrite,
@@ -388,7 +388,7 @@ internal static class PricingResources
     /// <summary>Reads a price file embedded in the assembly that compiles this folder.</summary>
     internal static byte[] Read(string fileName)
     {
-        using var stream = typeof(PricingResources).Assembly.GetManifestResourceStream("CodexBarWin.Pricing." + fileName);
+        using var stream = typeof(PricingResources).Assembly.GetManifestResourceStream("AgentsWinBar.Pricing." + fileName);
         if (stream is null) return [];
         var bytes = new byte[stream.Length];
         stream.ReadExactly(bytes);

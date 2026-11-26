@@ -1,6 +1,6 @@
 using System.Text;
 
-namespace CodexBarWin.Services;
+namespace AgentsWinBar.Services;
 
 internal sealed class WslOutputLimitException() : IOException("WSL command output limit exceeded");
 

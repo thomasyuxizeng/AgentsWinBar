@@ -1,9 +1,9 @@
-using CodexBarWin.Models;
-using CodexBarWin.Views;
+using AgentsWinBar.Models;
+using AgentsWinBar.Views;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 
-namespace CodexBarWin.Controls;
+namespace AgentsWinBar.Controls;
 
 /// <summary>The dashboard's diagnostics (inside its expander): system facts, effective settings, history store, cost scans, refresh log and alerts.</summary>
 public sealed partial class DashboardDiagnosticsPanel : UserControl

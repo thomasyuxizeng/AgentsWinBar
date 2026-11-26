@@ -1,4 +1,4 @@
-"""Where does CodexBarWin's time go during a refresh? Reads a speedscope export of a dotnet-trace thread-time trace.
+"""Where does AgentsWinBar's time go during a refresh? Reads a speedscope export of a dotnet-trace thread-time trace.
 
 Usage: python -I analyse_trace.py <file.speedscope.json> <trace-start HH:MM:SS> <refresh HH:MM:SS> [<refresh> ...]
 For each refresh, takes the window [refresh - 5 s, refresh + 25 s]; also takes idle windows of the same length
@@ -57,7 +57,7 @@ print("\nExclusive (leaf) frames:")
 for f in sorted(rx, key=lambda k: -(rx[k] - ix.get(k, 0)))[:25]:
     print(f"  {rx[f] - ix.get(f, 0):8.0f}  {frames[f][:150]}")
 print("\nInclusive frames from this app or the runtime's JSON, IO and XAML layers:")
-keep = ('CodexBarWin', 'System.Text.Json', 'System.IO', 'Microsoft.UI.Xaml', 'System.Net', 'System.Diagnostics.Process', 'WinRT', 'GC', 'H.NotifyIcon')
+keep = ('AgentsWinBar', 'System.Text.Json', 'System.IO', 'Microsoft.UI.Xaml', 'System.Net', 'System.Diagnostics.Process', 'WinRT', 'GC', 'H.NotifyIcon')
 for f in sorted(ri, key=lambda k: -(ri[k] - ii.get(k, 0))):
     if any(k in frames[f] for k in keep) and ri[f] - ii.get(f, 0) > 20:
         print(f"  {ri[f] - ii.get(f, 0):8.0f}  {frames[f][:150]}")

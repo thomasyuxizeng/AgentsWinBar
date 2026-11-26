@@ -1,6 +1,6 @@
 using Microsoft.Extensions.Logging;
 
-namespace CodexBarWin.Services;
+namespace AgentsWinBar.Services;
 
 public sealed class BatterySaverMonitor : IBatterySaverMonitor, IDisposable
 {

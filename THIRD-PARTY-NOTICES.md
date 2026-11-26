@@ -1,6 +1,6 @@
 # Third-party notices
 
-CodexBarWin is released under the MIT License (see `LICENSE.txt`). It builds on the work below. Each component keeps
+AgentsWinBar is released under the MIT License (see `LICENSE.txt`). It builds on the work below. Each component keeps
 its own license; the notices here are for convenience, and the license files shipped with each package are the
 authoritative text.
 

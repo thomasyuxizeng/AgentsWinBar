@@ -1,10 +1,10 @@
 using System.Text.Json;
-using CodexBarWin.Helpers;
-using CodexBarWin.Models;
-using CodexBarWin.Services.Native;
+using AgentsWinBar.Helpers;
+using AgentsWinBar.Models;
+using AgentsWinBar.Services.Native;
 using Microsoft.Extensions.Logging;
 
-namespace CodexBarWin.Services;
+namespace AgentsWinBar.Services;
 
 /// <summary>
 /// Usage readings per provider: read natively (<see cref="INativeUsageService"/>, the default) or through the

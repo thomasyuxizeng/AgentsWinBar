@@ -1,10 +1,10 @@
-using CodexBarWin.Models;
+using AgentsWinBar.Models;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 
-namespace CodexBarWin.Controls;
+namespace AgentsWinBar.Controls;
 
 /// <summary>
 /// One extra usage window on a provider card (e.g. "Fable only").

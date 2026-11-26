@@ -1,11 +1,11 @@
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Runtime.InteropServices;
-using CodexBarWin.Helpers;
-using CodexBarWin.Models;
-using CodexBarWin.Services;
-using CodexBarWin.ViewModels;
-using CodexBarWin.Views;
+using AgentsWinBar.Helpers;
+using AgentsWinBar.Models;
+using AgentsWinBar.Services;
+using AgentsWinBar.ViewModels;
+using AgentsWinBar.Views;
 using CommunityToolkit.Mvvm.Input;
 using H.NotifyIcon;
 using Microsoft.Extensions.DependencyInjection;
@@ -21,7 +21,7 @@ using Windows.Graphics;
 using Windows.UI.ViewManagement;
 using WinRT.Interop;
 
-namespace CodexBarWin;
+namespace AgentsWinBar;
 
 /// <summary>
 /// Native API for window customization and mouse hooks.
@@ -295,7 +295,7 @@ public sealed partial class MainWindow : Window
         // Create and configure tray icon
         _trayIcon = new TaskbarIcon
         {
-            ToolTipText = "CodexBarWin - AI Usage Monitor",
+            ToolTipText = "AgentsWinBar - AI Usage Monitor",
             NoLeftClickDelay = true,
             LeftClickCommand = new RelayCommand(ToggleWindow),
             // The library's secondary WinUI window can show its flyout before XamlRoot exists.
@@ -771,7 +771,7 @@ public sealed partial class MainWindow : Window
         NativeMethods.ApplyRoundedCorners(hwnd);
 
         appWindow.Resize(new SizeInt32(WindowWidth, WindowHeight));
-        appWindow.Title = "CodexBarWin";
+        appWindow.Title = "AgentsWinBar";
 
         // Position window off-screen initially (right edge for horizontal slide animation)
         var displayArea = DisplayArea.GetFromWindowId(appWindow.Id, DisplayAreaFallback.Primary);

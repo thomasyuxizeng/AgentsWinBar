@@ -1,6 +1,6 @@
 using Windows.System.Power;
 
-namespace CodexBarWin.Services;
+namespace AgentsWinBar.Services;
 
 public sealed class WindowsBatterySaverStatusSource : IBatterySaverStatusSource
 {

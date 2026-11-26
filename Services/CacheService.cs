@@ -1,10 +1,10 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
-using CodexBarWin.Models;
-using CodexBarWin.Helpers;
+using AgentsWinBar.Models;
+using AgentsWinBar.Helpers;
 using Microsoft.Extensions.Logging;
 
-namespace CodexBarWin.Services;
+namespace AgentsWinBar.Services;
 
 /// <summary>
 /// Service for caching usage data in memory and on disk.
@@ -29,9 +29,7 @@ public class CacheService : ICacheService
         _logger = logger;
         _settingsService = settingsService;
 
-        var appDataPath = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-        var appFolder = Path.Combine(appDataPath, "CodexBarWin");
-        _cachePath = cachePath ?? Path.Combine(appFolder, "cache.json");
+        _cachePath = cachePath ?? AppPaths.DataFile("cache.json");
     }
 
     public UsageData? Get(string provider)

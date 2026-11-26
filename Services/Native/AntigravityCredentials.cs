@@ -1,7 +1,7 @@
 using System.Runtime.InteropServices;
 using System.Text.Json;
 
-namespace CodexBarWin.Services.Native;
+namespace AgentsWinBar.Services.Native;
 
 /// <summary>
 /// The fields of Antigravity's sign-in this reader uses. The refresh token and client secrets are never read (the app

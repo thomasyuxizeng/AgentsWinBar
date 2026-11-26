@@ -1,4 +1,4 @@
-namespace CodexBarWin.Services.Native;
+namespace AgentsWinBar.Services.Native;
 
 /// <summary>Outcome of one native usage read. Only <see cref="Ok"/> means the provider was reached and answered.</summary>
 public enum NativeUsageStatus

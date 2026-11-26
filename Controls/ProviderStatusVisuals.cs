@@ -1,8 +1,8 @@
-using CodexBarWin.Helpers;
-using CodexBarWin.Models;
+using AgentsWinBar.Helpers;
+using AgentsWinBar.Models;
 using Microsoft.UI.Xaml.Media;
 
-namespace CodexBarWin.Controls;
+namespace AgentsWinBar.Controls;
 
 /// <summary>WinUI brush conversion for the shared, pure status palette.</summary>
 internal static class ProviderStatusVisuals

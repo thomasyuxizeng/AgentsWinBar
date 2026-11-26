@@ -1,8 +1,8 @@
 using System.Diagnostics;
-using CodexBarWin.Helpers;
-using CodexBarWin.Services;
-using CodexBarWin.ViewModels;
-using CodexBarWin.Views;
+using AgentsWinBar.Helpers;
+using AgentsWinBar.Services;
+using AgentsWinBar.ViewModels;
+using AgentsWinBar.Views;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.UI;
@@ -13,7 +13,7 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Input;
 using WinRT.Interop;
 
-namespace CodexBarWin;
+namespace AgentsWinBar;
 
 /// <summary>
 /// The full-window dashboard: resizable, maximizable, full-screen capable, showing everything the app knows

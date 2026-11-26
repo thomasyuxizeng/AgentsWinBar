@@ -1,7 +1,7 @@
 #Requires -Version 7
 <#
 .SYNOPSIS
-  Samples CPU time and memory of CodexBarWin, the WSL VM and the WSL helper processes, then summarises each refresh.
+  Samples CPU time and memory of AgentsWinBar, the WSL VM and the WSL helper processes, then summarises each refresh.
 
 .DESCRIPTION
   Read-only. Samples every -IntervalMs for -Minutes and writes a CSV, then prints:
@@ -20,8 +20,8 @@ param(
     [double]$Minutes = 11,
     [int]$IntervalMs = 250,
     [string]$Out = (Join-Path ([IO.Path]::GetTempPath()) ("codexbar-perf\refresh-{0:yyyyMMdd-HHmmss}.csv" -f (Get-Date))),
-    [string]$CacheFile = (Join-Path $env:LOCALAPPDATA 'Packages\CodexBarWin_w05y65rx3mcz6\LocalCache\Local\CodexBarWin\cache.json'),
-    [string]$AppProcess = 'CodexBarWin',
+    [string]$CacheFile = (Join-Path $env:LOCALAPPDATA 'Packages\AgentsWinBar_w05y65rx3mcz6\LocalCache\Local\AgentsWinBar\cache.json'),
+    [string]$AppProcess = 'AgentsWinBar',
     [int]$PreSeconds = 25,
     [int]$PostSeconds = 5,
     [int]$PrivateWsEverySeconds = 5,

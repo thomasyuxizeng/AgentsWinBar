@@ -5,11 +5,11 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization.Metadata;
-using CodexBarWin.Helpers;
-using CodexBarWin.Models;
+using AgentsWinBar.Helpers;
+using AgentsWinBar.Models;
 using Microsoft.Extensions.Logging;
 
-namespace CodexBarWin.Services;
+namespace AgentsWinBar.Services;
 
 /// <summary>Fetches organization cost totals without persisting credentials or spend.</summary>
 public sealed class ApiBillingService : IApiBillingService, IDisposable
@@ -122,7 +122,7 @@ public sealed class ApiBillingService : IApiBillingService, IDisposable
                 using var request = new HttpRequestMessage(HttpMethod.Get, url);
                 request.Headers.Add("x-api-key", key);
                 request.Headers.Add("anthropic-version", "2023-06-01");
-                request.Headers.UserAgent.ParseAdd("CodexBarWin/" + version);
+                request.Headers.UserAgent.ParseAdd("AgentsWinBar/" + version);
                 using var response = await _http.SendAsync(request, deadline.Token).ConfigureAwait(false);
                 ct.ThrowIfCancellationRequested();
                 if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
@@ -247,7 +247,7 @@ public sealed class ApiBillingService : IApiBillingService, IDisposable
             request.Headers.Add("anthropic-version", "2023-06-01");
             var version = typeof(ApiBillingService).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()
                 ?.InformationalVersion?.Split('+')[0] ?? typeof(ApiBillingService).Assembly.GetName().Version?.ToString() ?? "1.0";
-            request.Headers.UserAgent.ParseAdd("CodexBarWin/" + version);
+            request.Headers.UserAgent.ParseAdd("AgentsWinBar/" + version);
             using var response = await _http.SendAsync(request, ct).ConfigureAwait(false);
             ct.ThrowIfCancellationRequested();
             response.EnsureSuccessStatusCode();

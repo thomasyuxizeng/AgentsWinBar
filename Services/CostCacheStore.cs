@@ -1,8 +1,8 @@
 using System.Text.Json;
-using CodexBarWin.Models;
+using AgentsWinBar.Models;
 using Microsoft.Extensions.Logging;
 
-namespace CodexBarWin.Services;
+namespace AgentsWinBar.Services;
 
 /// <summary>
 /// Atomic cost-cache.json beside the settings file. Last-known cost values are retained indefinitely,

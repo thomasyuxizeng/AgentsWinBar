@@ -1,11 +1,11 @@
-using CodexBarWin.Models;
+using AgentsWinBar.Models;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Navigation;
 using Microsoft.Extensions.DependencyInjection;
 
-namespace CodexBarWin.Views;
+namespace AgentsWinBar.Views;
 
 /// <summary>
 /// One extra usage window on the detail page (e.g. "Claude and GPT weekly").

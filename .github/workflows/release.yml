@@ -76,19 +76,19 @@ jobs:
             throw "Repository secrets SIGNING_PFX_BASE64 and SIGNING_PFX_PASSWORD are required to sign a release (see the comment at the top of this workflow)."
           }
           New-Item -ItemType Directory -Path signing | Out-Null
-          [IO.File]::WriteAllBytes("$PWD\signing\CodexBarWin.pfx", [Convert]::FromBase64String($env:SIGNING_PFX_BASE64))
+          [IO.File]::WriteAllBytes("$PWD\signing\AgentsWinBar.pfx", [Convert]::FromBase64String($env:SIGNING_PFX_BASE64))
           $password = ConvertTo-SecureString -String $env:SIGNING_PFX_PASSWORD -Force -AsPlainText
-          $cert = Import-PfxCertificate -FilePath signing/CodexBarWin.pfx -Password $password -CertStoreLocation "Cert:\CurrentUser\My" |
+          $cert = Import-PfxCertificate -FilePath signing/AgentsWinBar.pfx -Password $password -CertStoreLocation "Cert:\CurrentUser\My" |
             Where-Object { $_.HasPrivateKey }
-          Remove-Item signing/CodexBarWin.pfx
+          Remove-Item signing/AgentsWinBar.pfx
           if (@($cert).Count -ne 1) { throw "Signing PFX must contain exactly one certificate with a private key." }
 
           [xml]$manifest = Get-Content Package.appxmanifest -Raw
           if ($cert.Subject -ne $manifest.Package.Identity.Publisher) {
             throw "Signing certificate subject must match Package.appxmanifest Publisher."
           }
-          Export-Certificate -Cert $cert -FilePath "signing/CodexBarWin-$env:TAG-Certificate.cer" | Out-Null
-          Copy-Item "signing/CodexBarWin-$env:TAG-Certificate.cer" signing/CodexBarWin-Certificate.cer
+          Export-Certificate -Cert $cert -FilePath "signing/AgentsWinBar-$env:TAG-Certificate.cer" | Out-Null
+          Copy-Item "signing/AgentsWinBar-$env:TAG-Certificate.cer" signing/AgentsWinBar-Certificate.cer
 
       - name: Upload public certificates
         uses: actions/upload-artifact@v4
@@ -134,7 +134,7 @@ jobs:
             ${{ runner.os }}-nuget-
 
       - name: Restore dependencies
-        run: dotnet restore CodexBarWin.csproj -p:Platform=${{ matrix.platform }}
+        run: dotnet restore AgentsWinBar.csproj -p:Platform=${{ matrix.platform }}
 
       - name: Download public certificates
         uses: actions/download-artifact@v4
@@ -161,7 +161,7 @@ jobs:
           $appxVersion = "$($env:TAG.Substring(1)).0"
           Write-Host "Building with AppxVersion: $appxVersion"
 
-          msbuild CodexBarWin.csproj /p:Configuration=Release /p:Platform=${{ matrix.platform }} /p:UapAppxPackageBuildMode=SideloadOnly /p:AppxBundle=Never /p:AppxPackageDir="AppPackages\" /p:AppxPackageSigningEnabled=false /p:GenerateAppxPackageOnBuild=true /p:PublishReadyToRun=false /p:AppxVersion="$appxVersion"
+          msbuild AgentsWinBar.csproj /p:Configuration=Release /p:Platform=${{ matrix.platform }} /p:UapAppxPackageBuildMode=SideloadOnly /p:AppxBundle=Never /p:AppxPackageDir="AppPackages\" /p:AppxPackageSigningEnabled=false /p:GenerateAppxPackageOnBuild=true /p:PublishReadyToRun=false /p:AppxVersion="$appxVersion"
 
       - name: Sign MSIX package
         shell: pwsh
@@ -177,12 +177,12 @@ jobs:
             Select-Object -First 1
           if (-not ($env:SIGNING_PFX_BASE64 -and $env:SIGNING_PFX_PASSWORD)) { throw "Signing secrets are missing." }
           # Decode the stable private key directly from secrets; it never travels through artifacts.
-          [IO.File]::WriteAllBytes("$PWD\signing\CodexBarWin.pfx", [Convert]::FromBase64String($env:SIGNING_PFX_BASE64))
+          [IO.File]::WriteAllBytes("$PWD\signing\AgentsWinBar.pfx", [Convert]::FromBase64String($env:SIGNING_PFX_BASE64))
           $signingPassword = $env:SIGNING_PFX_PASSWORD
           # Handle native failures explicitly so transient timestamp failures can be retried.
           $PSNativeCommandUseErrorActionPreference = $false
           for ($attempt = 1; $attempt -le 3; $attempt++) {
-            & $signtool.FullName sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 /a /f signing/CodexBarWin.pfx /p $signingPassword $msixPath.FullName
+            & $signtool.FullName sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 /a /f signing/AgentsWinBar.pfx /p $signingPassword $msixPath.FullName
             $signingExitCode = $LASTEXITCODE
             if ($signingExitCode -eq 0) { break }
             if ($attempt -eq 3) {
@@ -197,7 +197,7 @@ jobs:
         run: |
           $msixPath = Get-ChildItem -Path "AppPackages" -Filter "*.msix" -Recurse | Select-Object -First 1
           $signature = Get-AuthenticodeSignature -FilePath $msixPath.FullName
-          $publishedCert = [Security.Cryptography.X509Certificates.X509Certificate2]::new("$PWD\signing\CodexBarWin-$env:TAG-Certificate.cer")
+          $publishedCert = [Security.Cryptography.X509Certificates.X509Certificate2]::new("$PWD\signing\AgentsWinBar-$env:TAG-Certificate.cer")
           if (-not $signature.SignerCertificate -or $signature.SignerCertificate.Thumbprint -ne $publishedCert.Thumbprint) {
             throw "MSIX signer thumbprint does not match the published certificate."
           }
@@ -209,25 +209,25 @@ jobs:
           $platform = "${{ matrix.platform }}"
           $msixPath = Get-ChildItem -Path "AppPackages" -Filter "*.msix" -Recurse | Select-Object -First 1
 
-          Copy-Item $msixPath.FullName -Destination "CodexBarWin-$version-$platform.msix"
-          Copy-Item $msixPath.FullName -Destination "CodexBarWin-$platform.msix"
+          Copy-Item $msixPath.FullName -Destination "AgentsWinBar-$version-$platform.msix"
+          Copy-Item $msixPath.FullName -Destination "AgentsWinBar-$platform.msix"
 
       - name: Generate checksum
         shell: pwsh
         run: |
           $version = $env:TAG
           $platform = "${{ matrix.platform }}"
-          $hash = (Get-FileHash "CodexBarWin-$version-$platform.msix" -Algorithm SHA256).Hash.ToLower()
-          "$hash  CodexBarWin-$version-$platform.msix" | Out-File -FilePath "CodexBarWin-$version-$platform.msix.sha256" -Encoding utf8NoBOM
+          $hash = (Get-FileHash "AgentsWinBar-$version-$platform.msix" -Algorithm SHA256).Hash.ToLower()
+          "$hash  AgentsWinBar-$version-$platform.msix" | Out-File -FilePath "AgentsWinBar-$version-$platform.msix.sha256" -Encoding utf8NoBOM
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: release-${{ matrix.platform }}
           path: |
-            CodexBarWin-${{ github.ref_name }}-${{ matrix.platform }}.msix
-            CodexBarWin-${{ matrix.platform }}.msix
-            CodexBarWin-${{ github.ref_name }}-${{ matrix.platform }}.msix.sha256
+            AgentsWinBar-${{ github.ref_name }}-${{ matrix.platform }}.msix
+            AgentsWinBar-${{ matrix.platform }}.msix
+            AgentsWinBar-${{ github.ref_name }}-${{ matrix.platform }}.msix.sha256
           retention-days: 1
 
   release:
@@ -252,26 +252,26 @@ jobs:
         run: |
           cd artifacts
           for platform in x64 ARM64; do
-            for file in "CodexBarWin-$TAG-$platform.msix" "CodexBarWin-$platform.msix" "CodexBarWin-$TAG-$platform.msix.sha256"; do
+            for file in "AgentsWinBar-$TAG-$platform.msix" "AgentsWinBar-$platform.msix" "AgentsWinBar-$TAG-$platform.msix.sha256"; do
               test -f "$file" || { echo "Missing release artifact: $file" >&2; exit 1; }
             done
           done
-          for file in "CodexBarWin-$TAG-Certificate.cer" "CodexBarWin-Certificate.cer"; do
+          for file in "AgentsWinBar-$TAG-Certificate.cer" "AgentsWinBar-Certificate.cer"; do
             test -f "$file" || { echo "Missing release artifact: $file" >&2; exit 1; }
           done
           sed -i 's/\r$//' ./*.msix.sha256
           for platform in x64 ARM64; do
-            sha256sum -c "CodexBarWin-$TAG-$platform.msix.sha256"
-            cmp "CodexBarWin-$platform.msix" "CodexBarWin-$TAG-$platform.msix"
+            sha256sum -c "AgentsWinBar-$TAG-$platform.msix.sha256"
+            cmp "AgentsWinBar-$platform.msix" "AgentsWinBar-$TAG-$platform.msix"
           done
 
       - name: Generate combined checksum file
         shell: bash
         run: |
           cd artifacts
-          sha256sum *.msix > "CodexBarWin-$TAG-checksums.sha256"
-          test "$(wc -l < "CodexBarWin-$TAG-checksums.sha256")" -eq 4 || { echo "Combined checksum file must contain exactly four MSIX entries." >&2; exit 1; }
-          cp "CodexBarWin-$TAG-checksums.sha256" CodexBarWin-checksums.sha256
+          sha256sum *.msix > "AgentsWinBar-$TAG-checksums.sha256"
+          test "$(wc -l < "AgentsWinBar-$TAG-checksums.sha256")" -eq 4 || { echo "Combined checksum file must contain exactly four MSIX entries." >&2; exit 1; }
+          cp "AgentsWinBar-$TAG-checksums.sha256" AgentsWinBar-checksums.sha256
           rm -f *.msix.sha256
 
       - name: Extract release notes from CHANGELOG

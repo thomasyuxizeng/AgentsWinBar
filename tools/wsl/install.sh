@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Installs the CodexBar CLI and the CodexBarWin shim inside WSL. Run as root inside the distro:
+# Installs the CodexBar CLI and the AgentsWinBar shim inside WSL. Run as root inside the distro:
 #   sudo bash install.sh [path/to/codexbar-shim.sh]
 # Env: CODEXBAR_VERSION (default v0.69.0, the version this was tested with)
 set -euo pipefail

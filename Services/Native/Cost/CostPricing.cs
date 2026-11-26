@@ -1,4 +1,4 @@
-namespace CodexBarWin.Services.Native.Cost;
+namespace AgentsWinBar.Services.Native.Cost;
 
 public enum CostProvider { Claude, Codex }
 

@@ -1,11 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <UserControl
-    x:Class="CodexBarWin.Controls.DashboardGraphCard"
+    x:Class="AgentsWinBar.Controls.DashboardGraphCard"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    xmlns:models="using:CodexBarWin.Models"
-    xmlns:views="using:CodexBarWin.Views"
-    xmlns:controls="using:CodexBarWin.Controls"
+    xmlns:models="using:AgentsWinBar.Models"
+    xmlns:views="using:AgentsWinBar.Views"
+    xmlns:controls="using:AgentsWinBar.Controls"
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     mc:Ignorable="d"

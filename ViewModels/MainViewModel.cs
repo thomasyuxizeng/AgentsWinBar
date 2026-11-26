@@ -2,12 +2,12 @@ using System.Collections.ObjectModel;
 using System.Diagnostics;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
-using CodexBarWin.Helpers;
-using CodexBarWin.Models;
-using CodexBarWin.Services;
+using AgentsWinBar.Helpers;
+using AgentsWinBar.Models;
+using AgentsWinBar.Services;
 using Microsoft.Extensions.Logging;
 
-namespace CodexBarWin.ViewModels;
+namespace AgentsWinBar.ViewModels;
 
 /// <summary>
 /// ViewModel for the main window.

@@ -1,9 +1,9 @@
 using System.Text;
 using System.Text.Json;
-using CodexBarWin.Models;
+using AgentsWinBar.Models;
 using Microsoft.Extensions.Logging;
 
-namespace CodexBarWin.Services;
+namespace AgentsWinBar.Services;
 
 /// <summary>
 /// History persistence beside the settings file. The file stays a JSON array (any version of the loader reads it), written

@@ -1,7 +1,8 @@
 using System.Text.Json;
+using AgentsWinBar.Helpers;
 using Microsoft.Extensions.Logging;
 
-namespace CodexBarWin.Services.Native;
+namespace AgentsWinBar.Services.Native;
 
 /// <summary>Keeps Claude's "blocked until" time after a 429 so a restart cannot call the endpoint during a cooldown.</summary>
 public interface IClaudeCooldownStore
@@ -26,8 +27,7 @@ public sealed class ClaudeCooldownFile : IClaudeCooldownStore
     public ClaudeCooldownFile(ILogger<ClaudeCooldownFile> logger, string? filePath = null)
     {
         _logger = logger;
-        FilePath = filePath ?? Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CodexBarWin", FileName);
+        FilePath = filePath ?? AppPaths.DataFile(FileName);
     }
 
     public string FilePath { get; }

@@ -1,9 +1,9 @@
-using CodexBarWin.Models;
-using CodexBarWin.Services;
+using AgentsWinBar.Models;
+using AgentsWinBar.Services;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
-namespace CodexBarWin.Views;
+namespace AgentsWinBar.Views;
 
 /// <summary>What every "Sign in" button does: watch for the new sign-in, then open the provider's own sign-in.</summary>
 internal static class SignInAction

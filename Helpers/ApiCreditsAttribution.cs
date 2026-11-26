@@ -1,7 +1,7 @@
 using System.Globalization;
-using CodexBarWin.Models;
+using AgentsWinBar.Models;
 
-namespace CodexBarWin.Helpers;
+namespace AgentsWinBar.Helpers;
 
 public sealed record ApiCreditsAttributionResult(
     IReadOnlyList<ApiCreditsContributor> Contributors, decimal UnattributedUsd, int UnpricedTokenGroups, decimal UnpricedTokens,

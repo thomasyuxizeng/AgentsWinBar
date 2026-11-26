@@ -33,20 +33,20 @@ jobs:
         run: dotnet tool install --global nuget-license
 
       - name: Restore dependencies
-        run: dotnet restore CodexBarWin.sln
+        run: dotnet restore AgentsWinBar.sln
 
       - name: Generate license report (JSON)
         run: |
           # nuget-license 4.x: --output is the format and --file-output the target. It exits with the number of
           # packages it could not validate (for example one without any license information; the report is still
           # written) and with -1 when it cannot run. Either way the job fails, so nothing is skipped silently.
-          nuget-license --input CodexBarWin.sln --output JsonPretty --file-output licenses.json
+          nuget-license --input AgentsWinBar.sln --output JsonPretty --file-output licenses.json
           if ($LASTEXITCODE -ne 0) { throw "License JSON report generation failed (exit $LASTEXITCODE)." }
         shell: pwsh
 
       - name: Generate license report (Table)
         run: |
-          nuget-license --input CodexBarWin.sln --output Table --file-output licenses.txt
+          nuget-license --input AgentsWinBar.sln --output Table --file-output licenses.txt
           if ($LASTEXITCODE -ne 0) { throw "License table report generation failed (exit $LASTEXITCODE)." }
         shell: pwsh
 

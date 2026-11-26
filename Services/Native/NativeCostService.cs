@@ -1,10 +1,10 @@
 using System.Text.Json;
-using CodexBarWin.Helpers;
-using CodexBarWin.Models;
-using CodexBarWin.Services.Native.Cost;
+using AgentsWinBar.Helpers;
+using AgentsWinBar.Models;
+using AgentsWinBar.Services.Native.Cost;
 using Microsoft.Extensions.Logging;
 
-namespace CodexBarWin.Services.Native;
+namespace AgentsWinBar.Services.Native;
 
 /// <summary>Scans the local Claude and Codex logs natively and returns costs as the JSON the CodexBar CLI prints.</summary>
 public interface INativeCostService

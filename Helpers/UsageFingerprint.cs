@@ -1,6 +1,6 @@
-using CodexBarWin.Models;
+using AgentsWinBar.Models;
 
-namespace CodexBarWin.Helpers;
+namespace AgentsWinBar.Helpers;
 
 /// <summary>An immutable snapshot of usage values relevant to adaptive refresh.</summary>
 public sealed class UsageFingerprint

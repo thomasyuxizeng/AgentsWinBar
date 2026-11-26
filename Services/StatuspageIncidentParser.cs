@@ -1,10 +1,10 @@
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
-using CodexBarWin.Helpers;
-using CodexBarWin.Models;
+using AgentsWinBar.Helpers;
+using AgentsWinBar.Models;
 
-namespace CodexBarWin.Services;
+namespace AgentsWinBar.Services;
 
 /// <summary>
 /// Parser for Atlassian Statuspage API v2 feeds (summary.json) used by Claude and OpenAI/Codex.

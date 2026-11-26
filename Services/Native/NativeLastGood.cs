@@ -1,4 +1,4 @@
-namespace CodexBarWin.Services.Native;
+namespace AgentsWinBar.Services.Native;
 
 /// <summary>
 /// Shared "last good reading" behavior of the native clients: when a read fails, the client shows its previous

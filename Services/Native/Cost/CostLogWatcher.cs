@@ -1,6 +1,6 @@
 using Microsoft.Extensions.Logging;
 
-namespace CodexBarWin.Services.Native.Cost;
+namespace AgentsWinBar.Services.Native.Cost;
 
 /// <summary>What the next cost update has to look at: every root, or only the paths that changed.</summary>
 public readonly record struct CostScanPlan(bool FullListing, IReadOnlyCollection<string> ChangedPaths);

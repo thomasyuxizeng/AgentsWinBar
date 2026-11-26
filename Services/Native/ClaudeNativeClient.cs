@@ -1,10 +1,10 @@
 using System.Globalization;
 using System.Net;
 using System.Text.Json;
-using CodexBarWin.Models;
+using AgentsWinBar.Models;
 using Microsoft.Extensions.Logging;
 
-namespace CodexBarWin.Services.Native;
+namespace AgentsWinBar.Services.Native;
 
 /// <summary>The fields of Claude Code's OAuth sign-in this reader uses. The access token never leaves this process.</summary>
 public sealed record ClaudeCredentials(string AccessToken, DateTimeOffset? ExpiresAt, string? SubscriptionType, string? RateLimitTier)

@@ -1,11 +1,11 @@
 using System.Buffers;
 using System.IO.Enumeration;
 using System.Runtime.InteropServices;
-using CodexBarWin.Models;
+using AgentsWinBar.Models;
 using Microsoft.Extensions.Logging;
 using Microsoft.Win32.SafeHandles;
 
-namespace CodexBarWin.Services.Native.Cost;
+namespace AgentsWinBar.Services.Native.Cost;
 
 /// <param name="SkippedPaths">The logs that could not be opened (locked or unreadable), or null when none were.</param>
 public sealed record CostScanResult(long FilesRead, long BytesRead, long MalformedLines, long OversizedLines,
@@ -88,7 +88,7 @@ public sealed partial class NativeCostScanner
         cancellationToken.ThrowIfCancellationRequested();
         using var background = new BackgroundPriority();
         var pathKey = CostKey.Hash(MemoryMarshal.AsBytes(_indexPath.ToUpperInvariant().AsSpan()));
-        using var writer = new Mutex(false, $"CodexBarWin.CostIndex.{pathKey.First:X16}{pathKey.Second:X16}");
+        using var writer = new Mutex(false, $"AgentsWinBar.CostIndex.{pathKey.First:X16}{pathKey.Second:X16}");
         try
         {
             while (!writer.WaitOne(100))

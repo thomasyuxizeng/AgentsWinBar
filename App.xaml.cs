@@ -1,13 +1,13 @@
-using CodexBarWin.Helpers;
-using CodexBarWin.Models;
-using CodexBarWin.Services;
-using CodexBarWin.ViewModels;
-using NativeTestOverrides = CodexBarWin.Services.Native.NativeTestOverrides;
+using AgentsWinBar.Helpers;
+using AgentsWinBar.Models;
+using AgentsWinBar.Services;
+using AgentsWinBar.ViewModels;
+using NativeTestOverrides = AgentsWinBar.Services.Native.NativeTestOverrides;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.UI.Xaml;
 
-namespace CodexBarWin;
+namespace AgentsWinBar;
 
 /// <summary>
 /// Provides application-specific behavior to supplement the default Application class.
@@ -16,11 +16,11 @@ public partial class App : Application
 {
     private static Mutex? _mutex;
 #if DEBUG
-    // A Debug instance running on the test hooks (CODEXBARWIN_TEST_*) can run beside the installed app.
+    // A Debug instance running on the test hooks (AGENTSWINBAR_TEST_*) can run beside the installed app.
     private static string MutexName => NativeTestOverrides.Current is null
-        ? "CodexBarWin_SingleInstance" : "CodexBarWin_SingleInstance_Test";
+        ? "AgentsWinBar_SingleInstance" : "AgentsWinBar_SingleInstance_Test";
 #else
-    private const string MutexName = "CodexBarWin_SingleInstance";
+    private const string MutexName = "AgentsWinBar_SingleInstance";
 #endif
 
     private MainWindow? _mainWindow;
@@ -52,7 +52,7 @@ public partial class App : Application
     }
 
     /// <summary>
-    /// Writes unhandled exceptions to %LOCALAPPDATA%\CodexBarWin\crash.log so crashes can be diagnosed.
+    /// Writes unhandled exceptions to %LOCALAPPDATA%\AgentsWinBar\crash.log so crashes can be diagnosed.
     /// </summary>
     private void RegisterCrashLogging()
     {
@@ -68,8 +68,7 @@ public partial class App : Application
     {
         try
         {
-            var folder = NativeTestOverrides.Current?.AppDataDirectory ??
-                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CodexBarWin");
+            var folder = NativeTestOverrides.Current?.AppDataDirectory ?? AppPaths.DataDirectory;
             Directory.CreateDirectory(folder);
             File.AppendAllText(
                 Path.Combine(folder, "crash.log"),
@@ -97,6 +96,9 @@ public partial class App : Application
                 Exit();
                 return;
             }
+
+            // Before anything reads the data folder: bring over the data of the app's old name, once.
+            await ImportLegacyDataAsync();
 
             // Load settings
             var settingsService = Services.GetRequiredService<ISettingsService>();
@@ -257,6 +259,25 @@ public partial class App : Application
         }
     }
 
+    /// <summary>
+    /// One-time import of the CodexBarWin data folder (see <see cref="LegacyDataImporter"/>). Skipped on the Debug
+    /// test hooks, whose data folder is a fake one. Never throws, so it cannot block startup.
+    /// </summary>
+    private static async Task ImportLegacyDataAsync()
+    {
+        try
+        {
+            if (NativeTestOverrides.Current is not null) return;
+            var importer = new LegacyDataImporter(Services.GetRequiredService<ILogger<LegacyDataImporter>>(),
+                AppPaths.DataDirectory, () => LegacyDataImporter.DefaultSources(AppPaths.LocalAppData), LogHandled);
+            await Task.Run(importer.Run);
+        }
+        catch (Exception ex)
+        {
+            LogHandled("ImportLegacyDataAsync", ex);
+        }
+    }
+
     private static IServiceProvider ConfigureServices()
     {
         var services = new ServiceCollection();
@@ -272,7 +293,7 @@ public partial class App : Application
 #endif
         });
 
-        // Debug test hooks (CODEXBARWIN_TEST_*): a fake profile, data folder, credential and provider server. Always
+        // Debug test hooks (AGENTSWINBAR_TEST_*): a fake profile, data folder, credential and provider server. Always
         // null in a Release build. A set but invalid variable throws here, so a Debug app never falls back silently.
         var testOverrides = NativeTestOverrides.Current;
         // A test run reads no admin key or spend-log setting from the environment; the spend log is the fake one.

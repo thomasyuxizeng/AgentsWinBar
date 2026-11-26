@@ -1,6 +1,6 @@
 # Sample Data for Developer Mode
 
-This directory contains sample JSON files used when Developer Mode is enabled in CodexBarWin.
+This directory contains sample JSON files used when Developer Mode is enabled in AgentsWinBar.
 
 ## Files
 

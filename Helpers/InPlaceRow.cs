@@ -4,7 +4,7 @@ using System.ComponentModel;
 using System.Linq.Expressions;
 using System.Reflection;
 
-namespace CodexBarWin.Helpers;
+namespace AgentsWinBar.Helpers;
 
 /// <summary>Copied after every other property by <see cref="InPlaceRow.UpdateFrom"/> (a bar's reset stamp must come after its window).</summary>
 [AttributeUsage(AttributeTargets.Property)]

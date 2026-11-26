@@ -1,7 +1,7 @@
 using System.Runtime;
 using System.Runtime.InteropServices;
 
-namespace CodexBarWin.Helpers;
+namespace AgentsWinBar.Helpers;
 
 /// <summary>Releases idle process working-set pages without affecting application state.</summary>
 public static class WorkingSetTrimmer

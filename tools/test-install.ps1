@@ -13,7 +13,7 @@ $parseErrors = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseFile($installerPath, [ref]$tokens, [ref]$parseErrors)
 if ($parseErrors.Count) { throw 'Installer has PowerShell syntax errors.' }
 
-$helperNames = @('Quote-Sh', 'Quote-Native', 'Test-Usage', 'Read-Package', 'Test-WindowsSignIn', 'Get-AppUsageStatus')
+$helperNames = @('Quote-Sh', 'Quote-Native', 'Test-Usage', 'Read-Package', 'Test-WindowsSignIn', 'Get-AppUsageStatus', 'Find-LegacyAppData', 'Get-LegacyAppNotice')
 $helpers = @($ast.FindAll({
     param($node)
     $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -in $helperNames
@@ -287,7 +287,7 @@ function New-TestPackage([string] $RuntimeName) {
             $writer.Write(@"
 <?xml version="1.0" encoding="utf-8"?>
 <Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10">
-  <Identity Name="CodexBarWin" Publisher="CN=CodexBarWin OSS" Version="1.2.3.0" ProcessorArchitecture="x64" />
+  <Identity Name="AgentsWinBar" Publisher="CN=CodexBarWin OSS" Version="1.2.3.0" ProcessorArchitecture="x64" />
   <Dependencies><PackageDependency Name="$RuntimeName" MinVersion="9000.1.2.0" Publisher="CN=Microsoft Corporation" /></Dependencies>
   <Applications><Application Id="App" /></Applications>
 </Package>
@@ -420,5 +420,44 @@ foreach ($guard in $noiseGuards) {
     try { . ([scriptblock]::Create($guard.Extent.Text)) } catch { $rejected = $_.Exception.Message -like 'setup-failure-1: *gemini*' }
     Assert-Equal $rejected $true 'shell noise fails setup before success reporting'
 }
+# The old CodexBarWin package: its data folder is found like the app's importer finds it, and setup only tells the
+# human how to remove the old app. Synthetic folders only; no real app data is read.
+$legacyRoot = Join-Path ([IO.Path]::GetTempPath()) ('agentswinbar-legacy-test-' + [Guid]::NewGuid().ToString('N'))
+try {
+    function New-LegacyFolder([string] $Folder, [datetime] $Written, [switch] $NoSettings) {
+        [void][IO.Directory]::CreateDirectory($Folder)
+        $files = @('cache.json')
+        if (-not $NoSettings) { $files += 'settings.json' }
+        foreach ($name in $files) {
+            $path = Join-Path $Folder $name
+            [IO.File]::WriteAllText($path, '{}')
+            [IO.File]::SetLastWriteTimeUtc($path, $Written)
+        }
+    }
+    function Packaged-Folder([string] $Family) { Join-Path $legacyRoot "Packages\$Family\LocalCache\Local\CodexBarWin" }
+    $now = [datetime]::UtcNow
+    Assert-Equal (Find-LegacyAppData $legacyRoot) $null 'no old data folder found in an empty profile'
+    New-LegacyFolder (Join-Path $legacyRoot 'CodexBarWin') $now
+    Assert-Equal (Find-LegacyAppData $legacyRoot) (Join-Path $legacyRoot 'CodexBarWin') 'old unpackaged data folder found'
+    New-LegacyFolder (Packaged-Folder 'CodexBarWin_older') $now.AddDays(-10)
+    New-LegacyFolder (Packaged-Folder 'CodexBarWin_newer') $now.AddDays(-1)
+    New-LegacyFolder (Packaged-Folder 'CodexBarWin_nosettings') $now -NoSettings
+    New-LegacyFolder (Packaged-Folder 'CodexBarWinTest_dev') $now.AddDays(1)
+    Assert-Equal (Find-LegacyAppData $legacyRoot) (Packaged-Folder 'CodexBarWin_newer') 'newest old packaged data folder wins over unpackaged and test identities'
+} finally { Remove-Item -LiteralPath $legacyRoot -Recurse -Force -ErrorAction SilentlyContinue }
+$removeCommand = 'Get-AppxPackage -Name CodexBarWin | Remove-AppxPackage'
+Assert-Equal ((Get-LegacyAppNotice $true).EndsWith($removeCommand)) $true 'notice gives the exact removal command'
+Assert-Equal ((Get-LegacyAppNotice $true) -like '*first launch*') $true 'notice explains the first-launch import'
+Assert-Equal ((Get-LegacyAppNotice $false).EndsWith($removeCommand)) $true 'notice without data gives the removal command'
+$removals = @($ast.FindAll({
+    param($node)
+    $node -is [System.Management.Automation.Language.CommandAst] -and $node.GetCommandName() -eq 'Remove-AppxPackage'
+}, $true))
+Assert-Equal $removals.Count 0 'setup never removes an app package itself'
+$seedGuard = $ast.Find({
+    param($node)
+    $node -is [System.Management.Automation.Language.IfStatementAst] -and $node.Clauses[0].Item1.Extent.Text -like '*$unpackagedSettings*'
+}, $true)
+Assert-Equal ($seedGuard.Clauses[0].Item1.Extent.Text -like '*-not $legacyData') $true 'settings are not preseeded over old data the app imports'
 Write-Host "Installer helper mock tests passed ($script:passedAssertions assertions)."
 exit 0

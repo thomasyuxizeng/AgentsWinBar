@@ -1,11 +1,11 @@
-using CodexBarWin.Helpers;
-using CodexBarWin.Models;
-using CodexBarWin.Views;
+using AgentsWinBar.Helpers;
+using AgentsWinBar.Models;
+using AgentsWinBar.Views;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
 
-namespace CodexBarWin.Controls;
+namespace AgentsWinBar.Controls;
 
 /// <summary>A label, a value and a 0-100 bar (token mix, top models).</summary>
 public sealed record DashboardBarRow(string Label, string Value, double Percent);

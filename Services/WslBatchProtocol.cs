@@ -1,7 +1,7 @@
 using System.Globalization;
 using System.Text;
 
-namespace CodexBarWin.Services;
+namespace AgentsWinBar.Services;
 
 /// <summary>
 /// A private, per-invocation line protocol. Payloads are base64 so command output

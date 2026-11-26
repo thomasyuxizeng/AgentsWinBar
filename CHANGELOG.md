@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Renamed to AgentsWinBar. The package, executable, data folder (`%LOCALAPPDATA%\AgentsWinBar`) and release asset names change with it. On its first start AgentsWinBar copies the settings, caches, history, cost ledger and cost index of an installed CodexBarWin (the old files stay in place), and setup prints the command that removes the old app.
+
 ### Added
 - The Gemini provider card on the dashboard shows this month's Gemini API spend, estimated at list prices from token counts in a local spend log, with cached input at the cache rate when the log records it (hidden when no log exists). The spend log path can be overridden through the `CODEXBAR_GEMINI_SPEND_LOG` environment variable.
 
@@ -312,17 +315,17 @@ Early-reset detection cannot tell an account switch from a reset; if saving earl
 - Window slide-in animation from system tray
 - Setup wizard for first-time configuration
 
-[Unreleased]: https://github.com/Wave-OCE/CodexBarWin/compare/v1.4.0...HEAD
-[1.4.0]: https://github.com/Wave-OCE/CodexBarWin/compare/v1.3.0...v1.4.0
-[1.3.0]: https://github.com/Wave-OCE/CodexBarWin/compare/v1.2.1...v1.3.0
-[1.2.1]: https://github.com/Wave-OCE/CodexBarWin/compare/v1.2.0...v1.2.1
-[1.2.0]: https://github.com/Wave-OCE/CodexBarWin/compare/v1.1.0...v1.2.0
-[1.1.0]: https://github.com/Wave-OCE/CodexBarWin/compare/v1.0.2...v1.1.0
-[1.0.2]: https://github.com/Wave-OCE/CodexBarWin/compare/v1.0.1...v1.0.2
-[1.0.1]: https://github.com/Wave-OCE/CodexBarWin/compare/v1.0.0...v1.0.1
-[1.0.0]: https://github.com/Wave-OCE/CodexBarWin/compare/v0.9.9...v1.0.0
-[0.9.9]: https://github.com/Wave-OCE/CodexBarWin/compare/v0.9.8...v0.9.9
-[0.9.8]: https://github.com/Wave-OCE/CodexBarWin/compare/v0.9.7...v0.9.8
-[0.9.7]: https://github.com/Wave-OCE/CodexBarWin/compare/v0.9.6...v0.9.7
-[0.9.6]: https://github.com/Wave-OCE/CodexBarWin/releases/tag/v0.9.6
+[Unreleased]: https://github.com/thomasyuxizeng/AgentsWinBar/compare/v1.4.0...HEAD
+[1.4.0]: https://github.com/thomasyuxizeng/AgentsWinBar/compare/v1.3.0...v1.4.0
+[1.3.0]: https://github.com/thomasyuxizeng/AgentsWinBar/compare/v1.2.1...v1.3.0
+[1.2.1]: https://github.com/thomasyuxizeng/AgentsWinBar/compare/v1.2.0...v1.2.1
+[1.2.0]: https://github.com/thomasyuxizeng/AgentsWinBar/compare/v1.1.0...v1.2.0
+[1.1.0]: https://github.com/thomasyuxizeng/AgentsWinBar/compare/v1.0.2...v1.1.0
+[1.0.2]: https://github.com/thomasyuxizeng/AgentsWinBar/compare/v1.0.1...v1.0.2
+[1.0.1]: https://github.com/thomasyuxizeng/AgentsWinBar/compare/v1.0.0...v1.0.1
+[1.0.0]: https://github.com/thomasyuxizeng/AgentsWinBar/compare/v0.9.9...v1.0.0
+[0.9.9]: https://github.com/thomasyuxizeng/AgentsWinBar/compare/v0.9.8...v0.9.9
+[0.9.8]: https://github.com/thomasyuxizeng/AgentsWinBar/compare/v0.9.7...v0.9.8
+[0.9.7]: https://github.com/thomasyuxizeng/AgentsWinBar/compare/v0.9.6...v0.9.7
+[0.9.6]: https://github.com/thomasyuxizeng/AgentsWinBar/releases/tag/v0.9.6
 [0.1.0]: https://github.com/nek0der/CodexBarWin/releases/tag/v0.1.0

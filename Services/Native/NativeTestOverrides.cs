@@ -3,11 +3,11 @@ using System.Globalization;
 using System.Text.RegularExpressions;
 #endif
 
-namespace CodexBarWin.Services.Native;
+namespace AgentsWinBar.Services.Native;
 
 /// <summary>
 /// Test hooks for running a Debug build against synthetic sign-ins and the fake provider server
-/// (tools/FakeProviders). A Debug build reads them once, at startup, from <c>CODEXBARWIN_TEST_*</c> environment
+/// (tools/FakeProviders). A Debug build reads them once, at startup, from <c>AGENTSWINBAR_TEST_*</c> environment
 /// variables. In a Release build <see cref="Current"/> and <see cref="Load"/> are always null, nothing is read, and the
 /// HTTP allow list has no loopback exception, so a Release app cannot be pointed anywhere else.
 /// </summary>
@@ -19,7 +19,7 @@ public sealed record NativeTestOverrides
     /// </summary>
     public string? ProfileRoot { get; init; }
 
-    /// <summary>Stands in for %LOCALAPPDATA%\CodexBarWin: settings, caches, the cost index, the cooldown file and crash.log.</summary>
+    /// <summary>Stands in for %LOCALAPPDATA%\AgentsWinBar: settings, caches, the cost index, the cooldown file and crash.log.</summary>
     public string? AppDataDirectory { get; init; }
 
     /// <summary>A file holding a fake Antigravity credential blob, read instead of Windows Credential Manager.</summary>
@@ -115,7 +115,7 @@ public sealed record NativeTestOverrides
     }
 
 #if DEBUG
-    internal const string Prefix = "CODEXBARWIN_TEST_";
+    internal const string Prefix = "AGENTSWINBAR_TEST_";
     internal const string ProfileRootVariable = Prefix + "PROFILE_ROOT";
     internal const string AppDataVariable = Prefix + "APPDATA";
     internal const string AntigravityCredentialFileVariable = Prefix + "ANTIGRAVITY_CREDENTIAL_FILE";

@@ -1,4 +1,4 @@
-namespace CodexBarWin.Models;
+namespace AgentsWinBar.Models;
 
 /// <summary>
 /// Where a provider's usage numbers come from: read natively over HTTPS with the Windows sign-ins ("native", the

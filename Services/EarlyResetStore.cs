@@ -1,9 +1,9 @@
 using System.Text.Json;
-using CodexBarWin.Helpers;
-using CodexBarWin.Models;
+using AgentsWinBar.Helpers;
+using AgentsWinBar.Models;
 using Microsoft.Extensions.Logging;
 
-namespace CodexBarWin.Services;
+namespace AgentsWinBar.Services;
 
 /// <summary>
 /// Persists detected early reset events to early-resets.json beside settings/cache.
@@ -57,8 +57,7 @@ public sealed class EarlyResetStore : IEarlyResetStore
         }
         else
         {
-            var appData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-            FilePath = Path.Combine(appData, "CodexBarWin", "early-resets.json");
+            FilePath = AppPaths.DataFile("early-resets.json");
         }
     }
 

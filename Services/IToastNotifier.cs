@@ -1,4 +1,4 @@
-namespace CodexBarWin.Services;
+namespace AgentsWinBar.Services;
 
 /// <summary>
 /// Shows a Windows notification.

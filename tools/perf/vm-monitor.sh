@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Read-only probe for the WSL VM: every 0.5 s, record each process's resident memory and CPU ticks, plus
-# /proc/meminfo, so a CodexBarWin refresh can be split between the kernel, page cache and each process.
+# /proc/meminfo, so an AgentsWinBar refresh can be split between the kernel, page cache and each process.
 # Usage: vm-monitor.sh <seconds> <output-prefix>   (writes <prefix>.procs.csv and <prefix>.mem.csv)
 # Note: while this runs the VM stays warm, so a refresh in this window does not include a cold boot.
 dur=${1:-420}

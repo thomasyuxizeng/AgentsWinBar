@@ -3,7 +3,7 @@ using System.Globalization;
 using System.Net;
 using System.Security.Cryptography;
 using System.Text;
-using CodexBarWin.Services.Native;
+using AgentsWinBar.Services.Native;
 using Microsoft.Extensions.Logging;
 
 // Native usage probe (spike). Prints usage numbers, statuses and costs. Never prints token values, client secrets

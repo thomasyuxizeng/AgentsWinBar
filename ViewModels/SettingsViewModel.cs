@@ -1,11 +1,11 @@
 using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
-using CodexBarWin.Models;
-using CodexBarWin.Services;
+using AgentsWinBar.Models;
+using AgentsWinBar.Services;
 using Microsoft.Extensions.Logging;
 
-namespace CodexBarWin.ViewModels;
+namespace AgentsWinBar.ViewModels;
 
 /// <summary>
 /// ViewModel for the settings page.
@@ -203,7 +203,7 @@ public partial class SettingsViewModel : ObservableObject
 #if WINDOWS
         try
         {
-            var startupTask = await Windows.ApplicationModel.StartupTask.GetAsync("CodexBarWinStartup");
+            var startupTask = await Windows.ApplicationModel.StartupTask.GetAsync("AgentsWinBarStartup");
 
             if (StartWithWindows)
             {

@@ -3,8 +3,8 @@ using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
-using CodexBarWin.Models;
-using CodexBarWin.Services.Native.Cost;
+using AgentsWinBar.Models;
+using AgentsWinBar.Services.Native.Cost;
 using Microsoft.Extensions.Logging.Abstractions;
 
 internal static class Program
@@ -54,8 +54,8 @@ internal static class Program
 
             var profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
             var localData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-            var appData = Path.Combine(localData, "Packages", "CodexBarWin_w05y65rx3mcz6", "LocalCache",
-                "Local", "CodexBarWin");
+            var appData = Path.Combine(localData, "Packages", "AgentsWinBar_w05y65rx3mcz6", "LocalCache",
+                "Local", "AgentsWinBar");
             var synthetic = Path.Combine(directory, "synthetic");
             Directory.CreateDirectory(synthetic);
             var fixture = Path.Combine(synthetic, "burst.jsonl");

@@ -1,4 +1,4 @@
-namespace CodexBarWin.Helpers;
+namespace AgentsWinBar.Helpers;
 
 /// <summary>
 /// What one window remembers about reset animations while its usage bars are torn down and rebuilt (the taskbar strip

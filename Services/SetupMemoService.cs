@@ -3,7 +3,7 @@ using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging;
 
-namespace CodexBarWin.Services;
+namespace AgentsWinBar.Services;
 
 /// <summary>Best-effort atomic persistence of a setup check beside application settings.</summary>
 public sealed partial class SetupMemoService : ISetupMemoService

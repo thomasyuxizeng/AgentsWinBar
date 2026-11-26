@@ -1,7 +1,7 @@
 using System.Collections.ObjectModel;
-using CodexBarWin.Models;
+using AgentsWinBar.Models;
 
-namespace CodexBarWin.Helpers;
+namespace AgentsWinBar.Helpers;
 
 /// <summary>
 /// Keeps the displayed provider list in step with the providers enabled in Settings.

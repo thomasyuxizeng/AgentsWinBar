@@ -1,10 +1,10 @@
-using CodexBarWin.ViewModels;
+using AgentsWinBar.ViewModels;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 
-namespace CodexBarWin.Views;
+namespace AgentsWinBar.Views;
 
 /// <summary>One provider in the Settings "Sign-ins" section.</summary>
 public sealed class SignInRow
@@ -189,7 +189,7 @@ public sealed partial class SettingsPage : Page
         try
         {
             App.Services.GetRequiredService<Services.IToastNotifier>()
-                .Show("CodexBarWin", "Notifications are working. You'll get one like this when usage needs attention.");
+                .Show("AgentsWinBar", "Notifications are working. You'll get one like this when usage needs attention.");
         }
         catch (Exception ex)
         {

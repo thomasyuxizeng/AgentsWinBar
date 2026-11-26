@@ -1,8 +1,8 @@
 using System.Diagnostics;
-using CodexBarWin.Models;
+using AgentsWinBar.Models;
 using Microsoft.Extensions.Logging;
 
-namespace CodexBarWin.Services;
+namespace AgentsWinBar.Services;
 
 /// <summary>
 /// Opens each provider's official sign-in, trying routes in order and falling back when a route is missing or fails

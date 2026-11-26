@@ -1,8 +1,8 @@
 using System.Buffers;
 using System.Text.Json;
-using CodexBarWin.Models;
+using AgentsWinBar.Models;
 
-namespace CodexBarWin.Services.Native;
+namespace AgentsWinBar.Services.Native;
 
 /// <summary>
 /// Maps a <see cref="NativeUsageResult"/> to the DTO the app already parses from CLI JSON, with the same meaning the

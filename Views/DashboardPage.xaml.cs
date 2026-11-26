@@ -1,12 +1,12 @@
-using CodexBarWin.Controls;
-using CodexBarWin.Helpers;
-using CodexBarWin.Models;
+using AgentsWinBar.Controls;
+using AgentsWinBar.Helpers;
+using AgentsWinBar.Models;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Media;
 
-namespace CodexBarWin.Views;
+namespace AgentsWinBar.Views;
 
 /// <summary>A provider's graphs switched on or off from the dashboard's graphs section.</summary>
 public sealed record GraphVisibilityChange(string ProviderId, bool Visible);

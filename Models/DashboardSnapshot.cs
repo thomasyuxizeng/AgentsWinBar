@@ -1,6 +1,6 @@
-using CodexBarWin.Helpers;
+using AgentsWinBar.Helpers;
 
-namespace CodexBarWin.Models;
+namespace AgentsWinBar.Models;
 
 /// <summary>
 /// Everything the full-window dashboard shows, computed in one pass from the app's live state.

@@ -1,4 +1,4 @@
-namespace CodexBarWin.Helpers;
+namespace AgentsWinBar.Helpers;
 
 /// <summary>An sRGB colour with alpha (pure stand-in for Windows.UI.Color, so the maths stays testable).</summary>
 internal readonly record struct BarResetRgba(byte R, byte G, byte B, byte A = 255);

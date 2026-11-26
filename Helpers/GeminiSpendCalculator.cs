@@ -1,8 +1,8 @@
 using System.Globalization;
 using System.Text.Json;
-using CodexBarWin.Models;
+using AgentsWinBar.Models;
 
-namespace CodexBarWin.Helpers;
+namespace AgentsWinBar.Helpers;
 
 /// <summary>
 /// Pure, deterministic calculator for monthly Gemini API spend from local spend logs.

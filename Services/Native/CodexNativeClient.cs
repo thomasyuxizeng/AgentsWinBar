@@ -1,9 +1,9 @@
 using System.Net;
 using System.Text.Json;
-using CodexBarWin.Models;
+using AgentsWinBar.Models;
 using Microsoft.Extensions.Logging;
 
-namespace CodexBarWin.Services.Native;
+namespace AgentsWinBar.Services.Native;
 
 /// <summary>The fields of the Codex CLI's auth.json this reader uses. The access token never leaves this process.</summary>
 public sealed record CodexCredentials(string AccessToken, string? AccountId, DateTimeOffset? ExpiresAt, DateTimeOffset? LastRefresh)

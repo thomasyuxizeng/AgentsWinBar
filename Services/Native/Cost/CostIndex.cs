@@ -1,4 +1,4 @@
-namespace CodexBarWin.Services.Native.Cost;
+namespace AgentsWinBar.Services.Native.Cost;
 
 internal sealed record IndexedFile(long Length, long WriteTime, long Created, long Offset, long Generation,
     CostKey FileId, CodexCursor Cursor);

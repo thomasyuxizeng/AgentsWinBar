@@ -1,6 +1,6 @@
-# Contributing to CodexBarWin
+# Contributing to AgentsWinBar
 
-Thank you for your interest in contributing to CodexBarWin!
+Thank you for your interest in contributing to AgentsWinBar!
 
 ## Getting Started
 
@@ -18,10 +18,10 @@ Thank you for your interest in contributing to CodexBarWin!
 1. Fork the repository
 2. Clone your fork:
    ```bash
-   git clone https://github.com/YOUR_USERNAME/CodexBarWin.git
-   cd CodexBarWin
+   git clone https://github.com/YOUR_USERNAME/AgentsWinBar.git
+   cd AgentsWinBar
    ```
-3. Open `CodexBarWin.sln` in Visual Studio 2022
+3. Open `AgentsWinBar.sln` in Visual Studio 2022
 4. Restore NuGet packages
 5. Build and run
 
@@ -104,7 +104,7 @@ Examples:
 ## Project Structure
 
 ```
-CodexBarWin/
+AgentsWinBar/
 ├── Controls/       # Custom UI controls
 ├── Models/         # Data models
 ├── Services/       # Business logic services

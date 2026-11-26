@@ -1,4 +1,4 @@
-namespace CodexBarWin.Helpers;
+namespace AgentsWinBar.Helpers;
 
 /// <summary>Chooses the delay after refreshes with unchanged usage.</summary>
 public static class AdaptiveRefreshPolicy

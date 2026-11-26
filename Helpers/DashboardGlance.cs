@@ -1,6 +1,6 @@
-using CodexBarWin.Models;
+using AgentsWinBar.Models;
 
-namespace CodexBarWin.Helpers;
+namespace AgentsWinBar.Helpers;
 
 /// <summary>How loud a dashboard attention entry is: amber for caution, red for critical.</summary>
 public enum AttentionSeverity { Caution, Critical }

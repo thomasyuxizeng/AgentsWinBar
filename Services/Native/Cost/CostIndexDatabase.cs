@@ -1,6 +1,6 @@
 using System.Runtime.InteropServices;
 
-namespace CodexBarWin.Services.Native.Cost;
+namespace AgentsWinBar.Services.Native.Cost;
 
 // Windows ships this SQLite library. Keep SQL errors free of paths and input values.
 internal sealed class CostIndexDatabase : IDisposable

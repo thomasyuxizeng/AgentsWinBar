@@ -1,7 +1,7 @@
 using System.Text;
-using CodexBarWin.Models;
+using AgentsWinBar.Models;
 
-namespace CodexBarWin.Helpers;
+namespace AgentsWinBar.Helpers;
 
 /// <summary>
 /// Pure-C# signature helpers for compact widgets (<see cref="TaskbarWindow"/> and <see cref="OverlayWindow"/>)

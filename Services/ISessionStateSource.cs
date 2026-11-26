@@ -1,4 +1,4 @@
-namespace CodexBarWin.Services;
+namespace AgentsWinBar.Services;
 
 /// <summary>Reports workstation session and resume transitions.</summary>
 public interface ISessionStateSource

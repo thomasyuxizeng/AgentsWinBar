@@ -53,27 +53,27 @@ jobs:
             ${{ runner.os }}-nuget-
 
       - name: Restore dependencies
-        run: dotnet restore CodexBarWin.sln
+        run: dotnet restore AgentsWinBar.sln
 
       - name: Build
-        run: dotnet build CodexBarWin.sln -c ${{ matrix.configuration }} -p:Platform=${{ matrix.platform }} -p:PublishReadyToRun=false --no-restore
+        run: dotnet build AgentsWinBar.sln -c ${{ matrix.configuration }} -p:Platform=${{ matrix.platform }} -p:PublishReadyToRun=false --no-restore
 
       - name: Run unit tests
-        run: dotnet test CodexBarWin.Tests.Unit/CodexBarWin.Tests.Unit.csproj -c ${{ matrix.configuration }} -p:Platform=${{ matrix.platform }} --no-build --verbosity normal --logger "trx;LogFileName=test-results.trx" --collect:"XPlat Code Coverage"
+        run: dotnet test AgentsWinBar.Tests.Unit/AgentsWinBar.Tests.Unit.csproj -c ${{ matrix.configuration }} -p:Platform=${{ matrix.platform }} --no-build --verbosity normal --logger "trx;LogFileName=test-results.trx" --collect:"XPlat Code Coverage"
 
       - name: Upload test results
         uses: actions/upload-artifact@v4
         if: always()
         with:
           name: test-results-${{ matrix.platform }}
-          path: CodexBarWin.Tests.Unit/TestResults/
+          path: AgentsWinBar.Tests.Unit/TestResults/
           retention-days: 7
 
       - name: Upload coverage reports
         uses: codecov/codecov-action@v4
         if: success()
         with:
-          files: CodexBarWin.Tests.Unit/TestResults/**/coverage.cobertura.xml
+          files: AgentsWinBar.Tests.Unit/TestResults/**/coverage.cobertura.xml
           flags: unittests
           name: codecov-${{ matrix.platform }}
           fail_ci_if_error: false

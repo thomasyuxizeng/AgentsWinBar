@@ -1,14 +1,14 @@
 <#
 .SYNOPSIS
-    Reads the CodexBarWin permanent cost ledger and displays lifetime, last-30-days, and custom range totals.
+    Reads the AgentsWinBar permanent cost ledger and displays lifetime, last-30-days, and custom range totals.
 
 .DESCRIPTION
     Pure read-only report tool for querying lifetime AI tool costs and token counts recorded
-    by CodexBarWin. Survives local CLI log rotations.
+    by AgentsWinBar. Survives local CLI log rotations.
 
 .PARAMETER Path
     Path to cost-ledger.json. Defaults to the installed package's LocalCache ledger,
-    falling back to %LOCALAPPDATA%\CodexBarWin\cost-ledger.json.
+    falling back to %LOCALAPPDATA%\AgentsWinBar\cost-ledger.json.
 
 .PARAMETER Provider
     Optional provider filter (e.g. 'claude', 'codex', 'gemini').
@@ -46,22 +46,22 @@ function Resolve-CostLedgerPath([string]$OverridePath, [string]$LocalAppData = $
     if (-not [string]::IsNullOrWhiteSpace($OverridePath)) { return $OverridePath }
     if (Get-Command Get-AppxPackage -ErrorAction SilentlyContinue) {
         try {
-            $packages = @(Get-AppxPackage -Name CodexBarWin -ErrorAction Stop | Sort-Object { [version]$_.Version } -Descending)
+            $packages = @(Get-AppxPackage -Name AgentsWinBar -ErrorAction Stop | Sort-Object { [version]$_.Version } -Descending)
             foreach ($package in $packages) {
-                $packagedPath = Join-Path $LocalAppData "Packages\$($package.PackageFamilyName)\LocalCache\Local\CodexBarWin\cost-ledger.json"
+                $packagedPath = Join-Path $LocalAppData "Packages\$($package.PackageFamilyName)\LocalCache\Local\AgentsWinBar\cost-ledger.json"
                 if (Test-Path -LiteralPath $packagedPath -PathType Leaf) { return $packagedPath }
             }
         } catch {
             Write-Verbose "Package lookup unavailable; using the unpackaged ledger path."
         }
     }
-    return (Join-Path $LocalAppData 'CodexBarWin\cost-ledger.json')
+    return (Join-Path $LocalAppData 'AgentsWinBar\cost-ledger.json')
 }
 
 $Path = Resolve-CostLedgerPath -OverridePath $Path
 if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
     Write-Host "Cost ledger file not found at: $Path" -ForegroundColor Yellow
-    Write-Host "CodexBarWin creates cost-ledger.json once a cost scan completes."
+    Write-Host "AgentsWinBar creates cost-ledger.json once a cost scan completes."
     exit 0
 }
 
@@ -234,7 +234,7 @@ foreach ($prop in $providerProps) {
     }
 }
 
-Write-Host "=== CODEXBARWIN COST LEDGER REPORT ===" -ForegroundColor Cyan
+Write-Host "=== AGENTSWINBAR COST LEDGER REPORT ===" -ForegroundColor Cyan
 Write-Host "Ledger Path: $Path"
 Write-Host "Report Date: $($today.ToString('yyyy-MM-dd'))"
 Write-Host ""

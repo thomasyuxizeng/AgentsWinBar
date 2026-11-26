@@ -1,4 +1,4 @@
-namespace CodexBarWin.Models;
+namespace AgentsWinBar.Models;
 
 /// <summary>One observed limit window; contains no account or session-log contents.</summary>
 public record UsageHistorySample

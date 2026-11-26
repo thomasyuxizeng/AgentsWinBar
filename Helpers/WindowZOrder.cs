@@ -1,6 +1,6 @@
 using System.Runtime.InteropServices;
 
-namespace CodexBarWin.Helpers;
+namespace AgentsWinBar.Helpers;
 
 /// <summary>
 /// Win32 helpers for keeping tray/overlay windows above other programs.

@@ -1,5 +1,5 @@
-using CodexBarWin.Helpers;
-using CodexBarWin.Services;
+using AgentsWinBar.Helpers;
+using AgentsWinBar.Services;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.UI.Xaml;
@@ -7,7 +7,7 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 using Windows.UI;
 
-namespace CodexBarWin.Controls;
+namespace AgentsWinBar.Controls;
 
 /// <summary>
 /// A meter control for displaying usage percentage, with an optional underlying bar showing how much of

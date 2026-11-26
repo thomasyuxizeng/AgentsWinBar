@@ -1,6 +1,6 @@
 using System.Text.Json.Serialization;
 
-namespace CodexBarWin.Models;
+namespace AgentsWinBar.Models;
 
 /// <summary>
 /// Root persistent document for permanent cost tracking across log rotation.

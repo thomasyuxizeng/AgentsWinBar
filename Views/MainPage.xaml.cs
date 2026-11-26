@@ -1,16 +1,16 @@
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
-using CodexBarWin.Controls;
-using CodexBarWin.Helpers;
-using CodexBarWin.Models;
-using CodexBarWin.ViewModels;
+using AgentsWinBar.Controls;
+using AgentsWinBar.Helpers;
+using AgentsWinBar.Models;
+using AgentsWinBar.ViewModels;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Navigation;
 
-namespace CodexBarWin.Views;
+namespace AgentsWinBar.Views;
 
 /// <summary>
 /// One provider card on the flyout. A refresh replaces the provider's data in the view model; the slot stays, so the card

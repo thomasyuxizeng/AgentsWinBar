@@ -1,6 +1,6 @@
 using System.Diagnostics;
 
-namespace CodexBarWin.Services.Native;
+namespace AgentsWinBar.Services.Native;
 
 /// <summary>
 /// The outcome of one <c>claude auth status --json</c> run. It deliberately carries no output: the command prints the

@@ -2,7 +2,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Windows.AppNotifications;
 using Microsoft.Windows.AppNotifications.Builder;
 
-namespace CodexBarWin.Services;
+namespace AgentsWinBar.Services;
 
 /// <summary>
 /// Shows Windows notifications through the Windows App SDK (needs the app to be packaged).

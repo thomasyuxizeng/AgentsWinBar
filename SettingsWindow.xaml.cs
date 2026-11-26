@@ -1,5 +1,5 @@
-using CodexBarWin.ViewModels;
-using CodexBarWin.Views;
+using AgentsWinBar.ViewModels;
+using AgentsWinBar.Views;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.UI;
 using Microsoft.UI.Composition.SystemBackdrops;
@@ -8,7 +8,7 @@ using Microsoft.UI.Xaml;
 using Microsoft.Win32;
 using WinRT.Interop;
 
-namespace CodexBarWin;
+namespace AgentsWinBar;
 
 /// <summary>
 /// Window for application settings.

@@ -1,6 +1,6 @@
 using System.Runtime.InteropServices;
 
-namespace CodexBarWin.Services;
+namespace AgentsWinBar.Services;
 
 /// <summary>Queries the current process's Windows session without caching its state.</summary>
 internal static class SessionStateNative
