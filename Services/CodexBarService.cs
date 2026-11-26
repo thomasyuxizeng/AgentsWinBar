@@ -635,9 +635,27 @@ public class CodexBarService : ICodexBarService
         return await FetchAllProvidersAsync(providers, null, ct);
     }
 
-    public async IAsyncEnumerable<UsageData> GetAllUsageStreamAsync([System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+    public IAsyncEnumerable<UsageData> GetAllUsageStreamAsync(CancellationToken ct = default) =>
+        StreamUsageAsync(GetEnabledProviders(), ct);
+
+    public IAsyncEnumerable<UsageData> GetUsageStreamAsync(IReadOnlyCollection<string> providers, CancellationToken ct = default)
     {
-        var providers = GetEnabledProviders();
+        var wanted = providers.Where(ProviderConstants.IsValidProvider).Select(ProviderConstants.ValidateAndNormalize)
+            .ToHashSet(StringComparer.Ordinal);
+        return StreamUsageAsync(GetEnabledProviders().Where(wanted.Contains).ToList(), ct);
+    }
+
+    public DateTime? GetRateLimitedUntil(string provider)
+    {
+        if (string.IsNullOrWhiteSpace(provider) || !ProviderConstants.IsValidProvider(provider.Trim())) return null;
+        var normalized = ProviderConstants.ValidateAndNormalize(provider);
+        return UsesNativeUsage(normalized) && _nativeUsage is Native.INativeRateLimitInfo info &&
+            info.RateLimitedUntil(normalized) is { } until ? until.UtcDateTime : null;
+    }
+
+    private async IAsyncEnumerable<UsageData> StreamUsageAsync(List<string> providers,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+    {
         if (providers.Count == 0) { ct.ThrowIfCancellationRequested(); yield break; }
         var channel = System.Threading.Channels.Channel.CreateUnbounded<UsageData>(new()
         {

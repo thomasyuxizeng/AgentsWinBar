@@ -65,6 +65,56 @@ public class CodexBarServiceNativeRoutingTests
     }
 
     [TestMethod]
+    public async Task GetUsageStreamAsync_Subset_ReadsOnlyThoseEnabledProviders()
+    {
+        var wsl = new Mock<IWslService>(MockBehavior.Strict);
+        var native = NativeOk();
+        _settings.SetProviders([
+            new() { Id = "claude", IsEnabled = true },
+            new() { Id = "codex", IsEnabled = true },
+            new() { Id = "gemini", IsEnabled = false }
+        ]);
+        var service = Create(wsl.Object, native);
+
+        var results = new List<UsageData>();
+        await foreach (var data in service.GetUsageStreamAsync(["CODEX", "gemini", "not-a-provider"])) results.Add(data);
+
+        results.Select(r => r.Provider).Should().Equal("codex");
+        native.Calls.Should().Equal("codex");
+        wsl.VerifyNoOtherCalls();
+    }
+
+    [TestMethod]
+    public void GetRateLimitedUntil_NativeReaderInCooldown_ReturnsItsEndInUtc()
+    {
+        var until = Now.AddMinutes(7);
+        var service = Create(new Mock<IWslService>(MockBehavior.Strict).Object,
+            new LimitedNativeUsage(p => p == "claude" ? until : null));
+
+        service.GetRateLimitedUntil("Claude").Should().Be(until.UtcDateTime);
+        service.GetRateLimitedUntil("codex").Should().BeNull();
+        service.GetRateLimitedUntil("nope").Should().BeNull();
+    }
+
+    [TestMethod]
+    public void GetRateLimitedUntil_ProviderReadThroughWsl_IsNull()
+    {
+        _settings.Settings.UsageSources["claude"] = UsageSource.Wsl;
+        var service = Create(new Mock<IWslService>().Object, new LimitedNativeUsage(_ => Now.AddMinutes(7)));
+
+        service.GetRateLimitedUntil("claude").Should().BeNull();
+        service.GetRateLimitedUntil("codex").Should().Be(Now.AddMinutes(7).UtcDateTime);
+    }
+
+    private sealed class LimitedNativeUsage(Func<string, DateTimeOffset?> until) : INativeUsageService, INativeRateLimitInfo
+    {
+        public Task<string> FetchUsageJsonAsync(string provider, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task<IReadOnlyDictionary<string, string>> FetchAllUsageJsonAsync(IReadOnlyList<string> providers,
+            CancellationToken ct = default) => throw new NotSupportedException();
+        public DateTimeOffset? RateLimitedUntil(string provider) => until(provider);
+    }
+
+    [TestMethod]
     public async Task GetAllUsageStreamAsync_AllProvidersNative_YieldsEveryProviderWithoutWsl()
     {
         var wsl = new Mock<IWslService>(MockBehavior.Strict);
