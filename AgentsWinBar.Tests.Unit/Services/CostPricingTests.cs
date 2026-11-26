@@ -37,12 +37,42 @@ public sealed class CostPricingTests
     }
 
     [TestMethod]
-    public void GetRates_WhenClaudeCatalogEntryOmitsCacheRates_ChargesCacheTokensAtInputRate()
+    [DataRow("", 0.2, 5.0)]
+    [DataRow(",\"cache_read\":0", 0.0, 5.0)]
+    [DataRow(",\"cache_write\":7", 0.2, 7.0)]
+    public void GetRates_WhenClaudeCatalogOmitsCacheRates_FillsOnlyMissingFields(
+        string catalogCache, double read, double write)
     {
-        var rate = Pricing(Model("claude-test-1", "\"input\":4,\"output\":20"))
+        var overlay = "{\"claude\":{\"claude-test-1\":{" + Flat + "}}}";
+        var rate = Pricing(Model("claude-test-1", "\"input\":3,\"output\":9" + catalogCache), overlay: overlay)
             .GetRates(CostProvider.Claude, "claude-test-1", false, false, false, 0);
 
-        rate.Should().Be(new CostRates(4, 20, 4, 4, 8));
+        rate.Should().Be(new CostRates(3, 9, (decimal)read, (decimal)write, 6));
+    }
+
+    [TestMethod]
+    public void PriceTokens_WhenClaudeCatalogAndOverlayOmitCacheRates_LeavesThoseBucketsUnpriced()
+    {
+        var pricing = Pricing(Model("claude-test-1", "\"input\":4,\"output\":20"));
+
+        pricing.PriceTokens(CostProvider.Claude, "claude-test-1", false, false, false, 0, new(1_000, 500, 0))
+            .Should().Be(.014m);
+        pricing.PriceTokens(CostProvider.Claude, "claude-test-1", false, false, false, 0, new(1_000, 500, 10))
+            .Should().BeNull();
+        pricing.PriceTokens(CostProvider.Claude, "claude-test-1", false, false, false, 0, new(1_000, 500, 0, 10))
+            .Should().BeNull();
+    }
+
+    [TestMethod]
+    public void GetRates_WhenClaudeCatalogLongContextOmitsCacheRates_UsesBundledLongContextCacheRates()
+    {
+        const string cost = "\"input\":3,\"output\":9,\"context_over_200k\":{\"input\":7,\"output\":25}";
+        var overlay = "{\"claude\":{\"claude-test-1\":{" + Flat + "," + LongLane + "}}}";
+
+        var rate = Pricing(Model("claude-test-1", cost), overlay: overlay)
+            .GetRates(CostProvider.Claude, "claude-test-1", true, false, false, 0);
+
+        rate.Should().Be(new CostRates(7, 25, .4m, 10, 14));
     }
 
     [TestMethod]
@@ -65,7 +95,10 @@ public sealed class CostPricingTests
 
         var rate = Pricing(Model("claude-test-1", cost)).GetRates(CostProvider.Claude, "claude-test-1", true, true, false, 0);
 
-        rate.Should().Be(new CostRates(1, 5, 1, 1, 2));
+        rate.Should().NotBeNull();
+        rate!.Value.Input.Should().Be(1);
+        rate.Value.Output.Should().Be(5);
+        rate.Value.CacheWriteOneHour.Should().Be(2);
     }
 
     [TestMethod]
