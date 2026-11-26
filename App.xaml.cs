@@ -164,9 +164,12 @@ public partial class App : Application
             Windows.Add(_mainWindow);
             _mainWindow.Closed += (s, e) =>
             {
-                _shutdown.Cancel();
-                Windows.Remove(_mainWindow);
-                ReleaseMutex();
+                try { CancelShutdown(); }
+                finally
+                {
+                    Windows.Remove(_mainWindow);
+                    ReleaseMutex();
+                }
             };
             _mainWindow.Activate();
 
@@ -202,7 +205,7 @@ public partial class App : Application
         _setupWindow.Closed += (s, e) =>
         {
             Windows.Remove(_setupWindow!);
-            if (_mainWindow is null) _shutdown.Cancel();
+            if (_mainWindow is null) CancelShutdown();
         };
         _setupWindow.Activate();
 
@@ -285,8 +288,22 @@ public partial class App : Application
 
     internal void ExitApplication()
     {
-        _shutdown.Cancel();
-        Exit();
+        try { CancelShutdown(); }
+        finally { Exit(); }
+    }
+
+    /// <summary>
+    /// Cancels the shutdown token. A failing cancellation callback (such as a sign-in renewal child that could not be
+    /// stopped) must not keep the app from exiting, so its failure is logged by type only.
+    /// </summary>
+    private void CancelShutdown()
+    {
+        try { _shutdown.Cancel(); }
+        catch (AggregateException ex)
+        {
+            Services.GetRequiredService<ILogger<App>>().LogWarning("A shutdown callback failed ({Type})",
+                (ex.InnerException ?? ex).GetType().Name);
+        }
     }
 
     private IServiceProvider ConfigureServices()

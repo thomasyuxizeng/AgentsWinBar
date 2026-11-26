@@ -26,14 +26,21 @@ internal static class RenewalProcess
         }
     }
 
-    public static void KillTree(Process process)
+    public static void KillTree(Process process) => KillTree(process, static p => p.Kill(entireProcessTree: true));
+
+    /// <summary>
+    /// Best effort: never throws for a process that is gone or a tree that cannot be fully stopped. It runs as a shutdown
+    /// token callback, and a throwing callback would surface from the app's exit path.
+    /// </summary>
+    internal static void KillTree(Process process, Action<Process> kill)
     {
         lock (process)
         {
-            try { process.Kill(entireProcessTree: true); }
-            catch (Exception ex) when (ex is InvalidOperationException or Win32Exception or NotSupportedException)
+            try { kill(process); }
+            catch (Exception ex) when (ex is InvalidOperationException or Win32Exception or NotSupportedException or AggregateException)
             {
-                // The process may not have started or may already have exited.
+                // The process may not have started or may already have exited. AggregateException: not every process
+                // in its tree could be stopped.
             }
         }
     }
