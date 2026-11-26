@@ -472,12 +472,15 @@ public sealed partial class NativeCostScanner
 
                 // A conversation database is decoded whole before anything is written: a database that cannot be read
                 // (AntigravityDatabaseUnavailableException, an IOException) changes nothing and is tried again later.
+                // A database read again replaces the calls it added before, as upstream recomputes a changed file:
+                // a call that gained a response id, or a new time, is not counted under its old key as well.
                 void ReadConversation(Input input, ref bool modified)
                 {
                     var conversation = AntigravityConversationReader.Read(input.Entry.Path, cancellationToken);
                     lock (index)
                     {
                         modified = true;
+                        if (input.State is not null) index.RemoveOffsetUsage(CostProvider.Gemini, input.Key, 0);
                         foreach (var call in conversation.Calls)
                         {
                             var time = DateTimeOffset.FromUnixTimeMilliseconds(call.TimestampMs);

@@ -298,6 +298,67 @@ public sealed class NativeCostScannerGeminiTests
     }
 
     [TestMethod]
+    public void Update_WhenAgyRewritesACall_ReplacesItsRowInsteadOfAddingOne()
+    {
+        var path = Path.Combine(Cli, "conversation.db");
+        Create(path, [new Call { Input = 10, Time = Today }, new Call { Input = 1, ResponseId = "response-2", Time = Today }]);
+        var scanner = Scanner();
+        scanner.Update(Roots);
+
+        // The first call is completed in place: it gains its response id and its final count.
+        using (var connection = Open(path))
+        using (var update = connection.CreateCommand())
+        {
+            update.CommandText = "UPDATE gen_metadata SET data=$data WHERE idx=0";
+            update.Parameters.AddWithValue("$data", Encode(new Call { Input = 12, ResponseId = "response-1", Time = Today }));
+            update.ExecuteNonQuery();
+        }
+        scanner.Update(Roots, changedPaths: [path]).FilesRead.Should().Be(1);
+
+        scanner.ReadReport(CostProvider.Gemini, Pricing(), asOf: Today).SessionTokens.Should().Be(13);
+    }
+
+    [TestMethod]
+    public void Update_WhenACopyIsReadAgain_StillCountsTheSharedCallsOnce()
+    {
+        var original = Path.Combine(Cli, "conversation.db");
+        Create(original, [new Call { Input = 100, ResponseId = "response-1", Time = Today }]);
+        var copy = Path.Combine(App, "conversation.db");
+        File.Copy(original, copy);
+        var scanner = Scanner();
+        scanner.Update(Roots);
+
+        using (var connection = Open(copy))
+            Insert(connection, [(1, new Call { Input = 5, ResponseId = "response-2", Time = Today })], []);
+        scanner.Update(Roots, changedPaths: [copy]).FilesRead.Should().Be(1);
+        using (var connection = Open(original))
+            Insert(connection, [(1, new Call { Input = 5, ResponseId = "response-2", Time = Today })], []);
+        scanner.Update(Roots, changedPaths: [original]).FilesRead.Should().Be(1);
+
+        scanner.ReadReport(CostProvider.Gemini, Pricing(), asOf: Today).SessionTokens.Should().Be(105);
+    }
+
+    [TestMethod]
+    public void ReadReport_WhenACallsInputPassesTheLongContextTier_UsesTheLongContextRates()
+    {
+        Create(Path.Combine(Cli, "conversation.db"),
+        [
+            new Call { Input = 150_000, CacheRead = 100_000, Output = 10_000, Model = "gemini-3.1-pro-high", Time = Today },
+            new Call { Input = 100_000, CacheRead = 50_000, Output = 10_000, Model = "gemini-3.1-pro-high", Time = Today }
+        ]);
+        var scanner = Scanner();
+        scanner.Update(Roots);
+        var pricing = new CostPricing(Catalog(CatalogJson("", "", googleModels: Model("gemini-3.1-pro-preview",
+            "\"input\":2,\"output\":12,\"cache_read\":0.2,\"context_over_200k\":{\"input\":4,\"output\":18,\"cache_read\":0.4}"))));
+
+        var report = scanner.ReadReport(CostProvider.Gemini, pricing, asOf: Today);
+
+        // Uncached plus cached input over 200K (as upstream's resolver counts it): 0.60 + 0.04 + 0.18 at the long
+        // rates; the smaller call at the base rates: 0.20 + 0.01 + 0.12.
+        report.SessionCostUSD.Should().Be(0.82m + 0.33m);
+    }
+
+    [TestMethod]
     public void Update_WhenDatabasesAreRead_ReportsHowEachCallWasDated()
     {
         Create(Path.Combine(Cli, "conversation.db"),
