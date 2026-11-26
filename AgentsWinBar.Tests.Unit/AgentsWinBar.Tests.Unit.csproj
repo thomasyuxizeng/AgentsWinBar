@@ -149,6 +149,7 @@
     <Compile Include="..\Services\ISignInLauncher.cs" Link="Linked\ISignInLauncher.cs" />
     <Compile Include="..\Services\SignInLauncher.cs" Link="Linked\SignInLauncher.cs" />
     <Compile Include="..\Services\SignInWatcher.cs" Link="Linked\SignInWatcher.cs" />
+    <Compile Include="..\Services\FileLoggerProvider.cs" Link="Linked\FileLoggerProvider.cs" />
     <Compile Include="..\Helpers\SignInStatus.cs" Link="Linked\SignInStatus.cs" />
     <!-- Native (in-process) usage readers spike: no Windows App SDK types -->
     <Compile Include="..\Services\Native\*.cs" Link="Linked\Native\%(Filename)%(Extension)" />
