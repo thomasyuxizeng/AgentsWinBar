@@ -85,6 +85,44 @@ public class ClaudeSignInRenewalTests
     }
 
     [TestMethod]
+    public async Task FetchAsync_WhenRenewalsKeepFailing_BacksOffAndCapsAtSixHours()
+    {
+        var renewer = new FakeRenewer();
+        var (client, _, clock, _) = Create(renewer);
+
+        await client.FetchAsync();
+        var attempts = 1;
+        foreach (var delay in new[] { TimeSpan.FromMinutes(30), TimeSpan.FromHours(2), TimeSpan.FromHours(6), TimeSpan.FromHours(6) })
+        {
+            var next = clock.Now + delay;
+            clock.Now = next.AddSeconds(-1);
+            await client.FetchAsync();
+            renewer.Runs.Should().Be(attempts);
+            clock.Now = next;
+            await client.FetchAsync();
+            renewer.Runs.Should().Be(++attempts);
+        }
+    }
+
+    [TestMethod]
+    public async Task FetchAsync_WhenStoredExpiryChanges_ResetsRenewalBackoff()
+    {
+        var renewer = new FakeRenewer();
+        var (client, _, clock, _) = Create(renewer);
+
+        await client.FetchAsync();
+        clock.Now = Now.AddMinutes(30);
+        await client.FetchAsync();
+        File.WriteAllText(_path, Credentials(RenewedToken, Now.AddMinutes(-5)));
+
+        await client.FetchAsync();
+        renewer.Runs.Should().Be(3);
+        clock.Now = Now.AddMinutes(60);
+        await client.FetchAsync();
+        renewer.Runs.Should().Be(4);
+    }
+
+    [TestMethod]
     public async Task FetchAsync_WhenRenewalWasTriedWithin30Minutes_DoesNotRunItAgain()
     {
         var renewer = new FakeRenewer(exitCode: 1); // runs, but the sign-in stays expired

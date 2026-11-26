@@ -28,7 +28,7 @@ public sealed record AntigravityNativeOptions
     /// (the app's RenewGeminiSignIn setting). Null never renews.
     /// </summary>
     public Func<bool>? RenewExpiredSignIn { get; init; }
-    /// <summary>At most one renewal attempt this often.</summary>
+    /// <summary>Delay after the first failed renewal of an expired sign-in.</summary>
     public TimeSpan RenewalInterval { get; init; } = TimeSpan.FromMinutes(30);
     /// <summary>A renewal that has not finished by then is stopped (its whole process tree).</summary>
     public TimeSpan RenewalTimeout { get; init; } = TimeSpan.FromSeconds(30);
@@ -63,9 +63,7 @@ public sealed class AntigravityNativeClient : INativeUsageClient
     private readonly TimeProvider _clock;
     private readonly NativeLastGoodStore _lastGood = new();
     private readonly IAgySignInRenewer? _renewer;
-    private readonly object _renewalGate = new();
-    private Task<AntigravityCredentials?>? _renewal;
-    private DateTimeOffset? _lastRenewalStart;
+    private readonly SignInRenewal<AntigravityCredentials> _renewal;
 
     public AntigravityNativeClient(
         HttpClient http,
@@ -81,6 +79,7 @@ public sealed class AntigravityNativeClient : INativeUsageClient
         _options = options ?? new AntigravityNativeOptions();
         _clock = clock ?? TimeProvider.System;
         _renewer = renewer;
+        _renewal = new(_clock, _options.RenewalInterval, credential => credential.Expiry);
         ProviderId = ProviderConstants.ValidateAndNormalize("gemini");
     }
 
@@ -96,52 +95,22 @@ public sealed class AntigravityNativeClient : INativeUsageClient
         return blob == null ? null : AntigravityCredentialParser.Parse(blob.Span);
     }
 
-    /// <summary>
-    /// When renewal is on and allowed now (at most one attempt per <see cref="AntigravityNativeOptions.RenewalInterval"/>,
-    /// never two at once), has agy renew its sign-in, then reads the credential once more. Returns the renewed sign-in
-    /// when its expiry moved past <paramref name="expiredAt"/> and now; otherwise null.
-    /// </summary>
-    private async Task<AntigravityCredentials?> TryRenewSignInAsync(DateTimeOffset expiredAt, CancellationToken ct)
-    {
-        if (_renewer == null || _options.RenewExpiredSignIn?.Invoke() != true) return null;
-        Task<AntigravityCredentials?> renewal;
-        lock (_renewalGate)
-        {
-            var now = _clock.GetUtcNow();
-            if (_renewal is { IsCompleted: false } running) renewal = running; // join the attempt in flight
-            else if (_lastRenewalStart is { } last && now >= last && now - last < _options.RenewalInterval) return null;
-            else
-            {
-                _lastRenewalStart = now;
-                // Not tied to this caller's deadline: an attempt that outlives it still finishes (or is stopped at its
-                // own timeout), and the next read finds the renewed sign-in.
-                renewal = _renewal = Task.Run(() => RenewAndReadAsync(expiredAt, now));
-            }
-        }
+    private Task<AntigravityCredentials?> TryRenewSignInAsync(DateTimeOffset expiry, CancellationToken ct) =>
+        _renewer != null && _options.RenewExpiredSignIn?.Invoke() == true
+            ? _renewal.TryRenewAsync(expiry, RenewAndReadAsync, ct)
+            : Task.FromResult<AntigravityCredentials?>(null);
 
-        return await renewal.WaitAsync(ct).ConfigureAwait(false);
-    }
-
-    private async Task<AntigravityCredentials?> RenewAndReadAsync(DateTimeOffset expiry, DateTimeOffset started)
+    private async Task<AntigravityCredentials?> RenewAndReadAsync()
     {
-        AntigravityCredentials? result = null;
+        if (await RenewAsync().ConfigureAwait(false) is null) return null;
         try
         {
-            if (await RenewAsync().ConfigureAwait(false) is null) return null;
-            var renewed = ReadCredentials();
-            if (renewed?.Expiry is { } expires && expires > expiry && expires > _clock.GetUtcNow())
-                result = renewed;
-            return result;
+            return ReadCredentials();
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
         {
             _logger.LogWarning("Antigravity sign-in could not be read after renewal ({Type})", ex.GetType().Name);
             return null;
-        }
-        finally
-        {
-            if (result == null && expiry > started)
-                lock (_renewalGate) _lastRenewalStart = null;
         }
     }
 
@@ -183,6 +152,7 @@ public sealed class AntigravityNativeClient : INativeUsageClient
             _logger.LogWarning("Antigravity credential could not be read ({Type})", ex.GetType().Name);
             return Fail(NativeUsageStatus.Failed, null, "The Antigravity sign-in could not be read.");
         }
+        _renewal.ObserveExpiry(credentials?.Expiry);
         if (credentials == null)
             return Fail(NativeUsageStatus.SignInMissing, null, "Not signed in to Antigravity on Windows. Sign in with agy on Windows.");
 
@@ -194,12 +164,15 @@ public sealed class AntigravityNativeClient : INativeUsageClient
             {
                 credentials = renewed;
             }
-            else if (_clock.GetUtcNow() is var checkedAt && expiry <= checkedAt)
+            else
             {
-                var ago = checkedAt - expiry;
-                _logger.LogInformation("Antigravity access token expired {Ago} ago; not renewed", NativeParse.Ago(ago));
-                return Fail(NativeUsageStatus.SignInExpired, null,
-                    $"Antigravity sign-in expired {NativeParse.Ago(ago)} ago. Run agy on Windows to renew it.") with { ExpiredFor = ago };
+                var ago = _clock.GetUtcNow() - expiry;
+                if (ago >= TimeSpan.Zero)
+                {
+                    _logger.LogInformation("Antigravity access token expired {Ago} ago; not renewed", NativeParse.Ago(ago));
+                    return Fail(NativeUsageStatus.SignInExpired, null,
+                        $"Antigravity sign-in expired {NativeParse.Ago(ago)} ago. Run agy on Windows to renew it.") with { ExpiredFor = ago };
+                }
             }
         }
         var accessToken = credentials.AccessToken;

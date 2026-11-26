@@ -36,7 +36,7 @@ public sealed record ClaudeNativeOptions
     /// <c>claude auth status --json</c> (the app's RenewClaudeSignIn setting). Null never renews.
     /// </summary>
     public Func<bool>? RenewExpiredSignIn { get; init; }
-    /// <summary>At most one renewal attempt this often.</summary>
+    /// <summary>Delay after the first failed renewal of an expired sign-in.</summary>
     public TimeSpan RenewalInterval { get; init; } = TimeSpan.FromMinutes(30);
     /// <summary>A renewal that has not finished by then is stopped (its whole process tree).</summary>
     public TimeSpan RenewalTimeout { get; init; } = TimeSpan.FromSeconds(30);
@@ -77,8 +77,7 @@ public sealed class ClaudeNativeClient : INativeUsageClient
     // When the current cooldown began, so a clock that steps backward cannot stretch it.
     private DateTimeOffset _blockedSince;
     private readonly IClaudeSignInRenewer? _renewer;
-    private Task<ClaudeAuthStatusRun?>? _renewal;
-    private DateTimeOffset? _lastRenewalStart;
+    private readonly SignInRenewal<ClaudeCredentials> _renewal;
 
     /// <summary>A saved cooldown further ahead than this (a damaged or hand-edited file) is shortened to it.</summary>
     public static readonly TimeSpan MaxPersistedCooldown = TimeSpan.FromHours(24);
@@ -92,6 +91,7 @@ public sealed class ClaudeNativeClient : INativeUsageClient
         _clock = clock ?? TimeProvider.System;
         _cooldownStore = cooldownStore;
         _renewer = renewer;
+        _renewal = new(_clock, _options.RenewalInterval, credential => credential.ExpiresAt);
         ProviderId = ProviderConstants.ValidateAndNormalize("claude");
         // A cooldown saved before a restart still applies.
         if (_cooldownStore?.Load() is { } saved)
@@ -170,6 +170,7 @@ public sealed class ClaudeNativeClient : INativeUsageClient
             _logger.LogWarning("Claude sign-in file could not be read ({Type})", ex.GetType().Name);
             return FromCacheOr(lastGood, Fail(NativeUsageStatus.Failed, null, "The Claude sign-in file could not be read."));
         }
+        _renewal.ObserveExpiry(credentials?.ExpiresAt);
         if (credentials == null)
             return FromCacheOr(lastGood, Fail(NativeUsageStatus.SignInMissing, null,
                 "Not signed in to Claude on Windows. Sign in to Claude Code on Windows."));
@@ -250,34 +251,17 @@ public sealed class ClaudeNativeClient : INativeUsageClient
         }
     }
 
-    /// <summary>
-    /// When renewal is on and allowed now (at most one attempt per <see cref="ClaudeNativeOptions.RenewalInterval"/>,
-    /// never two at once), has Claude Code renew its sign-in, then reads the credential file once more. Returns the
-    /// renewed sign-in when its expiry moved past <paramref name="expiredAt"/> and now; otherwise null.
-    /// </summary>
-    private async Task<ClaudeCredentials?> TryRenewSignInAsync(DateTimeOffset expiredAt, CancellationToken ct)
-    {
-        if (_renewer == null || _options.RenewExpiredSignIn?.Invoke() != true) return null;
-        Task<ClaudeAuthStatusRun?> renewal;
-        lock (_gate)
-        {
-            var now = _clock.GetUtcNow();
-            if (_renewal is { IsCompleted: false } running) renewal = running; // join the attempt in flight
-            else if (_lastRenewalStart is { } last && now >= last && now - last < _options.RenewalInterval) return null;
-            else
-            {
-                _lastRenewalStart = now;
-                // Not tied to this caller's deadline: an attempt that outlives it still finishes (or is stopped at its
-                // own timeout), and the next read finds the renewed file.
-                renewal = _renewal = Task.Run(RenewAsync);
-            }
-        }
+    private Task<ClaudeCredentials?> TryRenewSignInAsync(DateTimeOffset expiry, CancellationToken ct) =>
+        _renewer != null && _options.RenewExpiredSignIn?.Invoke() == true
+            ? _renewal.TryRenewAsync(expiry, RenewAndReadAsync, ct)
+            : Task.FromResult<ClaudeCredentials?>(null);
 
-        if (await renewal.WaitAsync(ct).ConfigureAwait(false) is null) return null;
+    private async Task<ClaudeCredentials?> RenewAndReadAsync()
+    {
+        if (await RenewAsync().ConfigureAwait(false) is null) return null;
         try
         {
-            var renewed = await ReadCredentialsAsync(_options.ResolveCredentialsPath(), ct).ConfigureAwait(false);
-            return renewed?.ExpiresAt is { } expires && expires > expiredAt && expires > _clock.GetUtcNow() ? renewed : null;
+            return await ReadCredentialsAsync(_options.ResolveCredentialsPath(), CancellationToken.None).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or JsonException)
         {
