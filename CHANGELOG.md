@@ -9,9 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.6.1] - 2026-11-26
 
+Both fixes apply only if you open the dashboard. Install 1.6.1 over 1.6.0; settings and history are kept.
+
 ### Fixed
-- Opening and closing the dashboard no longer leaks Windows drawing (GDI) objects. Each open leaked about 30, so after a few hundred opens without a restart the app would have stopped drawing. The dashboard window is now kept after its first open and hidden when closed; the next open starts with fresh content in a normal window (not full screen or always on top).
-- Closing the dashboard no longer fails partway through its cleanup and logs "Dashboard page cleanup failed" each time (new in 1.6.0).
+- Opening and closing the dashboard no longer leaks about 30 GDI objects (Windows drawing resources) and 40 handles per cycle from WinUI 3 creating and destroying a custom title bar window. In 1.6.0, roughly 300 opens without a restart would hit Windows' default 10,000 GDI object limit and stop the app from drawing. The window is now kept hidden after its first open, builds fresh content each time, and returns as a normal window if closed in full screen or kept on top. Keeping it hidden costs no extra memory (about 22 MB idle private memory after one open and close, versus about 30 MB in 1.6.0).
+- Closing the dashboard no longer fails partway through cleanup. In 1.6.0, that error happened on every close, skipping the rest of cleanup and logging "Dashboard page cleanup failed" to `app.log`. Any future cleanup failure now logs the error type and stack frames to `crash.log` (never messages or paths).
 
 ## [1.6.0] - 2026-11-26
 
