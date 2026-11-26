@@ -726,7 +726,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
             return;
         }
 
-        RefreshApiCredits(forceCostRefresh);
+        // A request for every provider made during a partial refresh runs right after it, and refreshes the API credits
+        // then: doing it now as well would make a manual Refresh force two rounds of billing calls.
+        if (!IsLoading || _inFlightProviders == null || onlyProviders != null) RefreshApiCredits(forceCostRefresh);
 
         if (forceCostRefresh)
         {

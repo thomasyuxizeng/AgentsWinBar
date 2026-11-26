@@ -540,6 +540,25 @@ public class MainViewModelActivityRefreshTests
     }
 
     [TestMethod]
+    public async Task RefreshCommand_DuringPartialRefresh_ForcesTheApiCreditsOnce()
+    {
+        var dashboard = new Mock<IDashboardService>();
+        dashboard.Setup(d => d.RefreshApiCreditsAsync(It.IsAny<bool>(), It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
+        _viewModel.Dispose();
+        _viewModel = CreateViewModel(_usage.Object, dashboard.Object);
+        var scheduled = await PartialRefreshInFlightAsync();
+
+        await _viewModel.RefreshCommand.ExecuteAsync(null);
+        dashboard.Verify(d => d.RefreshApiCreditsAsync(true, It.IsAny<CancellationToken>()), Times.Never(),
+            "the follow-up refresh has not started yet");
+        _hold!.SetResult();
+        await scheduled;
+        await WaitUntilAsync(() => _allReads == 2 && !_viewModel.IsLoading);
+
+        dashboard.Verify(d => d.RefreshApiCreditsAsync(true, It.IsAny<CancellationToken>()), Times.Once());
+    }
+
+    [TestMethod]
     public async Task RefreshCommand_DuringFullRefresh_JoinsIt()
     {
         _hold = new(TaskCreationOptions.RunContinuationsAsynchronously);
