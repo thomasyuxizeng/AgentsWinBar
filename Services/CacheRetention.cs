@@ -40,9 +40,15 @@ public static class CacheRetention
     public static CostData? RetainedCost(CostData? data, DateTime nowUtc)
     {
         if (data == null) return null;
-        var age = nowUtc - DashboardValues.Utc(data.LastSuccessfulFetch ?? data.FetchedAt);
-        return age >= -ClockSkewTolerance ? data : null;
+        return IsCostRetained(data.LastSuccessfulFetch ?? data.FetchedAt, nowUtc) ? data : null;
     }
+
+    /// <summary>
+    /// Whether cost data read at <paramref name="timestamp"/> is kept: any age, unless it lies further in the future
+    /// than <see cref="ClockSkewTolerance"/>. The rule <see cref="RetainedCost"/> applies.
+    /// </summary>
+    public static bool IsCostRetained(DateTime timestamp, DateTime nowUtc) =>
+        nowUtc - DashboardValues.Utc(timestamp) >= -ClockSkewTolerance;
 
     /// <summary>Expire usage and status independently; a fresh status cannot extend old usage.</summary>
     public static UsageData? PruneExpired(UsageData data, DateTime nowUtc)

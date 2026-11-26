@@ -42,8 +42,9 @@ public static class DashboardClockUpdater
                 !CacheRetention.IsRetained(sAt, now))
                 return false;
 
+            // Cost data has no maximum age (see CacheRetention.RetainedCost): only the builder's rule can drop it
             if (provider.Cost?.LastSuccessfulFetchUtc is { } cAt &&
-                !CacheRetention.IsRetained(cAt, now))
+                !CacheRetention.IsCostRetained(cAt, now))
                 return false;
 
             if (provider.ApiCredits is { } api)

@@ -123,6 +123,30 @@ public class DashboardClockUpdaterTests
     }
 
     [TestMethod]
+    public void TryRefreshClock_CostOlderThanSevenDays_ReturnsTrue()
+    {
+        // Cost data has no maximum age, so an old (stale) reading must not force a full snapshot on every tick
+        var snap = SampleSnapshot();
+        var oldCost = snap.Providers[0].Cost! with { IsStale = true, LastSuccessfulFetchUtc = BaseUtc.AddDays(-8) };
+        snap = snap with { Providers = [snap.Providers[0] with { Cost = oldCost }] };
+
+        var ok = DashboardClockUpdater.TryRefreshClock(snap, BaseUtc.AddSeconds(30), TimeZoneInfo.Utc, out var updated);
+
+        ok.Should().BeTrue();
+        updated.Providers[0].Cost.Should().BeSameAs(oldCost);
+    }
+
+    [TestMethod]
+    public void TryRefreshClock_CostBeyondFutureSkewTolerance_ReturnsFalse()
+    {
+        var snap = SampleSnapshot();
+        var futureCost = snap.Providers[0].Cost! with { LastSuccessfulFetchUtc = BaseUtc.AddMinutes(10) };
+        snap = snap with { Providers = [snap.Providers[0] with { Cost = futureCost }] };
+
+        DashboardClockUpdater.TryRefreshClock(snap, BaseUtc.AddSeconds(30), TimeZoneInfo.Utc, out _).Should().BeFalse();
+    }
+
+    [TestMethod]
     public void TryRefreshClock_StatusRetentionExpires_ReturnsFalse()
     {
         var snap = SampleSnapshot();
