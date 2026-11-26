@@ -54,6 +54,29 @@ public class AgySignInRenewalTests
     private static Action RenewedBy(MutableCredentialSource source) => () => source.Json = Blob(RenewedToken, Now.AddHours(1));
 
     [TestMethod]
+    public async Task FetchAsync_WhenEarlyRenewalDoesNotExtendExpiry_UsesValidTokenAndRetriesAtExpiry()
+    {
+        var expiry = Now.AddSeconds(30);
+        var source = new MutableCredentialSource(Blob(ExpiredToken, expiry));
+        var canRenew = false;
+        var renewer = new FakeRenewer(() =>
+        {
+            if (canRenew) RenewedBy(source)();
+        });
+        var (client, handler, clock, _) = Create(source, renewer);
+
+        (await client.FetchAsync()).Status.Should().Be(NativeUsageStatus.Ok);
+        renewer.Runs.Should().Be(1);
+        handler.Requests.Should().OnlyContain(r => r.Headers.Authorization!.Parameter == ExpiredToken);
+
+        clock.Now = expiry;
+        canRenew = true;
+        (await client.FetchAsync()).Status.Should().Be(NativeUsageStatus.Ok);
+        renewer.Runs.Should().Be(2);
+        handler.Requests.Last().Headers.Authorization!.Parameter.Should().Be(RenewedToken);
+    }
+
+    [TestMethod]
     public async Task FetchAsync_WhenSignInExpiredAndRenewalSucceeds_ContinuesWithTheRenewedToken()
     {
         var source = ExpiredSource();

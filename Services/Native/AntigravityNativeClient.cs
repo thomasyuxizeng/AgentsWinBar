@@ -12,7 +12,7 @@ public sealed record AntigravityNativeOptions
     public TimeSpan RequestTimeout { get; init; } = TimeSpan.FromSeconds(10);
     /// <summary>Upstream allows the quota summary 2 s; a cold TLS handshake can take longer, so 5 s here.</summary>
     public TimeSpan QuotaSummaryTimeout { get; init; } = TimeSpan.FromSeconds(5);
-    /// <summary>Treat a token this close to expiry as expired (upstream's refresh safety window).</summary>
+    /// <summary>Try renewing a token this close to expiry (upstream's refresh safety window).</summary>
     public TimeSpan ExpirySafetyWindow { get; init; } = TimeSpan.FromSeconds(60);
     /// <summary>
     /// Cloud Code serves quota only to the Antigravity "hub" client family. Upstream pins this identity; the
@@ -64,7 +64,7 @@ public sealed class AntigravityNativeClient : INativeUsageClient
     private readonly NativeLastGoodStore _lastGood = new();
     private readonly IAgySignInRenewer? _renewer;
     private readonly object _renewalGate = new();
-    private Task<AgyModelsRun?>? _renewal;
+    private Task<AntigravityCredentials?>? _renewal;
     private DateTimeOffset? _lastRenewalStart;
 
     public AntigravityNativeClient(
@@ -104,7 +104,7 @@ public sealed class AntigravityNativeClient : INativeUsageClient
     private async Task<AntigravityCredentials?> TryRenewSignInAsync(DateTimeOffset expiredAt, CancellationToken ct)
     {
         if (_renewer == null || _options.RenewExpiredSignIn?.Invoke() != true) return null;
-        Task<AgyModelsRun?> renewal;
+        Task<AntigravityCredentials?> renewal;
         lock (_renewalGate)
         {
             var now = _clock.GetUtcNow();
@@ -115,20 +115,33 @@ public sealed class AntigravityNativeClient : INativeUsageClient
                 _lastRenewalStart = now;
                 // Not tied to this caller's deadline: an attempt that outlives it still finishes (or is stopped at its
                 // own timeout), and the next read finds the renewed sign-in.
-                renewal = _renewal = Task.Run(RenewAsync, CancellationToken.None);
+                renewal = _renewal = Task.Run(() => RenewAndReadAsync(expiredAt, now));
             }
         }
 
-        if (await renewal.WaitAsync(ct).ConfigureAwait(false) is null) return null;
+        return await renewal.WaitAsync(ct).ConfigureAwait(false);
+    }
+
+    private async Task<AntigravityCredentials?> RenewAndReadAsync(DateTimeOffset expiry, DateTimeOffset started)
+    {
+        AntigravityCredentials? result = null;
         try
         {
+            if (await RenewAsync().ConfigureAwait(false) is null) return null;
             var renewed = ReadCredentials();
-            return renewed?.Expiry is { } expires && expires > expiredAt && expires > _clock.GetUtcNow() ? renewed : null;
+            if (renewed?.Expiry is { } expires && expires > expiry && expires > _clock.GetUtcNow())
+                result = renewed;
+            return result;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
         {
             _logger.LogWarning("Antigravity sign-in could not be read after renewal ({Type})", ex.GetType().Name);
             return null;
+        }
+        finally
+        {
+            if (result == null && expiry > started)
+                lock (_renewalGate) _lastRenewalStart = null;
         }
     }
 
@@ -181,13 +194,12 @@ public sealed class AntigravityNativeClient : INativeUsageClient
             {
                 credentials = renewed;
             }
-            else
+            else if (_clock.GetUtcNow() is var checkedAt && expiry <= checkedAt)
             {
-                var ago = now - expiry;
+                var ago = checkedAt - expiry;
                 _logger.LogInformation("Antigravity access token expired {Ago} ago; not renewed", NativeParse.Ago(ago));
-                return Fail(NativeUsageStatus.SignInExpired, null, ago > TimeSpan.Zero
-                    ? $"Antigravity sign-in expired {NativeParse.Ago(ago)} ago. Run agy on Windows to renew it."
-                    : "Antigravity sign-in expires in under a minute. Run agy on Windows to renew it.") with { ExpiredFor = ago };
+                return Fail(NativeUsageStatus.SignInExpired, null,
+                    $"Antigravity sign-in expired {NativeParse.Ago(ago)} ago. Run agy on Windows to renew it.") with { ExpiredFor = ago };
             }
         }
         var accessToken = credentials.AccessToken;

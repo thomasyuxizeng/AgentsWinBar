@@ -114,15 +114,15 @@ public class AntigravityNativeClientTests
     }
 
     [TestMethod]
-    public async Task FetchAsync_WhenTokenWithinSafetyWindow_TreatsAsExpired()
+    public async Task FetchAsync_WhenRenewalDisabledAndTokenWithinSafetyWindow_ReadsUsage()
     {
         var (client, handler) = Create(Blob(Now.AddSeconds(30)));
 
         var result = await client.FetchAsync();
 
-        result.Status.Should().Be(NativeUsageStatus.SignInExpired);
-        result.Message.Should().Contain("under a minute");
-        handler.Requests.Should().BeEmpty();
+        result.Status.Should().Be(NativeUsageStatus.Ok);
+        result.ExpiredFor.Should().BeNull();
+        handler.Requests.Should().HaveCount(2);
     }
 
     [TestMethod]
