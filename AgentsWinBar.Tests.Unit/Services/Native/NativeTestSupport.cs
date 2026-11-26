@@ -140,9 +140,11 @@ internal sealed class ListLogger<T> : ILogger<T>
 internal sealed class FakeCredentialSource(string? json) : IAntigravityCredentialSource
 {
     public int Reads { get; private set; }
+    /// <summary>The stored credential; a test sets it to sign in as someone else.</summary>
+    public string? Json { get; set; } = json;
     public SensitiveBuffer? ReadBlob()
     {
         Reads++;
-        return json == null ? null : SensitiveBuffer.From(Encoding.UTF8.GetBytes(json));
+        return Json == null ? null : SensitiveBuffer.From(Encoding.UTF8.GetBytes(Json));
     }
 }

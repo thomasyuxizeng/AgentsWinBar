@@ -70,7 +70,6 @@ public sealed class CodexNativeClient : INativeUsageClient
     {
         ct.ThrowIfCancellationRequested();
         var now = _clock.GetUtcNow();
-        if (_rateLimit.Get(now) is { } held) return held;
         (CodexCredentialKind Kind, CodexCredentials? Credentials) read;
         try
         {
@@ -85,6 +84,8 @@ public sealed class CodexNativeClient : INativeUsageClient
             return Fail(NativeUsageStatus.SignInMissing, null, read.Kind == CodexCredentialKind.ApiKeyOnly
                 ? "Codex on Windows is signed in with an API key; plan limits need a ChatGPT sign-in (codex login)."
                 : "Not signed in to Codex on Windows. Run codex login on Windows.");
+        // A rate limit holds only for the sign-in it was answered to; a new sign-in is asked again.
+        if (_rateLimit.Get(now, credentials.AccessToken) is { } held) return held;
         if (credentials.ExpiresAt is { } expiresAt && expiresAt <= now)
         {
             var ago = now - expiresAt;
@@ -117,7 +118,7 @@ public sealed class CodexNativeClient : INativeUsageClient
                 var limitedAt = _clock.GetUtcNow();
                 return _rateLimit.Remember(
                     Fail(NativeUsageStatus.RateLimited, status, "Codex usage is rate limited right now.") with { NetworkCalls = 1 },
-                    NativeHttp.RetryAfter(response, limitedAt), limitedAt);
+                    NativeHttp.RetryAfter(response, limitedAt), limitedAt, credentials.AccessToken);
             }
             return (response.StatusCode switch
             {

@@ -1,18 +1,51 @@
+using System.Security.Cryptography;
+using System.Text;
+
 namespace AgentsWinBar.Services.Native;
 
-/// <summary>Remembers a rate limit between fetches without scheduling any work.</summary>
+/// <summary>
+/// Remembers a rate limit between fetches without scheduling any work. A hold belongs to the credential it was set for:
+/// a request made with a different credential (another sign-in, or a renewed token) ends it. Only a SHA-256 hash of the
+/// credential is kept, in memory; the credential itself is neither stored nor logged.
+/// </summary>
 internal sealed class NativeRateLimitHold
 {
     private static readonly TimeSpan DefaultDelay = TimeSpan.FromMinutes(10);
     private readonly Lock _gate = new();
     private NativeUsageResult? _failure;
     private DateTimeOffset _started;
+    private byte[]? _credentialHash;
 
-    public NativeUsageResult? Get(DateTimeOffset now)
+    /// <summary>The held failure while a hold set for <paramref name="credential"/> lasts; otherwise null.</summary>
+    public NativeUsageResult? Get(DateTimeOffset now, string credential) => Get(now, Hash(credential));
+
+    public NativeUsageResult Remember(NativeUsageResult failure, DateTimeOffset? retryAfter, DateTimeOffset now, string credential)
+    {
+        var until = retryAfter ?? now + DefaultDelay;
+        var hash = Hash(credential);
+        lock (_gate)
+        {
+            if (Get(now, hash)?.RetryAfter is not { } existing || until > existing)
+            {
+                _started = now;
+                _credentialHash = hash;
+                _failure = failure with { RetryAfter = until, NetworkCalls = 0 };
+            }
+            return failure with { RetryAfter = _failure!.RetryAfter };
+        }
+    }
+
+    private NativeUsageResult? Get(DateTimeOffset now, byte[] hash)
     {
         lock (_gate)
         {
             if (_failure?.RetryAfter is not { } until) return null;
+            if (_credentialHash == null || !CryptographicOperations.FixedTimeEquals(_credentialHash, hash))
+            {
+                // The sign-in changed since the hold was set: the new credential gets its own answer.
+                Clear();
+                return null;
+            }
             if (now < _started)
             {
                 until = now + (until - _started);
@@ -20,22 +53,21 @@ internal sealed class NativeRateLimitHold
                 _failure = _failure with { RetryAfter = until };
             }
             if (now < until) return _failure;
-            _failure = null;
+            Clear();
             return null;
         }
     }
 
-    public NativeUsageResult Remember(NativeUsageResult failure, DateTimeOffset? retryAfter, DateTimeOffset now)
+    private void Clear()
     {
-        var until = retryAfter ?? now + DefaultDelay;
-        lock (_gate)
-        {
-            if (Get(now)?.RetryAfter is not { } existing || until > existing)
-            {
-                _started = now;
-                _failure = failure with { RetryAfter = until, NetworkCalls = 0 };
-            }
-            return failure with { RetryAfter = _failure!.RetryAfter };
-        }
+        _failure = null;
+        _credentialHash = null;
+    }
+
+    private static byte[] Hash(string credential)
+    {
+        var bytes = Encoding.UTF8.GetBytes(credential);
+        try { return SHA256.HashData(bytes); }
+        finally { CryptographicOperations.ZeroMemory(bytes); }
     }
 }

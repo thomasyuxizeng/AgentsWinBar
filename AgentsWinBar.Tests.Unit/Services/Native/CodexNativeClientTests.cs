@@ -180,6 +180,33 @@ public class CodexNativeClientTests
     }
 
     [TestMethod]
+    public async Task FetchAsync_WhenSignInChangesDuringRateLimitHold_AsksAgainWithTheNewSignIn()
+    {
+        var clock = new TestClock(Now);
+        var limited = true;
+        var (client, handler) = Create(_ =>
+        {
+            if (!limited) return Json(UsageJson);
+            var response = new HttpResponseMessage(HttpStatusCode.TooManyRequests);
+            response.Headers.TryAddWithoutValidation("Retry-After", "86400");
+            return response;
+        }, clock);
+        (await client.FetchAsync()).Status.Should().Be(NativeUsageStatus.RateLimited);
+        limited = false;
+        clock.Now = Now.AddMinutes(5);
+
+        var sameSignIn = await client.FetchAsync();
+        File.WriteAllText(_path, Auth(Now.AddDays(8))); // a new sign-in: another access token
+        var newSignIn = await client.FetchAsync();
+
+        sameSignIn.Status.Should().Be(NativeUsageStatus.RateLimited);
+        sameSignIn.NetworkCalls.Should().Be(0);
+        newSignIn.Status.Should().Be(NativeUsageStatus.Ok);
+        handler.Requests.Should().HaveCount(2);
+        handler.Requests[1].Headers.Authorization!.Parameter.Should().NotBe(handler.Requests[0].Headers.Authorization!.Parameter);
+    }
+
+    [TestMethod]
     public async Task FetchAsync_WhenNetworkErrorAfterGoodReading_ServesLastGoodReadingAsCached()
     {
         var failing = false;

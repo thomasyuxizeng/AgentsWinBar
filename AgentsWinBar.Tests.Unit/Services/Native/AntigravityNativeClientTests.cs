@@ -31,8 +31,8 @@ public class AntigravityNativeClientTests
         }
         """;
 
-    private static string Blob(DateTimeOffset expiry) => $$"""
-        {"token": {"access_token": "{{SyntheticAccess}}", "token_type": "Bearer", "refresh_token": "synthetic-refresh",
+    private static string Blob(DateTimeOffset expiry, string access = SyntheticAccess) => $$"""
+        {"token": {"access_token": "{{access}}", "token_type": "Bearer", "refresh_token": "synthetic-refresh",
                    "expiry": "{{expiry.ToOffset(TimeSpan.FromHours(11)):yyyy-MM-ddTHH:mm:ss}}.123456789+11:00", "expires_in": 3599},
          "auth_method": "consumer", "id_token_email": "someone@gmail.com", "writer_id": "synthetic-writer"}
         """;
@@ -220,6 +220,33 @@ public class AntigravityNativeClientTests
         clock.Now = Now.AddSeconds(120);
         (await client.FetchAsync()).Status.Should().Be(NativeUsageStatus.Ok);
         handler.Requests.Should().HaveCount(4 + calls);
+    }
+
+    [TestMethod]
+    public async Task FetchAsync_WhenSignInChangesDuringRateLimitHold_AsksAgainWithTheNewSignIn()
+    {
+        const string otherAccess = "synthetic-other-account-access-token";
+        var clock = new TestClock(Now);
+        var source = new FakeCredentialSource(Blob(Now.AddHours(12)));
+        var handler = new RecordingHandler(request =>
+        {
+            if (request.Headers.Authorization?.Parameter == otherAccess) return Default(request);
+            var response = new HttpResponseMessage(HttpStatusCode.TooManyRequests);
+            response.Headers.TryAddWithoutValidation("Retry-After", "86400");
+            return response;
+        });
+        var client = new AntigravityNativeClient(handler.Client(), new ListLogger<AntigravityNativeClient>(), source, clock: clock);
+        (await client.FetchAsync()).Status.Should().Be(NativeUsageStatus.RateLimited);
+        clock.Now = Now.AddMinutes(5);
+
+        var sameSignIn = await client.FetchAsync();
+        source.Json = Blob(Now.AddHours(12), otherAccess);
+        var newSignIn = await client.FetchAsync();
+
+        sameSignIn.Status.Should().Be(NativeUsageStatus.RateLimited);
+        sameSignIn.NetworkCalls.Should().Be(0);
+        newSignIn.Status.Should().Be(NativeUsageStatus.Ok);
+        handler.Requests.Should().HaveCount(3, "one rate-limited call, none while held, two for the new sign-in");
     }
 
     [TestMethod]
