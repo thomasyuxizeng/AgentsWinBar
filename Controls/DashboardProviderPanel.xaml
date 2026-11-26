@@ -191,8 +191,7 @@
                 </Grid>
 
                 <!-- Ok: spent of the pool, what is left, the bar with the cycle's elapsed-time tick, who used it -->
-                <StackPanel Spacing="8" Visibility="{x:Bind views:DashboardFormat.VisApiOk(Data.ApiCredits), Mode=OneWay}"
-                            ToolTipService.ToolTip="{x:Bind views:DashboardFormat.ApiUpdatedTip(Data.ApiCredits), Mode=OneWay}">
+                <StackPanel x:Name="ApiOkPanel" Spacing="8" Visibility="{x:Bind views:DashboardFormat.VisApiOk(Data.ApiCredits), Mode=OneWay}">
                     <Grid ColumnSpacing="12">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*"/>

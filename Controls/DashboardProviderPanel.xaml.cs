@@ -61,7 +61,11 @@ public sealed partial class DashboardProviderPanel : UserControl
     private string? _statusColorHex;
     private string? _freshnessTip;
     private string? _statusHeaderTip;
+    private string? _apiUpdatedTip;
     private string? _lastScannedText;
+    private DashboardProvider? _currentData;
+
+    public DashboardProvider? CurrentData => _currentData ?? Data;
 
     public DashboardProviderPanel()
     {
@@ -115,11 +119,14 @@ public sealed partial class DashboardProviderPanel : UserControl
         StatusDot.Fill = null;
         ToolTipService.SetToolTip(FreshnessGrid, null);
         ToolTipService.SetToolTip(StatusHeaderPanel, null);
+        ToolTipService.SetToolTip(ApiOkPanel, null);
         _iconProviderId = null;
         _statusColorHex = null;
         _freshnessTip = null;
         _statusHeaderTip = null;
+        _apiUpdatedTip = null;
         _lastScannedText = null;
+        _currentData = null;
 
         Bindings?.StopTracking();
         SetValue(DataProperty, null);
@@ -131,7 +138,7 @@ public sealed partial class DashboardProviderPanel : UserControl
         try
         {
             ShowDetails = !ShowDetails;
-            if (Data?.Id is { Length: > 0 } id) DetailsByProvider[id] = ShowDetails;
+            if (CurrentData?.Id is { Length: > 0 } id) DetailsByProvider[id] = ShowDetails;
             ApplyDetails();
         }
         catch (Exception ex) { App.LogHandled("Dashboard details toggle failed", ex); }
@@ -141,7 +148,7 @@ public sealed partial class DashboardProviderPanel : UserControl
     {
         try
         {
-            if (Data?.Id is { Length: > 0 } id && Models.ProviderConstants.IsValidProvider(id)) SignInAction.Start(id);
+            if (CurrentData?.Id is { Length: > 0 } id && Models.ProviderConstants.IsValidProvider(id)) SignInAction.Start(id);
         }
         catch (Exception ex) { App.LogHandled("Dashboard sign-in failed", ex); }
     }
@@ -155,15 +162,34 @@ public sealed partial class DashboardProviderPanel : UserControl
 
     private void ApplyDetails()
     {
+        if (_currentData != null && !ReferenceEquals(_currentData, Data))
+        {
+            _suppressFullRefresh = true;
+            try
+            {
+                Data = _currentData;
+            }
+            finally
+            {
+                _suppressFullRefresh = false;
+            }
+        }
+        var data = CurrentData;
         UpdateDetailsButton();
-        BuildWindows(Data);
-        if (ShowDetails) BuildCostRows(Data?.Cost);
+        BuildWindows(data);
+        if (ShowDetails)
+        {
+            BuildCostRows(data?.Cost);
+            var historyText = HistoryTextFor(data);
+            if (!string.Equals(HistoryText.Text, historyText, StringComparison.Ordinal))
+                HistoryText.Text = historyText;
+        }
         Bindings.Update();
     }
 
     private void UpdateDetailsButton()
     {
-        var name = Data?.DisplayName is { Length: > 0 } provider ? $" for {provider}" : string.Empty;
+        var name = CurrentData?.DisplayName is { Length: > 0 } provider ? $" for {provider}" : string.Empty;
         DetailsText.Text = ShowDetails ? "Hide details" : "Show details";
         DetailsGlyph.Glyph = ShowDetails ? "" : "";   // chevron up / down
         AutomationProperties.SetName(DetailsButton, (ShowDetails ? "Hide details" : "Show details") + name);
@@ -181,7 +207,7 @@ public sealed partial class DashboardProviderPanel : UserControl
             var stacked = e.NewSize.Width > 0 && e.NewSize.Width < SplitMinWidth;
             if (stacked == _stacked) return;
             _stacked = stacked;
-            BuildWindows(Data);
+            BuildWindows(CurrentData);
         }
         catch (Exception ex) { App.LogHandled("Dashboard window layout update failed", ex); }
     }
@@ -190,54 +216,42 @@ public sealed partial class DashboardProviderPanel : UserControl
     {
         var panel = (DashboardProviderPanel)d;
         if (panel._disposed || panel._suppressFullRefresh) return;
-        if (e.OldValue is DashboardProvider oldData && e.NewValue is DashboardProvider newData &&
-            DashboardContent.ProviderEqualsIgnoringLoadingAndTime(oldData, newData))
-        {
-            panel.RefreshTimesCore(newData, newData.Windows);
-            return;
-        }
+        panel._currentData = panel.Data;
         panel.Refresh();
     }
 
     public void ApplyClockTick(DashboardProvider updated)
     {
         if (_disposed) return;
-        _suppressFullRefresh = true;
-        try
-        {
-            Data = updated;
-        }
-        finally
-        {
-            _suppressFullRefresh = false;
-        }
+        _currentData = updated;
         RefreshTimesCore(updated, updated.Windows);
     }
 
     public void RefreshTimes()
     {
-        if (_disposed || Data is not { } data) return;
+        if (_disposed || CurrentData is not { } data) return;
         RefreshTimesCore(data, null);
     }
+
+    private static string HistoryTextFor(DashboardProvider? data) => data is { HistorySampleCount: > 0 }
+        ? $"Usage history: {DashboardFormat.Plural(data.HistorySampleCount, "sample")} since {DashboardFormat.LocalDate(data.HistoryOldestUtc)}"
+        : "Usage history: no samples yet";
 
     private void RefreshTimesCore(DashboardProvider data, IReadOnlyList<DashboardWindow>? updatedWindows)
     {
         var freshness = DashboardFormat.FreshnessLine(data);
-        if (FreshnessFreshText.Visibility == Visibility.Visible &&
+        if (DashboardFormat.VisFresh(data) == Visibility.Visible &&
             !string.Equals(FreshnessFreshText.Text, freshness, StringComparison.Ordinal))
             FreshnessFreshText.Text = freshness;
-        if (FreshnessStaleText.Visibility == Visibility.Visible &&
+        if (DashboardFormat.VisStale(data) == Visibility.Visible &&
             !string.Equals(FreshnessStaleText.Text, freshness, StringComparison.Ordinal))
             FreshnessStaleText.Text = freshness;
 
-        if (data.StatusIsStale)
+        var freshnessTip = DashboardFormat.FreshnessTip(data);
+        if (!string.Equals(_freshnessTip, freshnessTip, StringComparison.Ordinal))
         {
-            var freshnessTip = DashboardFormat.FreshnessTip(data);
-            if (!string.Equals(_freshnessTip, freshnessTip, StringComparison.Ordinal))
-            {
-                _freshnessTip = freshnessTip;
-                ToolTipService.SetToolTip(FreshnessGrid, string.IsNullOrEmpty(freshnessTip) ? null : freshnessTip);
-            }
+            _freshnessTip = freshnessTip;
+            ToolTipService.SetToolTip(FreshnessGrid, string.IsNullOrEmpty(freshnessTip) ? null : freshnessTip);
         }
 
         if (StatusHeaderPanel.Visibility == Visibility.Visible)
@@ -270,6 +284,12 @@ public sealed partial class DashboardProviderPanel : UserControl
 
         if (data.ApiCredits is { State: ApiCreditsState.Ok } api)
         {
+            var apiUpdatedTip = DashboardFormat.ApiUpdatedTip(api);
+            if (!string.Equals(_apiUpdatedTip, apiUpdatedTip, StringComparison.Ordinal))
+            {
+                _apiUpdatedTip = apiUpdatedTip;
+                ToolTipService.SetToolTip(ApiOkPanel, string.IsNullOrEmpty(apiUpdatedTip) ? null : apiUpdatedTip);
+            }
             var apiCaption = DashboardFormat.ApiCaption(api);
             if (!string.Equals(ApiCaptionText.Text, apiCaption, StringComparison.Ordinal))
                 ApiCaptionText.Text = apiCaption;
@@ -311,14 +331,20 @@ public sealed partial class DashboardProviderPanel : UserControl
             foreach (var row in _rows.Values) row.RefreshTimes();
         }
 
-        if (ShowDetails && data.Cost is { } cost)
+        if (ShowDetails)
         {
-            var scanned = $"{DashboardFormat.Local(cost.CapturedAtUtc)} · {DashboardFormat.Ago(cost.CapturedAtUtc)}";
-            if (!string.Equals(_lastScannedText, scanned, StringComparison.Ordinal))
+            var historyText = HistoryTextFor(data);
+            if (!string.Equals(HistoryText.Text, historyText, StringComparison.Ordinal))
+                HistoryText.Text = historyText;
+            if (data.Cost is { } cost)
             {
-                _lastScannedText = scanned;
-                DashboardTemplateBindings.Update(CostSection, item => item is DashboardFact { Label: "Scanned" } fact
-                    ? fact with { Value = scanned } : item);
+                var scanned = $"{DashboardFormat.Local(cost.CapturedAtUtc)} · {DashboardFormat.Ago(cost.CapturedAtUtc)}";
+                if (!string.Equals(_lastScannedText, scanned, StringComparison.Ordinal))
+                {
+                    _lastScannedText = scanned;
+                    DashboardTemplateBindings.Update(CostSection, item => item is DashboardFact { Label: "Scanned" } fact
+                        ? fact with { Value = scanned } : item);
+                }
             }
         }
     }
@@ -351,6 +377,12 @@ public sealed partial class DashboardProviderPanel : UserControl
             _statusHeaderTip = statusTip;
             ToolTipService.SetToolTip(StatusHeaderPanel, string.IsNullOrEmpty(statusTip) ? null : statusTip);
         }
+        var apiUpdatedTip = data?.ApiCredits is { State: ApiCreditsState.Ok } api ? DashboardFormat.ApiUpdatedTip(api) : null;
+        if (!string.Equals(_apiUpdatedTip, apiUpdatedTip, StringComparison.Ordinal))
+        {
+            _apiUpdatedTip = apiUpdatedTip;
+            ToolTipService.SetToolTip(ApiOkPanel, string.IsNullOrEmpty(apiUpdatedTip) ? null : apiUpdatedTip);
+        }
 
         var details = data?.Id is { Length: > 0 } id && DetailsByProvider.TryGetValue(id, out var open) && open;
         ShowDetails = details;
@@ -366,9 +398,7 @@ public sealed partial class DashboardProviderPanel : UserControl
         if (!string.Equals(CreditsText.Text, creditsText, StringComparison.Ordinal))
             CreditsText.Text = creditsText;
 
-        var historyText = data is { HistorySampleCount: > 0 }
-            ? $"Usage history: {DashboardFormat.Plural(data.HistorySampleCount, "sample")} since {DashboardFormat.LocalDate(data.HistoryOldestUtc)}"
-            : "Usage history: no samples yet";
+        var historyText = HistoryTextFor(data);
         if (!string.Equals(HistoryText.Text, historyText, StringComparison.Ordinal))
             HistoryText.Text = historyText;
 
@@ -399,8 +429,10 @@ public sealed partial class DashboardProviderPanel : UserControl
                 row = new DashboardWindowRow { VerticalAlignment = VerticalAlignment.Top };
                 _rows[window.Key] = row;
             }
-            if (!DashboardContent.WindowEquals(row.Data, window)) row.Data = window;
-            else row.RefreshTimes();
+            if (row.CurrentData != null && DashboardContent.WindowPanelStaticEquals(row.CurrentData, window))
+                row.ApplyClockTick(window);
+            else
+                row.Data = window;
         }
 
         // With the details open each window carries its own facts and chart, so each also keeps its own reset line

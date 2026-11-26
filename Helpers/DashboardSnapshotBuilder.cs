@@ -39,8 +39,29 @@ public static class DashboardSnapshotBuilder
         var activeResets = (inputs.EarlyResets ?? inputs.EarlyResetStore?.GetActive(now) ?? [])
             .OfType<EarlyReset>().ToArray();
         var resetsByProvider = activeResets.ToLookup(r => r.Provider, StringComparer.OrdinalIgnoreCase);
-        var samples = (inputs.HistorySamples ?? []).OfType<UsageHistorySample>().ToArray();
-        var byProvider = samples.ToLookup(s => s.Provider, StringComparer.OrdinalIgnoreCase);
+        var sampleCount = 0;
+        DateTime? allOldestUtc = null;
+        DateTime? allNewestUtc = null;
+        Dictionary<string, List<UsageHistorySample>>? byProvider = null;
+        if (inputs.HistorySamples != null)
+        {
+            foreach (var s in inputs.HistorySamples)
+            {
+                if (s == null) continue;
+                sampleCount++;
+                var ts = Utc(s.Timestamp);
+                if (!allOldestUtc.HasValue || ts < allOldestUtc.Value) allOldestUtc = ts;
+                if (!allNewestUtc.HasValue || ts > allNewestUtc.Value) allNewestUtc = ts;
+                byProvider ??= new Dictionary<string, List<UsageHistorySample>>(StringComparer.OrdinalIgnoreCase);
+                var key = s.Provider ?? string.Empty;
+                if (!byProvider.TryGetValue(key, out var list))
+                {
+                    list = [];
+                    byProvider[key] = list;
+                }
+                list.Add(s);
+            }
+        }
         var today = DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(now, TimeZoneInfo.Local));
         var providers = (inputs.Providers ?? []).OfType<UsageData>().Select(original =>
         {
@@ -56,7 +77,18 @@ public static class DashboardSnapshotBuilder
             var id = data.Provider ?? string.Empty;
             var providerResets = resetsByProvider[id].ToArray();
             var resetsByWindow = providerResets.ToLookup(r => r.WindowKey, StringComparer.OrdinalIgnoreCase);
-            var history = byProvider[id].ToArray();
+            List<UsageHistorySample>? historyList = null;
+            byProvider?.TryGetValue(id, out historyList);
+            IReadOnlyList<UsageHistorySample> history = historyList ?? (IReadOnlyList<UsageHistorySample>)[];
+            DateTime? providerOldestUtc = null;
+            if (historyList != null)
+            {
+                foreach (var s in historyList)
+                {
+                    var ts = Utc(s.Timestamp);
+                    if (!providerOldestUtc.HasValue || ts < providerOldestUtc.Value) providerOldestUtc = ts;
+                }
+            }
             var extras = (data.ExtraWindows ?? []).OfType<ExtraUsageWindow>()
                 .Select(e => e with { Title = e.Title ?? string.Empty }).ToArray();
             var ambiguousKeys = extras.GroupBy(UsageHistoryStore.ExtraWindowKey)
@@ -143,7 +175,7 @@ public static class DashboardSnapshotBuilder
                 ApiCredits = string.Equals(id, "claude", StringComparison.OrdinalIgnoreCase) ? inputs.ApiCredits : null,
                 GeminiApi = string.Equals(id, "gemini", StringComparison.OrdinalIgnoreCase) ? inputs.GeminiApi : null,
                 Windows = windows, Cost = settings.ShowCostTotals && cost?.HasData == true ? BuildCost(cost, today, now) : null,
-                HistorySampleCount = history.Length, HistoryOldestUtc = Oldest(history),
+                HistorySampleCount = history.Count, HistoryOldestUtc = providerOldestUtc,
                 EarlyResetAtUtc = mostRecentProviderReset != null ? Utc(mostRecentProviderReset.DetectedAtUtc) : null,
                 ResetDetectedAtUtc = windows.Select(w => w.ResetDetectedAtUtc).Max(),
                 EarlyResetFromPercent = mostRecentProviderReset?.PreviousPercent,
@@ -194,8 +226,8 @@ public static class DashboardSnapshotBuilder
                 OverlayEnabled = settings.AlwaysOnOverlayEnabled, TaskbarStripEnabled = settings.TaskbarDisplayEnabled,
                 AlertsEnabled = settings.AlertsEnabled, CostTotalsEnabled = settings.ShowCostTotals,
                 DeveloperModeEnabled = settings.DeveloperModeEnabled, StartWithWindows = settings.StartWithWindows,
-                HistorySampleCount = samples.Length, HistoryOldestUtc = Oldest(samples),
-                HistoryNewestUtc = samples.Select(s => (DateTime?)Utc(s.Timestamp)).Max(),
+                HistorySampleCount = sampleCount, HistoryOldestUtc = allOldestUtc,
+                HistoryNewestUtc = allNewestUtc,
                 HistoryFileBytes = Math.Max(0, inputs.HistoryFileBytes),
                 RecentRefreshes = (inputs.RecentRefreshes ?? []).OfType<DashboardRefreshEntry>()
                     .OrderByDescending(e => Utc(e.TimestampUtc)).Take(40).ToArray(),
@@ -228,8 +260,6 @@ public static class DashboardSnapshotBuilder
         };
     }
 
-    private static DateTime? Oldest(IEnumerable<UsageHistorySample> samples) =>
-        samples.Select(s => (DateTime?)Utc(s.Timestamp)).Min();
     private static TimeSpan Age(DateTime now, DateTime fetchedAt) => now > fetchedAt ? now - fetchedAt : TimeSpan.Zero;
     private static DateTime? Utc(DateTime? value) => value.HasValue ? DashboardValues.Utc(value.Value) : null;
     private static DateTime Utc(DateTime value) => DashboardValues.Utc(value);

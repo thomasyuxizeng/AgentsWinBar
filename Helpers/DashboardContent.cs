@@ -96,4 +96,42 @@ public static class DashboardContent
         ReferenceEquals(a, b) || a != null && b != null &&
         a with { Daily = b.Daily } == b &&
         SequenceEquals(a.Daily, b.Daily, DailyEquals);
+
+    public static bool StatusDisplayEquals(ProviderStatus? a, ProviderStatus? b) =>
+        ReferenceEquals(a, b) || a != null && b != null &&
+        a with { UpdatedAt = b.UpdatedAt } == b;
+
+    public static bool ApiCreditsDisplayEquals(ApiCreditsInfo? a, ApiCreditsInfo? b) =>
+        ReferenceEquals(a, b) || a != null && b != null &&
+        a with { FetchedAtUtc = b.FetchedAtUtc, Contributors = b.Contributors } == b &&
+        a.Contributors.SequenceEqual(b.Contributors);
+
+    public static bool WindowPanelStaticEquals(DashboardWindow? a, DashboardWindow? b) =>
+        ReferenceEquals(a, b) || a != null && b != null &&
+        a with { ElapsedPercent = b.ElapsedPercent, ResetText = b.ResetText, Pace = b.Pace, PaceSummary = b.PaceSummary, History = b.History } == b;
+
+    public static bool ProviderPanelStaticEquals(DashboardProvider? a, DashboardProvider? b) =>
+        ReferenceEquals(a, b) || a != null && b != null &&
+        a with
+        {
+            IsLoading = b.IsLoading,
+            IsStale = b.IsStale,
+            StaleAge = b.StaleAge,
+            FetchedAtUtc = b.FetchedAtUtc,
+            LastSuccessfulFetchUtc = b.LastSuccessfulFetchUtc,
+            LastSuccessfulUsageFetchUtc = b.LastSuccessfulUsageFetchUtc,
+            LastSuccessfulStatusFetchUtc = b.LastSuccessfulStatusFetchUtc,
+            HistorySampleCount = b.HistorySampleCount,
+            HistoryOldestUtc = b.HistoryOldestUtc,
+            ServiceStatus = b.ServiceStatus,
+            ApiCredits = b.ApiCredits,
+            Windows = b.Windows,
+            Cost = b.Cost,
+            GeminiApi = b.GeminiApi
+        } == b &&
+        StatusDisplayEquals(a.ServiceStatus, b.ServiceStatus) &&
+        ApiCreditsDisplayEquals(a.ApiCredits, b.ApiCredits) &&
+        SequenceEquals(a.Windows, b.Windows, WindowPanelStaticEquals) &&
+        CostContentEquals(a.Cost, b.Cost) &&
+        GeminiApiEquals(a.GeminiApi, b.GeminiApi);
 }

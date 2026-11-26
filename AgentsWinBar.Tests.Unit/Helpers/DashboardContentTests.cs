@@ -289,4 +289,77 @@ public class DashboardContentTests
         DashboardContent.CostDataEquals(null, null).Should().BeTrue();
         Verify(new CostData(), DashboardContent.CostDataEquals);
     }
+
+    [TestMethod]
+    public void ProviderPanelStaticEquals_NonStructuralRefreshChanges_ReturnsTrue()
+    {
+        var baseUtc = new DateTime(2026, 10, 5, 12, 0, 0, DateTimeKind.Utc);
+        var a = Provider() with
+        {
+            ServiceStatus = new ProviderStatus
+            {
+                Indicator = ProviderStatusIndicator.Minor,
+                Description = "Degraded",
+                UpdatedAt = baseUtc
+            },
+            ApiCredits = ApiCreditsCalculator.BuildOk(200m, 50m, 1, baseUtc, baseUtc),
+            FetchedAtUtc = baseUtc,
+            LastSuccessfulFetchUtc = baseUtc,
+            LastSuccessfulUsageFetchUtc = baseUtc,
+            LastSuccessfulStatusFetchUtc = baseUtc,
+            HistorySampleCount = 10,
+            HistoryOldestUtc = baseUtc.AddHours(-2)
+        };
+        var b = a with
+        {
+            IsLoading = true,
+            IsStale = true,
+            StaleAge = TimeSpan.FromMinutes(6),
+            FetchedAtUtc = baseUtc.AddMinutes(5),
+            LastSuccessfulFetchUtc = baseUtc.AddMinutes(5),
+            LastSuccessfulUsageFetchUtc = baseUtc.AddMinutes(5),
+            LastSuccessfulStatusFetchUtc = baseUtc.AddMinutes(5),
+            HistorySampleCount = 11,
+            HistoryOldestUtc = baseUtc.AddHours(-1),
+            ServiceStatus = a.ServiceStatus! with { UpdatedAt = baseUtc.AddMinutes(5) },
+            ApiCredits = a.ApiCredits! with { FetchedAtUtc = baseUtc.AddMinutes(5) },
+            Cost = a.Cost! with { StaleAge = TimeSpan.FromMinutes(5) },
+            Windows =
+            [
+                a.Windows[0] with
+                {
+                    ElapsedPercent = 50,
+                    ResetText = "Resets in 1h",
+                    Pace = new PaceProjection(PaceKind.OnTrack, ProjectedUsedAtReset: 45),
+                    PaceSummary = "On track",
+                    History = new BurndownSeries { Usage = [new(0.5, 20)] }
+                }
+            ]
+        };
+
+        DashboardContent.ProviderPanelStaticEquals(a, b).Should().BeTrue();
+    }
+
+    [TestMethod]
+    public void ProviderPanelStaticEquals_DisplayRelevantChanges_ReturnsFalse()
+    {
+        var baseUtc = new DateTime(2026, 10, 5, 12, 0, 0, DateTimeKind.Utc);
+        var a = Provider() with
+        {
+            ServiceStatus = new ProviderStatus { Indicator = ProviderStatusIndicator.None, Description = "Operational" },
+            ApiCredits = ApiCreditsCalculator.BuildOk(200m, 50m, 1, baseUtc, baseUtc),
+            GeminiApi = new GeminiApiSpendInfo { State = GeminiApiSpendState.Ok, TotalUsd = 10m }
+        };
+
+        DashboardContent.ProviderPanelStaticEquals(a, a with { Plan = "Max" }).Should().BeFalse();
+        DashboardContent.ProviderPanelStaticEquals(a, a with { Error = "Timeout" }).Should().BeFalse();
+        DashboardContent.ProviderPanelStaticEquals(a, a with { AuthRequired = true }).Should().BeFalse();
+        DashboardContent.ProviderPanelStaticEquals(a, a with { ServiceStatus = a.ServiceStatus! with { Description = "Outage" } }).Should().BeFalse();
+        DashboardContent.ProviderPanelStaticEquals(a, a with { ApiCredits = a.ApiCredits! with { SpentUsd = 60m } }).Should().BeFalse();
+        DashboardContent.ProviderPanelStaticEquals(a, a with { ApiCredits = a.ApiCredits! with { IsStale = true } }).Should().BeFalse();
+        DashboardContent.ProviderPanelStaticEquals(a, a with { Cost = a.Cost! with { TodayCost = 9m } }).Should().BeFalse();
+        DashboardContent.ProviderPanelStaticEquals(a, a with { GeminiApi = a.GeminiApi! with { TotalUsd = 12m } }).Should().BeFalse();
+        DashboardContent.ProviderPanelStaticEquals(a, a with { Windows = [a.Windows[0] with { UsedPercent = 40 }] }).Should().BeFalse();
+        DashboardContent.ProviderPanelStaticEquals(a, null).Should().BeFalse();
+    }
 }

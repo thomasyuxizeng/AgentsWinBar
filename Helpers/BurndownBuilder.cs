@@ -32,10 +32,30 @@ public static class BurndownBuilder
         if (nowUtc >= end) return new() { Message = "Waiting for window reset" };
         // Same window = reset time within a minute: providers can report it with sub-second jitter, and samples
         // saved before the reader rounded it keep that jitter.
-        var current = samples.Where(s => s.ResetsAt.HasValue && SameReset(Utc(s.ResetsAt.Value), end) &&
-                Utc(s.Timestamp) >= start && Utc(s.Timestamp) <= nowUtc &&
-                double.IsFinite(s.UsedPercent) && s.UsedPercent >= 0)
-            .OrderBy(s => Utc(s.Timestamp)).GroupBy(s => Utc(s.Timestamp)).Select(g => g.Last()).ToList();
+        var current = new List<UsageHistorySample>();
+        var prevTicks = long.MinValue;
+        var isSorted = true;
+        foreach (var s in samples)
+        {
+            if (!s.ResetsAt.HasValue || !SameReset(Utc(s.ResetsAt.Value), end)) continue;
+            var ts = Utc(s.Timestamp);
+            if (ts < start || ts > nowUtc || !double.IsFinite(s.UsedPercent) || s.UsedPercent < 0) continue;
+            if (ts.Ticks < prevTicks) isSorted = false;
+            prevTicks = ts.Ticks;
+            current.Add(s);
+        }
+        if (current.Count > 1)
+        {
+            if (!isSorted) current = current.OrderBy(s => Utc(s.Timestamp)).ToList();
+            var write = 0;
+            for (var i = 0; i < current.Count; i++)
+            {
+                if (i + 1 < current.Count && Utc(current[i].Timestamp) == Utc(current[i + 1].Timestamp))
+                    continue;
+                current[write++] = current[i];
+            }
+            if (write < current.Count) current.RemoveRange(write, current.Count - write);
+        }
         var duration = (end - start).TotalSeconds;
         var points = current.Select(s => new BurndownPoint((Utc(s.Timestamp) - start).TotalSeconds / duration, s.UsedPercent)).ToList();
         var series = new BurndownSeries { Usage = points, Guide = [new(0, 0), new(1, 100)],

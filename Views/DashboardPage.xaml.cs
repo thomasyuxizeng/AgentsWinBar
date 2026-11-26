@@ -39,6 +39,7 @@ public sealed partial class DashboardPage : Page
     private int _arrangedColumns = -1;
     private string _arrangedOrder = string.Empty;
     private bool _disposed;
+    private bool? _isBusy;
 
     public event EventHandler? RefreshRequested;
     public event EventHandler? SettingsRequested;
@@ -126,11 +127,14 @@ public sealed partial class DashboardPage : Page
         DiagnosticsExpander.Content = null;
         DiagnosticsExpander.Header = null;
         ContentStack.Children.Clear();
+        _isBusy = null;
         DataContext = null;
     }
 
     public void SetBusy(bool busy)
     {
+        if (_isBusy == busy) return;
+        _isBusy = busy;
         RefreshRing.IsActive = busy;
         RefreshRing.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
         RefreshIcon.Visibility = busy ? Visibility.Collapsed : Visibility.Visible;
@@ -325,8 +329,10 @@ public sealed partial class DashboardPage : Page
                 panel = new DashboardProviderPanel { VerticalAlignment = VerticalAlignment.Top };
                 _panels[provider.Id] = panel;
             }
-            if (!DashboardContent.ProviderDisplayEquals(panel.Data, provider)) panel.Data = provider;
-            else panel.RefreshTimes();
+            if (panel.CurrentData != null && DashboardContent.ProviderPanelStaticEquals(panel.CurrentData, provider))
+                panel.ApplyClockTick(provider);
+            else
+                panel.Data = provider;
         }
 
         EmptyPanel.Visibility = providers.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
@@ -495,7 +501,7 @@ public sealed partial class DashboardPage : Page
             var panel = _panels[id];
             var shortest = Array.IndexOf(heights, heights.Min());
             _columnStacks[shortest].Children.Add(panel);
-            heights[shortest] += EstimateHeight(panel.Data) + ColumnGap;
+            heights[shortest] += EstimateHeight(panel.CurrentData) + ColumnGap;
         }
     }
 

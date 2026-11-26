@@ -192,6 +192,9 @@ public sealed partial class UsageMeter : UserControl
         _previousFillBrush = null;
         _barBrushes.Clear();
         _timeBrushes.Clear();
+        _appliedTimeWidth = double.NaN;
+        _appliedMarkerX = double.NaN;
+        _appliedActualWidth = double.NaN;
         UsageBar.Fill = null;
         TimeBar.Fill = null;
         BackgroundRect.Fill = null;
@@ -277,6 +280,9 @@ public sealed partial class UsageMeter : UserControl
 
     private (double Percent, double Time, WindowAccent Accent, string Pace, double Width)? _lastUpdate;
     private string? _tooltip;
+    private double _appliedTimeWidth = double.NaN;
+    private double _appliedMarkerX = double.NaN;
+    private double _appliedActualWidth = double.NaN;
     private readonly Dictionary<(WindowAccent Accent, int Band), Brush> _barBrushes = new();
     private readonly Dictionary<WindowAccent, Brush> _timeBrushes = new();
 
@@ -303,6 +309,8 @@ public sealed partial class UsageMeter : UserControl
         _lastUpdate = signature;
         var visualPercent = DashboardValues.Percent(Percent);
         var honestPercent = double.IsFinite(Percent) ? Math.Max(0, Percent) : 0;
+        var widthChanged = !ActualWidth.Equals(_appliedActualWidth);
+        _appliedActualWidth = ActualWidth;
 
         var newFill = ActualWidth * (visualPercent / 100.0);
         if (Math.Abs(newFill - _fillWidth) > 0.5)
@@ -319,6 +327,8 @@ public sealed partial class UsageMeter : UserControl
         {
             if (TimeBar.Visibility != Visibility.Collapsed) TimeBar.Visibility = Visibility.Collapsed;
             if (TimeMarker.Visibility != Visibility.Collapsed) TimeMarker.Visibility = Visibility.Collapsed;
+            _appliedTimeWidth = double.NaN;
+            _appliedMarkerX = double.NaN;
             SetTooltip(string.IsNullOrEmpty(PaceText) ? null : PaceText);
             return;
         }
@@ -326,7 +336,12 @@ public sealed partial class UsageMeter : UserControl
         var time = Math.Clamp(TimePercent, 0, 100);
         if (TimeBar.Visibility != Visibility.Visible) TimeBar.Visibility = Visibility.Visible;
         var timeWidth = ActualWidth * (time / 100.0);
-        if (!TimeBar.Width.Equals(timeWidth)) TimeBar.Width = timeWidth;
+        if (widthChanged || double.IsNaN(_appliedTimeWidth) || time <= 0 || time >= 100 ||
+            Math.Abs(timeWidth - _appliedTimeWidth) >= 0.25)
+        {
+            _appliedTimeWidth = timeWidth;
+            if (!TimeBar.Width.Equals(timeWidth)) TimeBar.Width = timeWidth;
+        }
         var timeBrush = TimeBrushFor(Accent);
         if (!ReferenceEquals(TimeBar.Fill, timeBrush)) TimeBar.Fill = timeBrush;
 
@@ -335,9 +350,20 @@ public sealed partial class UsageMeter : UserControl
         // Keep it fully inside the bar, even at 0% and 100%.
         var markerVis = honestPercent > time && ActualWidth > TimeMarker.Width ? Visibility.Visible : Visibility.Collapsed;
         if (TimeMarker.Visibility != markerVis) TimeMarker.Visibility = markerVis;
-        var markerX = Math.Clamp(ActualWidth * (time / 100.0) - TimeMarker.Width / 2, 0, Math.Max(0, ActualWidth - TimeMarker.Width));
-        var markerMargin = new Thickness(markerX, 0, 0, 0);
-        if (TimeMarker.Margin != markerMargin) TimeMarker.Margin = markerMargin;
+        if (markerVis == Visibility.Visible)
+        {
+            var markerX = Math.Clamp(ActualWidth * (time / 100.0) - TimeMarker.Width / 2, 0, Math.Max(0, ActualWidth - TimeMarker.Width));
+            if (widthChanged || double.IsNaN(_appliedMarkerX) || Math.Abs(markerX - _appliedMarkerX) >= 0.25)
+            {
+                _appliedMarkerX = markerX;
+                var markerMargin = new Thickness(markerX, 0, 0, 0);
+                if (TimeMarker.Margin != markerMargin) TimeMarker.Margin = markerMargin;
+            }
+        }
+        else
+        {
+            _appliedMarkerX = double.NaN;
+        }
 
         var pace = honestPercent > time + 5 ? "ahead of time: using it fast"
             : honestPercent < time - 5 ? "behind time: using it slowly"

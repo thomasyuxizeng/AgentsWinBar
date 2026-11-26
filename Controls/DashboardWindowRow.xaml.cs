@@ -40,6 +40,9 @@ public sealed partial class DashboardWindowRow : UserControl
     private bool _disposed;
     private bool _suppressFullRefresh;
     private int _limitBand = -1;
+    private DashboardWindow? _currentData;
+
+    public DashboardWindow? CurrentData => _currentData ?? Data;
 
     private static void OnResetFromPercentChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
     {
@@ -67,6 +70,7 @@ public sealed partial class DashboardWindowRow : UserControl
         LimitBadge.Background = null;
         LimitLabelText.Foreground = null;
         _limitBand = -1;
+        _currentData = null;
         Bindings?.StopTracking();
         SetValue(DataProperty, null);
         DataContext = null;
@@ -89,27 +93,32 @@ public sealed partial class DashboardWindowRow : UserControl
         ShowReset = showReset;
         GroupSize = Math.Max(1, groupSize);
         ShowDetails = showDetails;
+        if (_currentData != null && !ReferenceEquals(_currentData, Data))
+        {
+            _suppressFullRefresh = true;
+            try
+            {
+                Data = _currentData;
+            }
+            finally
+            {
+                _suppressFullRefresh = false;
+            }
+            UpdateLimitBrushes(_currentData.UsedPercent);
+        }
         Bindings.Update();
     }
 
     public void ApplyClockTick(DashboardWindow updated)
     {
         if (_disposed) return;
-        _suppressFullRefresh = true;
-        try
-        {
-            Data = updated;
-        }
-        finally
-        {
-            _suppressFullRefresh = false;
-        }
+        _currentData = updated;
         RefreshTimesCore(updated);
     }
 
     public void RefreshTimes()
     {
-        if (_disposed || Data is not { } data) return;
+        if (_disposed || CurrentData is not { } data) return;
         RefreshTimesCore(data);
     }
 
@@ -173,6 +182,7 @@ public sealed partial class DashboardWindowRow : UserControl
     {
         var control = (DashboardWindowRow)d;
         if (control._disposed || control._suppressFullRefresh) return;
+        control._currentData = control.Data;
         if (control.Content is UIElement content) content.Visibility = control.Data == null ? Visibility.Collapsed : Visibility.Visible;
         control.UpdateLimitBrushes(control.Data?.UsedPercent ?? 0);
         control.Bindings.Update();
