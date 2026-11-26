@@ -249,7 +249,7 @@ public sealed partial class SettingsPage : Page
     {
         AdminKeyCheck.Valid => $"Status: Connected{KeyEnding(lastFour)}",
         AdminKeyCheck.Rejected => $"Status: Rejected by Anthropic{KeyEnding(lastFour)}",
-        AdminKeyCheck.BadFormat => $"Status: Not an Admin key{KeyEnding(lastFour)}",
+        AdminKeyCheck.BadFormat => $"Status: Not an Anthropic key{KeyEnding(lastFour)}",
         _ => $"Status: Could not be checked{KeyEnding(lastFour)}"
     };
 
@@ -392,7 +392,7 @@ public sealed partial class SettingsPage : Page
                     await SaveKeyAsync(candidate, AdminKeyCheck.Valid, previousStatus);
                     break;
                 case AdminKeyCheck.BadFormat:
-                    EndKeyAction(previousStatus, "This is not an Admin key, so it was not saved. Admin keys start with sk-ant-admin. Copy the whole key and paste it again.");
+                    EndKeyAction(previousStatus, "This is not an Anthropic key, so it was not saved. Anthropic keys start with sk-ant-. Copy the whole key and paste it again.");
                     break;
                 case AdminKeyCheck.Rejected:
                     EndKeyAction(previousStatus, "Anthropic rejected this key, so it was not saved. Check that it is an active Admin key, then paste it again.");

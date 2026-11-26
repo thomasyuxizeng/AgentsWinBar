@@ -9,7 +9,7 @@ public enum AdminKeyCheck
     Rejected,
     /// <summary>No answer that says either way: network error, timeout, HTTP 429, 5xx or any other status.</summary>
     Unreachable,
-    /// <summary>Not an Admin key (or no key at all), so nothing was sent.</summary>
+    /// <summary>Not shaped like an Anthropic key (or no key at all), so nothing was sent.</summary>
     BadFormat
 }
 
@@ -32,7 +32,7 @@ public interface IAdminKeyService
     /// <summary>Checks a pasted key: the format first, then one read-only request to the Anthropic Admin API.</summary>
     Task<AdminKeyCheck> TestAsync(string? candidate, CancellationToken ct = default);
 
-    /// <summary>Checks the key that is set now; <see cref="AdminKeyCheck.BadFormat"/> when none is set or it is not an Admin key.</summary>
+    /// <summary>Checks the key that is set now; <see cref="AdminKeyCheck.BadFormat"/> when none is set or it is not shaped like an Anthropic key.</summary>
     Task<AdminKeyCheck> TestSavedAsync(CancellationToken ct = default);
 
     /// <summary>

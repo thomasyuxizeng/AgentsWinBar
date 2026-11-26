@@ -101,7 +101,7 @@ public class AdminKeyServiceTests
             "null" => null,
             "empty" => "",
             "whitespace" => "  \r\n ",
-            "other prefix" => "sk-ant-api03-" + Body + Tail,
+            "other prefix" => "sk-proj-" + Body + Tail,
             "prefix case" => "SK-ANT-ADMIN01-" + Body + Tail,
             "too short" => "sk-ant-admin01-abc",
             "too long" => "sk-ant-admin01-" + new string('a', AdminKeyService.MaxKeyLength),
@@ -125,6 +125,13 @@ public class AdminKeyServiceTests
         AdminKeyService.Normalize("sk-ant-admin" + new string('a', AdminKeyService.MinKeyLength - 13)).Should().BeNull();
         AdminKeyService.Normalize("sk-ant-admin" + new string('a', AdminKeyService.MaxKeyLength - 12)).Should().NotBeNull();
     }
+
+    [TestMethod]
+    [DataRow("sk-ant-admin01-")]
+    [DataRow("sk-ant-usr-")]
+    [DataRow("sk-ant-api03-")]
+    public void Normalize_AnyAnthropicKeyForm_LeavesTheSubtypeToTheRequest(string prefix) =>
+        AdminKeyService.Normalize(prefix + Body + Tail).Should().Be(prefix + Body + Tail);
 
     // HTTP outcomes
 
@@ -348,7 +355,7 @@ public class AdminKeyServiceTests
     [TestMethod]
     public async Task SaveAsync_MalformedKey_WritesNothingAndReturnsFalse()
     {
-        (await _service.SaveAsync("sk-ant-api03-" + Body + Tail)).Should().BeFalse();
+        (await _service.SaveAsync("sk-proj-" + Body + Tail)).Should().BeFalse();
         (await _service.SaveAsync(null)).Should().BeFalse();
         _writes.Should().BeEmpty();
         _keyChanged.Should().Be(0);

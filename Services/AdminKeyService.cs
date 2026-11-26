@@ -11,7 +11,11 @@ namespace AgentsWinBar.Services;
 /// </summary>
 public sealed class AdminKeyService : IAdminKeyService
 {
-    internal const string KeyPrefix = "sk-ant-admin";
+    /// <summary>
+    /// Anthropic's key family. Working Admin keys come in more forms than the docs show (sk-ant-admin01-, sk-ant-usr-),
+    /// so the subtype is left to the one Admin API request, which rejects a key that cannot read the organization.
+    /// </summary>
+    internal const string KeyPrefix = "sk-ant-";
     internal const int MinKeyLength = 32;
     internal const int MaxKeyLength = 512;
     internal const string TestUrl = "https://api.anthropic.com/v1/organizations/api_keys?limit=1";
@@ -41,7 +45,7 @@ public sealed class AdminKeyService : IAdminKeyService
         _handler = handler;
     }
 
-    /// <summary>The trimmed key when it looks like an Admin key (prefix, printable ASCII without spaces, sane length); otherwise null.</summary>
+    /// <summary>The trimmed key when it looks like an Anthropic key (prefix, printable ASCII without spaces, sane length); otherwise null.</summary>
     internal static string? Normalize(string? candidate)
     {
         var key = candidate?.Trim();
