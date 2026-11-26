@@ -2,7 +2,7 @@
   {
     "version": "0.87.0",
     "provider": "codex",
-    "source": "codex-cli",
+    "source": "oauth",
     "usage": {
       "loginMethod": "plus",
       "accountEmail": "user@example.com",

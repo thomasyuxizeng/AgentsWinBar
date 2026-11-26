@@ -523,7 +523,7 @@
                     <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,16,0">
                         <TextBlock Text="Developer mode" Style="{StaticResource BodyTextBlockStyle}"/>
                         <TextBlock
-                            Text="Use sample data instead of CodexBar CLI (for testing)"
+                            Text="Use sample data instead of live usage (for testing)"
                             Style="{StaticResource CaptionTextBlockStyle}"
                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
                     </StackPanel>

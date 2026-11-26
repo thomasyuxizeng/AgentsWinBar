@@ -22,7 +22,7 @@ The sample files follow the structure returned by `codexbar usage --format json`
 [
   {
     "provider": "claude|gemini|codex",
-    "source": "oauth|cli|openai-web|api",
+    "source": "oauth|remote|cli|openai-web|api",
     "usage": {
       "loginMethod": "OAuth|API|plus|free",
       "primary": {
@@ -53,7 +53,7 @@ The sample files follow the structure returned by `codexbar usage --format json`
 ### Field Descriptions
 
 - **provider**: Provider identifier (`claude`, `gemini`, `codex`)
-- **source**: Data source method (`oauth`, `cli`, `openai-web`, `api`)
+- **source**: Data source method (`oauth` and `remote` from the native readers; `cli`, `openai-web`, `api` from the WSL route)
 - **usage.loginMethod**: Authentication method used
 - **usage.primary**: Session usage (e.g., "Session" for Claude/Codex, "Pro" for Gemini)
 - **usage.secondary**: Weekly/longer window usage (e.g., "Weekly" for Claude/Codex, "Flash" for Gemini)

@@ -1,7 +1,7 @@
 [
   {
     "provider": "gemini",
-    "source": "api",
+    "source": "remote",
     "usage": {
       "loginMethod": "Free",
       "accountEmail": "user@example.com",
