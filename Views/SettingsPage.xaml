@@ -496,6 +496,13 @@
                             Click="OnTestAlertClicked"
                             Margin="0,8,0,0"
                             Padding="10,4"/>
+                        <TextBlock
+                            x:Name="TestAlertStatus"
+                            Visibility="Collapsed"
+                            Margin="0,6,0,0"
+                            Style="{StaticResource CaptionTextBlockStyle}"
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                            TextWrapping="Wrap"/>
                     </StackPanel>
 
                     <ToggleSwitch

@@ -186,15 +186,24 @@ public sealed partial class SettingsPage : Page
 
     private void OnTestAlertClicked(object sender, RoutedEventArgs e)
     {
+        var result = Services.ToastResult.Unavailable;
         try
         {
-            App.Services.GetRequiredService<Services.IToastNotifier>()
+            result = App.Services.GetRequiredService<Services.IToastNotifier>()
                 .Show("AgentsWinBar", "Notifications are working. You'll get one like this when usage needs attention.");
         }
         catch (Exception ex)
         {
             App.Services.GetRequiredService<ILogger<SettingsPage>>().LogWarning(ex, "Test notification failed");
         }
+
+        TestAlertStatus.Text = result switch
+        {
+            Services.ToastResult.Shown => "Sent. If nothing appeared, check Do not disturb in Windows.",
+            Services.ToastResult.TurnedOff => "Notifications are off for AgentsWinBar. Turn them on in Windows Settings > System > Notifications.",
+            _ => "Windows didn't accept the notification. app.log in the app's data folder has the details."
+        };
+        TestAlertStatus.Visibility = Visibility.Visible;
     }
 
     private async void OnSaveClicked(object sender, RoutedEventArgs e)

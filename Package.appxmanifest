@@ -6,7 +6,8 @@
   xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
   xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
   xmlns:desktop="http://schemas.microsoft.com/appx/manifest/desktop/windows10"
-  IgnorableNamespaces="uap rescap desktop">
+  xmlns:com="http://schemas.microsoft.com/appx/manifest/com/windows10"
+  IgnorableNamespaces="uap rescap desktop com">
 
   <Identity
     Name="AgentsWinBar"
@@ -51,6 +52,18 @@
                                Enabled="false"
                                DisplayName="AgentsWinBar"/>
         </desktop:Extension>
+        <!-- Windows notifications: AppNotificationManager.Register() needs this COM server in a packaged app.
+             Keep the CLSID unchanged across releases; both entries must use the same one. -->
+        <desktop:Extension Category="windows.toastNotificationActivation">
+          <desktop:ToastNotificationActivation ToastActivatorCLSID="0791A914-D432-4DA7-AB1F-9DCF00292B1E" />
+        </desktop:Extension>
+        <com:Extension Category="windows.comServer">
+          <com:ComServer>
+            <com:ExeServer Executable="AgentsWinBar.exe" Arguments="----AppNotificationActivated:" DisplayName="AgentsWinBar">
+              <com:Class Id="0791A914-D432-4DA7-AB1F-9DCF00292B1E" />
+            </com:ExeServer>
+          </com:ComServer>
+        </com:Extension>
       </Extensions>
     </Application>
   </Applications>
