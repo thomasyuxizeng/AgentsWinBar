@@ -326,6 +326,122 @@ public class ProviderRefreshPlannerTests
     }
 
     [TestMethod]
+    public void PlanProvider_ClaudeJustFetched_CannotBeReadBeforeItsFloor()
+    {
+        var claude = Plan(Input("claude", fetchMinutesAgo: 1));
+        var codex = Plan(Input("codex", fetchMinutesAgo: 1));
+
+        claude.NotBeforeUtc.Should().Be(Now.AddMinutes(1));
+        ProviderRefreshPlanner.MayReadNow(claude, Now).Should().BeFalse();
+        ProviderRefreshPlanner.MayReadNow(claude, Now.AddMinutes(1)).Should().BeTrue();
+        ProviderRefreshPlanner.MayReadNow(codex, Now).Should().BeTrue();
+    }
+
+    [TestMethod]
+    public void PlanProvider_CooldownEndingBeforeDue_StillHoldsTheProvider()
+    {
+        var due = Plan(Input("codex", fetchMinutesAgo: 1, streak: 4, limitedUntil: Now.AddMinutes(5)));
+
+        due.RateLimited.Should().BeFalse("its idle due time is after the cooldown");
+        due.CooldownUntilUtc.Should().Be(Now.AddMinutes(5));
+        due.NotBeforeUtc.Should().Be(Now.AddMinutes(5));
+        ProviderRefreshPlanner.InCooldown(due, Now).Should().BeTrue();
+        ProviderRefreshPlanner.MayReadNow(due, Now.AddMinutes(4)).Should().BeFalse();
+        ProviderRefreshPlanner.MayReadNow(due, Now.AddMinutes(5)).Should().BeTrue();
+    }
+
+    [TestMethod]
+    public void PlanProvider_CooldownOver_HoldsNothing()
+    {
+        var due = Plan(Input("gemini", fetchMinutesAgo: 1, limitedUntil: Now.AddMinutes(-1)));
+
+        due.CooldownUntilUtc.Should().BeNull();
+        ProviderRefreshPlanner.MayReadNow(due, Now).Should().BeTrue();
+    }
+
+    [TestMethod]
+    public void PlanProvider_NeverFetchedButCoolingDown_WaitsForTheCooldown()
+    {
+        var due = Plan(Input("claude", fetchMinutesAgo: null, limitedUntil: Now.AddMinutes(3)));
+
+        due.NotBeforeUtc.Should().Be(Now.AddMinutes(3));
+        ProviderRefreshPlanner.MayReadNow(due, Now).Should().BeFalse();
+    }
+
+    [TestMethod]
+    public void PlanProvider_SettingOff_HasNoFloor()
+    {
+        var due = Plan(Input("claude", fetchMinutesAgo: 1), Options with { ActivityRefreshEnabled = false });
+
+        due.NotBeforeUtc.Should().Be(Now.AddMinutes(-1));
+    }
+
+    [TestMethod]
+    public void SelectDue_LockedWithClaudeWithinItsFloor_LeavesClaudeOut()
+    {
+        // Battery saver: Codex idle at 30 min is due now; Claude was read 95 s ago (its active wait is 4 min)
+        var options = Options with { Locked = true, BatterySaver = true };
+        var plan = ProviderRefreshPlanner.Plan(
+            [Input("codex", fetchMinutesAgo: 30, streak: 4), Input("claude", activityMinutesAgo: 1, fetchMinutesAgo: 95 / 60.0),
+             Input("gemini", fetchMinutesAgo: 1)], options, Now);
+
+        ProviderRefreshPlanner.SelectDue(plan, Now, locked: true).Select(p => p.Provider).Should().Equal("codex", "gemini");
+        ProviderRefreshPlanner.SelectDue(plan, Now.AddSeconds(26), locked: true).Select(p => p.Provider)
+            .Should().Equal("codex", "claude", "gemini");
+    }
+
+    [TestMethod]
+    public void SelectDue_LockedWithProviderInCooldown_LeavesItOut()
+    {
+        var options = Options with { Locked = true };
+        var plan = ProviderRefreshPlanner.Plan(
+            [Input("codex", fetchMinutesAgo: 31), Input("gemini", fetchMinutesAgo: 10, limitedUntil: Now.AddMinutes(5))],
+            options, Now);
+
+        plan[1].RateLimited.Should().BeFalse("its locked due time is after the cooldown");
+        ProviderRefreshPlanner.SelectDue(plan, Now, locked: true).Select(p => p.Provider).Should().Equal("codex");
+    }
+
+    [TestMethod]
+    public void SelectDue_DueTolerance_TakesAProviderDueAMomentLater()
+    {
+        var plan = ProviderRefreshPlanner.Plan([Input("codex", fetchMinutesAgo: 5 - 0.5 / 60)], Options, Now);
+
+        ProviderRefreshPlanner.SelectDue(plan, Now).Should().BeEmpty();
+        ProviderRefreshPlanner.SelectDue(plan, Now, dueTolerance: TimeSpan.FromSeconds(1)).Select(p => p.Provider)
+            .Should().Equal("codex");
+    }
+
+    [TestMethod]
+    public void SelectDue_DueTolerance_NeverEndsACooldownEarly()
+    {
+        var tolerance = TimeSpan.FromSeconds(1);
+        var limited = ProviderRefreshPlanner.Plan(
+            [Input("gemini", fetchMinutesAgo: 5, limitedUntil: Now.AddMilliseconds(500))], Options, Now);
+        // The Codex cooldown ends 0.2 s before its own due time, both within the tolerance
+        var cooling = ProviderRefreshPlanner.Plan(
+            [Input("codex", fetchMinutesAgo: 5 - 0.5 / 60, limitedUntil: Now.AddMilliseconds(300))], Options, Now);
+
+        limited[0].RateLimited.Should().BeTrue();
+        ProviderRefreshPlanner.SelectDue(limited, Now, dueTolerance: tolerance).Should().BeEmpty();
+        ProviderRefreshPlanner.SelectDue(limited, Now.AddMilliseconds(500), dueTolerance: tolerance).Should().ContainSingle();
+        cooling[0].RateLimited.Should().BeFalse();
+        ProviderRefreshPlanner.SelectDue(cooling, Now, dueTolerance: tolerance).Should().BeEmpty();
+        ProviderRefreshPlanner.SelectDue(cooling, Now.AddMilliseconds(300), dueTolerance: tolerance).Should().ContainSingle();
+    }
+
+    [TestMethod]
+    public void SelectDue_CoalesceWindow_LeavesOutAProviderInCooldown()
+    {
+        var plan = ProviderRefreshPlanner.Plan(
+            [Input("codex", fetchMinutesAgo: 5), Input("gemini", fetchMinutesAgo: 5 - 10 / 60.0, limitedUntil: Now.AddSeconds(5))],
+            Options, Now);
+
+        plan[1].RateLimited.Should().BeFalse();
+        ProviderRefreshPlanner.SelectDue(plan, Now).Select(p => p.Provider).Should().Equal("codex");
+    }
+
+    [TestMethod]
     public void IsActive_AtTheBoundary_IsInclusive()
     {
         ProviderRefreshPlanner.IsActive(Now - ProviderRefreshPlanner.ActiveWindow, Now).Should().BeTrue();

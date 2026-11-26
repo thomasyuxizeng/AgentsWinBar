@@ -57,13 +57,20 @@ public sealed record RefreshPlanOptions
 /// <param name="Interval">The whole interval for its current state (the time since its last fetch is not subtracted).</param>
 /// <param name="BackoffStep">0 at the base interval, 1 when doubled, 2 when tripled (idle providers only).</param>
 /// <param name="RateLimited">The due time was pushed back to the end of a 429 cooldown.</param>
+/// <param name="NotBeforeUtc">
+/// The earliest time the provider may be read at all, by any trigger: its last fetch plus its minimum interval (Claude's
+/// floor) or the end of a 429 cooldown, whichever is later. MinValue when nothing holds it back.
+/// </param>
+/// <param name="CooldownUntilUtc">The end of a 429 cooldown that still lasts at the time of the plan, if any.</param>
 public readonly record struct ProviderRefreshDue(
     string Provider,
     DateTime DueUtc,
     TimeSpan Interval,
     RefreshReason Reason,
     int BackoffStep = 0,
-    bool RateLimited = false);
+    bool RateLimited = false,
+    DateTime NotBeforeUtc = default,
+    DateTime? CooldownUntilUtc = null);
 
 /// <summary>
 /// Pure per-provider refresh schedule. A provider whose tool wrote local logs in the last <see cref="ActiveWindow"/>
@@ -139,6 +146,7 @@ public static class ProviderRefreshPlanner
         TimeSpan interval;
         RefreshReason reason;
         var step = 0;
+        var floor = TimeSpan.Zero;
         if (!options.ActivityRefreshEnabled)
         {
             // Today's schedule: one adaptive delay, stretched by battery saver.
@@ -148,26 +156,25 @@ public static class ProviderRefreshPlanner
         }
         else
         {
+            floor = MinimumInterval(provider);
             var idle = AdaptiveRefreshPolicy.GetDelay(baseInterval, streak, options.AdaptiveEnabled);
+            var nearLimit = IsNearLimit(input.HighestPercent, input.PaceWarning) && idle > NearLimitInterval;
             if (IsActive(input.LastActivityUtc, now))
             {
-                interval = ActiveInterval < baseInterval ? ActiveInterval : baseInterval;
+                interval = Finish(ActiveInterval < baseInterval ? ActiveInterval : baseInterval);
                 reason = RefreshReason.Active;
             }
-            else if (IsNearLimit(input.HighestPercent, input.PaceWarning) && idle > NearLimitInterval)
+            else if (nearLimit)
             {
-                interval = NearLimitInterval;
+                interval = Finish(NearLimitInterval);
                 reason = RefreshReason.NearLimit;
             }
             else
             {
-                interval = idle;
+                interval = Finish(idle);
                 reason = RefreshReason.Idle;
                 step = BackoffStep(streak, options.AdaptiveEnabled);
             }
-            if (options.BatterySaver) interval = AdaptiveRefreshPolicy.GetDelay(interval, 0, false, batterySaver: true);
-            var floor = MinimumInterval(provider);
-            if (interval < floor) interval = floor;
         }
         if (options.Locked && options.LockedInterval > interval)
         {
@@ -175,30 +182,61 @@ public static class ProviderRefreshPlanner
             reason = RefreshReason.Locked;
         }
 
-        if (input.LastFetchUtc is not { } lastFetch) return Limited(new(provider, now, interval, RefreshReason.First, step));
+        DateTime? cooldown = input.RateLimitedUntilUtc is { } limit && Utc(limit) > now ? Utc(limit) : null;
+        if (input.LastFetchUtc is not { } lastFetch)
+            return Limited(new(provider, now, interval, RefreshReason.First, step), DateTime.MinValue);
         // A fetch stamped ahead of now (the clock was set back) counts as just now, so the wait never exceeds one interval.
         var since = Utc(lastFetch) > now ? now : Utc(lastFetch);
-        return Limited(new(provider, Add(since, interval), interval, reason, step));
+        return Limited(new(provider, Add(since, interval), interval, reason, step), Add(since, floor));
 
-        ProviderRefreshDue Limited(ProviderRefreshDue due) =>
-            input.RateLimitedUntilUtc is { } until && Utc(until) > due.DueUtc
+        ProviderRefreshDue Limited(ProviderRefreshDue due, DateTime notBefore)
+        {
+            due = due with
+            {
+                NotBeforeUtc = cooldown is { } end && end > notBefore ? end : notBefore,
+                CooldownUntilUtc = cooldown
+            };
+            return input.RateLimitedUntilUtc is { } until && Utc(until) > due.DueUtc
                 ? due with { DueUtc = Utc(until), RateLimited = true }
                 : due;
+        }
+
+        // Battery saver stretches every interval; Claude never goes below its floor.
+        TimeSpan Finish(TimeSpan value)
+        {
+            if (options.BatterySaver) value = AdaptiveRefreshPolicy.GetDelay(value, 0, false, batterySaver: true);
+            return value < floor ? floor : value;
+        }
     }
 
     /// <summary>
+    /// Whether <paramref name="due"/>'s provider may be read at <paramref name="nowUtc"/> by any trigger (a window
+    /// opening, an unlock, a locked wake-up): its floor since its last fetch has passed and no 429 cooldown lasts.
+    /// </summary>
+    public static bool MayReadNow(ProviderRefreshDue due, DateTime nowUtc) => due.NotBeforeUtc <= Utc(nowUtc);
+
+    /// <summary>Whether a 429 cooldown of <paramref name="due"/>'s provider still lasts at <paramref name="nowUtc"/>.</summary>
+    public static bool InCooldown(ProviderRefreshDue due, DateTime nowUtc) =>
+        due.CooldownUntilUtc is { } until && until > Utc(nowUtc);
+
+    /// <summary>
     /// The providers to fetch now: every provider that is due, plus any due within <see cref="CoalesceWindow"/>
-    /// (never Claude early, its floor is strict). On a locked session every planned provider goes at once, as today.
-    /// Empty when nothing is due yet.
+    /// (never Claude early, its floor is strict). On a locked session every planned provider goes at once, as today,
+    /// except one still within its floor or its 429 cooldown. A provider due up to <paramref name="dueTolerance"/> after
+    /// now counts as due (a timer fires a moment early), but never while its 429 cooldown lasts: that ends at its own
+    /// time. Empty when nothing is due yet.
     /// </summary>
     public static IReadOnlyList<ProviderRefreshDue> SelectDue(IReadOnlyList<ProviderRefreshDue> plan, DateTime nowUtc,
-        bool locked = false)
+        bool locked = false, TimeSpan dueTolerance = default)
     {
         var now = Utc(nowUtc);
-        if (!plan.Any(p => p.DueUtc <= now)) return [];
-        if (locked) return plan.Where(p => !p.RateLimited || p.DueUtc <= now).ToArray();
-        return plan.Where(p => p.DueUtc <= now ||
-            !p.RateLimited && MinimumInterval(p.Provider) == TimeSpan.Zero && p.DueUtc - now <= CoalesceWindow).ToArray();
+        var soon = dueTolerance > TimeSpan.Zero ? Add(now, dueTolerance) : now;
+        if (!plan.Any(Due)) return [];
+        if (locked) return plan.Where(p => Due(p) || MayReadNow(p, now)).ToArray();
+        return plan.Where(p => Due(p) || MayReadNow(p, now) && MinimumInterval(p.Provider) == TimeSpan.Zero &&
+            p.DueUtc - soon <= CoalesceWindow).ToArray();
+
+        bool Due(ProviderRefreshDue p) => !InCooldown(p, now) && p.DueUtc <= soon;
     }
 
     /// <summary>The earliest due time in the plan, or null when the plan is empty.</summary>
