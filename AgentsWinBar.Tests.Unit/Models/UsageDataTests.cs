@@ -278,4 +278,16 @@ public class UsageDataTests
         extra.Title.Should().BeEmpty();
         extra.Window.Should().NotBeNull();
     }
+
+    [TestMethod]
+    public void UsageAnsweredFromHold_WhenSerialized_IsLeftOut()
+    {
+        var data = new UsageData { Provider = "claude", UsageAnsweredFromHold = true };
+
+        var json = System.Text.Json.JsonSerializer.Serialize(data, AppJsonSerializerContext.Default.UsageData);
+
+        json.Should().NotContain("AnsweredFromHold", "it describes one read and is never saved");
+        System.Text.Json.JsonSerializer.Deserialize(json, AppJsonSerializerContext.Default.UsageData)!
+            .UsageAnsweredFromHold.Should().BeFalse();
+    }
 }

@@ -115,6 +115,91 @@ public class CodexBarServiceNativeRoutingTests
     }
 
     [TestMethod]
+    public async Task GetUsageStreamAsync_StatusAnswersAfterTheCooldownEnded_StillTellsTheReadWasAnsweredFromTheHold()
+    {
+        _settings.SetProviders([new() { Id = "claude", IsEnabled = true }]);
+        var until = Now.AddSeconds(1);
+        var afterRead = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var asks = 0;
+        var native = new HeldNativeUsage(_ => Held("claude"), _ =>
+        {
+            DateTimeOffset? end = _clock.Now < until ? until : null;
+            // The second ask is the one right after the usage read
+            if (Interlocked.Increment(ref asks) == 2) afterRead.TrySetResult();
+            return end;
+        });
+        var incidents = new Mock<IProviderIncidentFetcher>();
+        incidents.Setup(f => f.GetIncidentAsync("claude", It.IsAny<CancellationToken>())).Returns(async (string _, CancellationToken ct) =>
+        {
+            // The status page answers after the cooldown has ended
+            await afterRead.Task.WaitAsync(ct);
+            _clock.Now = until.AddMilliseconds(800);
+            return (ProviderStatus?)null;
+        });
+        var service = new CodexBarService(new Mock<IWslService>(MockBehavior.Strict).Object, _cache, _settings,
+            new MockSampleDataLoader(), NullLogger<CodexBarService>.Instance, _clock, incidentFetcher: incidents.Object,
+            nativeUsage: native);
+
+        var result = (await service.GetAllUsageAsync()).Single();
+
+        result.UsageAnsweredFromHold.Should().BeTrue();
+        result.Session!.Percent.Should().Be(40);
+        service.GetRateLimitedUntil("claude").Should().BeNull("the cooldown has ended by the time the answer arrives");
+        ((ICacheService)_cache).GetLastKnown("claude")!.UsageAnsweredFromHold.Should().BeFalse("only that one result says so");
+    }
+
+    [TestMethod]
+    public async Task GetUsageStreamAsync_ReadMadeANewCooldown_IsNotAnsweredFromTheHold()
+    {
+        // A call that got a new 429 moves the cooldown's end
+        _settings.SetProviders([new() { Id = "claude", IsEnabled = true }]);
+        var until = Now.AddMinutes(5);
+        var native = new HeldNativeUsage(_ => { until = until.AddMinutes(10); return Held("claude"); }, _ => until);
+        var service = Create(new Mock<IWslService>(MockBehavior.Strict).Object, native);
+
+        (await service.GetAllUsageAsync()).Single().UsageAnsweredFromHold.Should().BeFalse();
+    }
+
+    [TestMethod]
+    public async Task GetUsageStreamAsync_CooldownEndedDuringTheRead_IsNotAnsweredFromTheHold()
+    {
+        // The reader called the endpoint and the call succeeded: no cooldown is left after the read
+        _settings.SetProviders([new() { Id = "claude", IsEnabled = true }]);
+        DateTimeOffset? until = Now.AddMinutes(5);
+        var native = new HeldNativeUsage(_ => { until = null; return Ok("claude", 40); }, _ => until);
+        var service = Create(new Mock<IWslService>(MockBehavior.Strict).Object, native);
+
+        (await service.GetAllUsageAsync()).Single().UsageAnsweredFromHold.Should().BeFalse();
+    }
+
+    [TestMethod]
+    public async Task GetUsageStreamAsync_NoCooldown_IsNotAnsweredFromTheHold()
+    {
+        var service = Create(new Mock<IWslService>(MockBehavior.Strict).Object, new HeldNativeUsage(p => Ok(p, 40), _ => null));
+
+        (await service.GetAllUsageAsync()).Should().OnlyContain(data => !data.UsageAnsweredFromHold);
+    }
+
+    /// <summary>What a reader in its 429 hold answers: its last good reading, cached, with the held failure's status.</summary>
+    private static NativeUsageResult Held(string provider) => NativeLastGood.FromCacheOr(Ok(provider, 40),
+        new NativeUsageResult { Provider = provider, Status = NativeUsageStatus.RateLimited, Message = "held" }, Now);
+
+    /// <summary>A typed native reader with a 429 cooldown, as <see cref="NativeUsageService"/> is.</summary>
+    private sealed class HeldNativeUsage(Func<string, NativeUsageResult> read, Func<string, DateTimeOffset?> until)
+        : INativeTypedUsageService, INativeRateLimitInfo
+    {
+        public async Task<UsageDataDto> FetchUsageDtoAsync(string provider, CancellationToken ct = default)
+        {
+            await Task.Yield();
+            return NativeUsageDtoMapper.ToDto(read(ProviderConstants.ValidateAndNormalize(provider)));
+        }
+        public Task<string> FetchUsageJsonAsync(string provider, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task<IReadOnlyDictionary<string, string>> FetchAllUsageJsonAsync(IReadOnlyList<string> providers,
+            CancellationToken ct = default) => throw new NotSupportedException();
+        public DateTimeOffset? RateLimitedUntil(string provider) => until(provider);
+    }
+
+    [TestMethod]
     public async Task GetAllUsageStreamAsync_AllProvidersNative_YieldsEveryProviderWithoutWsl()
     {
         var wsl = new Mock<IWslService>(MockBehavior.Strict);

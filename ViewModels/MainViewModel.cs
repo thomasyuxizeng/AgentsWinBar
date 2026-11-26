@@ -770,8 +770,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
         List<string>? costProviders = null;
         List<string>? attempted = null;
-        // Providers in a 429 cooldown when the read began, with its end: their client answers from its hold
+        // Providers in a 429 cooldown when the read began, with its end: one that gives no answer while it lasts was not tried
         Dictionary<string, DateTime>? held = null;
+        var perProviderSchedule = false;
         var stamped = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var refreshStarted = Stopwatch.GetTimestamp();
 
@@ -807,7 +808,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
             // Every provider that was due has been disabled meanwhile
             if (attempted.Count == 0) return;
             LogStart(log, attempted);
-            if (ActivityRefreshOn) held = CooldownsAt(attempted, DateTime.UtcNow);
+            perProviderSchedule = ActivityRefreshOn;
+            if (perProviderSchedule) held = CooldownsAt(attempted, DateTime.UtcNow);
 
             // The providers being read are loading again (existing data stays visible while it refreshes)
             for (int i = 0; i < Providers.Count; i++)
@@ -864,10 +866,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     };
                     TrackResetStamps(Providers[index]);
                 }
-                if (ProviderConstants.IsValidProvider(data.Provider) &&
-                    AnsweredFromHold(held, ProviderConstants.ValidateAndNormalize(data.Provider), resultAtUtc) is { } heldKey)
+                if (perProviderSchedule && data.UsageAnsweredFromHold && ProviderConstants.IsValidProvider(data.Provider))
                 {
-                    // No call was made: not a fetch, so the real attempt still comes when the cooldown ends
+                    // No call was made: not a fetch, so the real attempt still comes when the cooldown ends. The service
+                    // tells it right after the usage read, so an answer that arrives after the cooldown ended (the status
+                    // page answered late) still counts as held.
+                    var heldKey = ProviderConstants.ValidateAndNormalize(data.Provider);
                     stamped.Add(heldKey);
                     _logger.LogDebug("Usage of {Provider} was answered from its rate limit hold", heldKey);
                 }
@@ -1388,15 +1392,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
         return held;
     }
-
-    /// <summary>
-    /// <paramref name="provider"/> when its answer at <paramref name="resultAtUtc"/> came from its client's 429 hold
-    /// without a call: the cooldown that lasted when the read began still lasts, unchanged (a new 429 or a new sign-in
-    /// would have changed it). Null otherwise.
-    /// </summary>
-    private string? AnsweredFromHold(Dictionary<string, DateTime>? held, string provider, DateTime resultAtUtc) =>
-        held != null && held.TryGetValue(provider, out var until) && until > resultAtUtc && RateLimitedUntil(provider) == until
-            ? provider : null;
 
     /// <summary>The schedule log lines a refresh writes when it actually starts (one per provider it reads).</summary>
     /// <param name="Lines">Planned lines; null writes one line with <paramref name="Reason"/> for each provider read.</param>

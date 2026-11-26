@@ -753,6 +753,10 @@ public class CodexBarService : ICodexBarService
         UsageDataDto? typedDto = null;
         WslResult? result = null;
         string? error = null;
+        // A read that begins and ends inside one unchanged 429 cooldown was answered from the reader's hold, without a
+        // call. It is told right after the read, before the status wait: a cooldown that ends while the status page
+        // answers must not make the held answer look like a call.
+        var holdBefore = CooldownEnd(provider);
         using (var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct))
         {
             deadline.CancelAfter(UsageTimeout(provider));
@@ -775,13 +779,27 @@ public class CodexBarService : ICodexBarService
                 error = "Unexpected error occurred";
             }
         }
+        var answeredFromHold = error == null && holdBefore is { } before && CooldownEnd(provider) == before;
         var status = await AwaitPrefetchedStatusAsync(provider, prefetchTasks, ct);
         ct.ThrowIfCancellationRequested();
-        return typedDto != null
+        var data = typedDto != null
             ? InterpretNativeUsageDto(provider, typedDto, status, generation)
             : result != null
                 ? InterpretProviderResult(provider, result, status, generation)
                 : ProviderError(provider, error!, status, generation);
+        // Only on this result, after it was cached: a later read must never inherit it
+        return answeredFromHold ? data with { UsageAnsweredFromHold = true } : data;
+    }
+
+    /// <summary>The end of the provider's 429 cooldown (UTC), or null when none lasts or it cannot be told.</summary>
+    private DateTime? CooldownEnd(string provider)
+    {
+        try { return GetRateLimitedUntil(provider); }
+        catch (Exception ex)
+        {
+            _logger.LogDebug("Rate limit state unavailable for {Provider} ({Type})", provider, ex.GetType().Name);
+            return null;
+        }
     }
 
     private UsageData InterpretNativeUsageDto(string provider, UsageDataDto? dto, ProviderStatus? prefetchedStatus, long generation)

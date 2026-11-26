@@ -48,6 +48,10 @@ public record UsageData
     /// Not a sign-out: the app keeps the last reading and never asks the user to sign in for it.</summary>
     [System.Text.Json.Serialization.JsonIgnore]
     public bool SignInExpired { get; init; }
+    /// <summary>Session-only: the read began and ended inside one unchanged 429 cooldown, so the native reader answered
+    /// from its hold without calling the usage endpoint. Set on the result of a read only, never cached or saved.</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public bool UsageAnsweredFromHold { get; init; }
     /// <summary>Indicates the final provider command failed with shell exit code 127.</summary>
     public bool CommandNotFound { get; init; }
     public bool IsLoading { get; init; }

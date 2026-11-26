@@ -26,6 +26,8 @@ public class MainViewModelActivityRefreshTests
     private readonly ListLogger<RefreshScheduleLog> _scheduleLog = new();
     private readonly List<string[]> _subsetReads = [];
     private readonly HashSet<string> _failing = [];
+    // Providers whose reads the service reports as answered from the 429 hold
+    private readonly HashSet<string> _answeredFromHold = [];
     // While set, every read waits for it before answering (a refresh stays in flight)
     private TaskCompletionSource? _hold;
     private int _allReads;
@@ -83,7 +85,7 @@ public class MainViewModelActivityRefreshTests
                 ? new UsageData { Provider = provider, FetchedAt = DateTime.UtcNow, Error = "Usage fetch unavailable", UsageFetchOutcome = FetchOutcome.Failed }
                 : new UsageData
                 {
-                    Provider = provider, FetchedAt = DateTime.UtcNow,
+                    Provider = provider, FetchedAt = DateTime.UtcNow, UsageAnsweredFromHold = _answeredFromHold.Contains(provider),
                     Session = new UsageWindow { ReportedPercent = 10 + ++_reading, WindowMinutes = 300, ResetAt = DateTime.UtcNow.AddHours(2) }
                 };
         }
@@ -497,6 +499,7 @@ public class MainViewModelActivityRefreshTests
         await _viewModel.StartAsync();
         FetchedAgo("claude", TimeSpan.FromMinutes(1));
         _usage.Setup(s => s.GetRateLimitedUntil("claude")).Returns(DateTime.UtcNow.AddMinutes(5));
+        _answeredFromHold.Add("claude");
 
         await _viewModel.RefreshCommand.ExecuteAsync(null);
 
@@ -507,19 +510,56 @@ public class MainViewModelActivityRefreshTests
     }
 
     [TestMethod]
-    public async Task RefreshCommand_CooldownChangedDuringTheRead_CountsAsAFetch()
+    public async Task RefreshCommand_HeldAnswerArrivesAfterTheCooldownEnded_IsNotAFetch()
     {
-        // A new 429 (or a new sign-in) changes the cooldown: a call was made
+        // The reader answered from its hold, then the status page kept the answer back until the cooldown had ended
         await _viewModel.StartAsync();
         FetchedAgo("claude", TimeSpan.FromMinutes(1));
-        var until = DateTime.UtcNow.AddMinutes(5);
-        _usage.Setup(s => s.GetRateLimitedUntil("claude")).Returns(() => until);
+        var until = DateTime.UtcNow.AddMilliseconds(200);
+        _usage.Setup(s => s.GetRateLimitedUntil("claude")).Returns(() => until > DateTime.UtcNow ? until : null);
         _usage.Setup(s => s.GetAllUsageStreamAsync(It.IsAny<CancellationToken>()))
-            .Returns((CancellationToken ct) => { _allReads++; until = until.AddMinutes(10); return Read(["claude", "codex"], ct); });
+            .Returns((CancellationToken ct) => { _allReads++; return Late(ct); });
+        _answeredFromHold.Add("claude");
+
+        await _viewModel.RefreshCommand.ExecuteAsync(null);
+
+        _allReads.Should().Be(2);
+        Stamps("_lastFetchUtc")["claude"].Should().BeCloseTo(DateTime.UtcNow.AddMinutes(-1), TimeSpan.FromSeconds(5),
+            "no call was made, so the first real attempt after the cooldown is not pushed back");
+        Stamps("_lastFetchUtc")["codex"].Should().BeCloseTo(DateTime.UtcNow, TimeSpan.FromSeconds(5));
+
+        async IAsyncEnumerable<UsageData> Late([EnumeratorCancellation] CancellationToken ct = default)
+        {
+            await Task.Delay(400, ct);
+            await foreach (var data in Read(["claude", "codex"], ct)) yield return data;
+        }
+    }
+
+    [TestMethod]
+    public async Task RefreshCommand_AnswerNotFromTheHold_CountsAsAFetchDuringACooldown()
+    {
+        // The service saw the cooldown change during the read (a new 429 or a new sign-in): a call was made
+        await _viewModel.StartAsync();
+        FetchedAgo("claude", TimeSpan.FromMinutes(1));
+        _usage.Setup(s => s.GetRateLimitedUntil("claude")).Returns(DateTime.UtcNow.AddMinutes(5));
 
         await _viewModel.RefreshCommand.ExecuteAsync(null);
 
         Stamps("_lastFetchUtc")["claude"].Should().BeCloseTo(DateTime.UtcNow, TimeSpan.FromSeconds(5));
+    }
+
+    [TestMethod]
+    public async Task SettingOff_HeldAnswer_StillCountsAsAFetch()
+    {
+        _values.ActivityRefreshEnabled = false;
+        await _viewModel.StartAsync();
+        FetchedAgo("claude", TimeSpan.FromMinutes(1));
+        _usage.Setup(s => s.GetRateLimitedUntil("claude")).Returns(DateTime.UtcNow.AddMinutes(5));
+        _answeredFromHold.Add("claude");
+
+        await _viewModel.RefreshCommand.ExecuteAsync(null);
+
+        Stamps("_lastFetchUtc")["claude"].Should().BeCloseTo(DateTime.UtcNow, TimeSpan.FromSeconds(5), "as before the setting existed");
     }
 
     [TestMethod]
