@@ -1,6 +1,9 @@
 using System.Net;
 using AwesomeAssertions;
+using AgentsWinBar.Services;
 using AgentsWinBar.Services.Native;
+using AgentsWinBar.Tests.Unit.Mocks;
+using Microsoft.Extensions.Logging.Abstractions;
 using static AgentsWinBar.Tests.Unit.Services.Native.NativeTestSupport;
 
 namespace AgentsWinBar.Tests.Unit.Services.Native;
@@ -179,6 +182,38 @@ public class CodexNativeClientTests
         clock.Now = Now.AddSeconds(seconds);
         (await client.FetchAsync()).Status.Should().Be(NativeUsageStatus.Ok);
         handler.Requests.Should().HaveCount(3);
+    }
+
+    [TestMethod]
+    public async Task RateLimitHold_ReadThroughCodexBarService_MarksOnlyTheHeldReadAsAnsweredFromTheHold()
+    {
+        var clock = new TestClock(Now);
+        var limited = false;
+        var (client, handler) = Create(_ =>
+        {
+            if (!limited) return Json(UsageJson);
+            var response = new HttpResponseMessage(HttpStatusCode.TooManyRequests);
+            response.Headers.TryAddWithoutValidation("Retry-After", "600");
+            return response;
+        }, clock);
+        var settings = new MockSettingsService();
+        settings.SetProviders([new() { Id = "codex", IsEnabled = true }]);
+        settings.Settings.Normalize();
+        var service = new CodexBarService(new Moq.Mock<IWslService>(Moq.MockBehavior.Strict).Object, new MockCacheService(),
+            settings, new MockSampleDataLoader(), NullLogger<CodexBarService>.Instance, clock,
+            nativeUsage: new NativeUsageService([client], NullLogger<NativeUsageService>.Instance));
+
+        var good = (await service.GetAllUsageAsync()).Single();
+        limited = true;
+        var rateLimited = (await service.GetAllUsageAsync()).Single();
+        clock.Now = Now.AddMinutes(1);
+        var held = (await service.GetAllUsageAsync()).Single();
+
+        handler.Requests.Should().HaveCount(2, "the third read was answered from the hold");
+        good.UsageAnsweredFromHold.Should().BeFalse();
+        rateLimited.UsageAnsweredFromHold.Should().BeFalse("the 429 came from a call");
+        held.UsageAnsweredFromHold.Should().BeTrue();
+        held.HasError.Should().BeFalse();
     }
 
     [TestMethod]

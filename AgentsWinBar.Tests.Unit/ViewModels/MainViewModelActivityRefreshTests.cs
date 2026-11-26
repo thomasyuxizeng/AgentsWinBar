@@ -371,6 +371,7 @@ public class MainViewModelActivityRefreshTests
     [DataRow(NativeUsageStatus.Failed)]
     [DataRow(NativeUsageStatus.SignInExpired)]
     [DataRow(NativeUsageStatus.RateLimited)]
+    [DataRow(NativeUsageStatus.Ok)] // From a reading cache
     public async Task RefreshIfStaleAsync_LastReadAnsweredWithTheLastGoodReading_TriesItAgain(NativeUsageStatus failure)
     {
         // Through the real CodexBarService and native last-good store: after a good read, a failed one is answered with
@@ -723,8 +724,10 @@ public class MainViewModelActivityRefreshTests
     private sealed class ScriptedNativeClient(string provider) : INativeUsageClient
     {
         private readonly NativeLastGoodStore _lastGood = new();
+        private NativeUsageResult? _fresh;
         private int _reads;
         public string ProviderId => provider;
+        /// <summary>The failure to answer with; <see cref="NativeUsageStatus.Ok"/> answers from a reading cache, as Claude's does.</summary>
         public NativeUsageStatus? Failure { get; set; }
         public int Reads => Volatile.Read(ref _reads);
 
@@ -732,9 +735,11 @@ public class MainViewModelActivityRefreshTests
         {
             var count = Interlocked.Increment(ref _reads);
             var now = DateTimeOffset.UtcNow;
+            if (Failure == NativeUsageStatus.Ok && _fresh is { } fresh)
+                return Task.FromResult(fresh with { Cached = true, CacheUpdatedAt = fresh.UpdatedAt, NetworkCalls = 0 });
             var result = Failure is { } failure
                 ? new NativeUsageResult { Provider = provider, Status = failure, Message = "synthetic failure", NetworkCalls = 1 }
-                : new NativeUsageResult
+                : _fresh = new NativeUsageResult
                 {
                     Provider = provider, Source = "oauth", Status = NativeUsageStatus.Ok, NetworkCalls = 1, UpdatedAt = now,
                     Primary = new(10 + count, 300, now.AddHours(2), "in 2h")
