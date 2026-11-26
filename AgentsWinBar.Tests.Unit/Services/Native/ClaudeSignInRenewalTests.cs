@@ -70,9 +70,7 @@ public class ClaudeSignInRenewalTests
     }
 
     [TestMethod]
-    [DataRow(true)]
-    [DataRow(false)]
-    public async Task FetchAsync_WhenOnlyNpmShimIsOnAbsolutePath_ExplainsManualRenewal(bool enabled)
+    public async Task FetchAsync_WhenOnlyNpmShimIsOnAbsolutePath_ExplainsManualRenewal()
     {
         var folder = Directory.CreateTempSubdirectory("fake-npm-");
         try
@@ -82,7 +80,7 @@ public class ClaudeSignInRenewalTests
             var runner = new ClaudeAuthStatusRunner([], () => $"relative;\"{folder.FullName}\"", () => folder.FullName);
             var handler = new RecordingHandler(_ => Json(UsageJson));
             var client = new ClaudeNativeClient(handler.Client(), new ListLogger<ClaudeNativeClient>(),
-                new ClaudeNativeOptions { CredentialsPath = _path, RenewExpiredSignIn = () => enabled },
+                new ClaudeNativeOptions { CredentialsPath = _path, RenewExpiredSignIn = () => true },
                 new TestClock(Now), renewer: runner);
 
             var result = await client.FetchAsync();
@@ -90,6 +88,37 @@ public class ClaudeSignInRenewalTests
             result.Status.Should().Be(NativeUsageStatus.SignInExpired);
             result.Message.Should().Contain("cannot be renewed in the background")
                 .And.Contain("Open Claude Code on Windows to renew it.");
+            handler.Requests.Should().BeEmpty();
+        }
+        finally
+        {
+            File.Delete(Path.Combine(folder.FullName, "claude.cmd"));
+            folder.Delete();
+        }
+    }
+
+    [TestMethod]
+    public async Task FetchAsync_WhenRenewalIsOffAndOnlyNpmShimIsOnPath_SaysExpiredWithoutProbingPath()
+    {
+        var folder = Directory.CreateTempSubdirectory("fake-npm-");
+        try
+        {
+            // Empty file used solely for existence checks.
+            File.WriteAllText(Path.Combine(folder.FullName, "claude.cmd"), string.Empty);
+            var pathReads = 0;
+            var runner = new ClaudeAuthStatusRunner([], () => { pathReads++; return $"\"{folder.FullName}\""; }, () => folder.FullName);
+            var handler = new RecordingHandler(_ => Json(UsageJson));
+            var client = new ClaudeNativeClient(handler.Client(), new ListLogger<ClaudeNativeClient>(),
+                new ClaudeNativeOptions { CredentialsPath = _path, RenewExpiredSignIn = () => false },
+                new TestClock(Now), renewer: runner);
+
+            var result = await client.FetchAsync();
+
+            result.Status.Should().Be(NativeUsageStatus.SignInExpired);
+            result.Message.Should().StartWith("Claude sign-in expired ")
+                .And.EndWith(" ago. Open Claude Code on Windows to renew it.")
+                .And.NotContain("cannot be renewed in the background");
+            pathReads.Should().Be(0, "PATH is not searched when background renewal is off");
             handler.Requests.Should().BeEmpty();
         }
         finally

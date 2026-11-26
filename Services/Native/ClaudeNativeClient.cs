@@ -187,7 +187,8 @@ public sealed class ClaudeNativeClient : INativeUsageClient
             {
                 var ago = now - expiresAt;
                 _logger.LogInformation("Claude access token expired {Ago} ago; not renewed", NativeParse.Ago(ago));
-                var manualRenewal = _renewer?.HasNpmShimOnly() == true
+                // Only worth saying (and probing PATH for) when background renewal is on.
+                var manualRenewal = RenewalEnabled() && _renewer!.HasNpmShimOnly()
                     ? "This Claude Code install cannot be renewed in the background. "
                     : string.Empty;
                 return FromCacheOr(lastGood, Fail(NativeUsageStatus.SignInExpired, null,
@@ -258,9 +259,12 @@ public sealed class ClaudeNativeClient : INativeUsageClient
     }
 
     private Task<ClaudeCredentials?> TryRenewSignInAsync(DateTimeOffset expiry, CancellationToken ct) =>
-        _renewer != null && !_options.ShutdownToken.IsCancellationRequested && _options.RenewExpiredSignIn?.Invoke() == true
+        !_options.ShutdownToken.IsCancellationRequested && RenewalEnabled()
             ? _renewal.TryRenewAsync(expiry, RenewAndReadAsync, ct)
             : Task.FromResult<ClaudeCredentials?>(null);
+
+    /// <summary>Whether the app may have Claude Code renew an expired sign-in (a renewer exists and the setting is on).</summary>
+    private bool RenewalEnabled() => _renewer != null && _options.RenewExpiredSignIn?.Invoke() == true;
 
     private async Task<ClaudeCredentials?> RenewAndReadAsync()
     {
