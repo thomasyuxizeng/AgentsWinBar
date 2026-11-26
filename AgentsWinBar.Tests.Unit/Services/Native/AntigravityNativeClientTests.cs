@@ -311,7 +311,8 @@ public class AntigravityNativeClientTests
                 {"bucketId": "3p-5h", "window": "5h", "remainingFraction": 0.5, "resetTime": "2026-11-25T09:00:00Z"}
               ]},
               {"displayName": "Gemini models", "buckets": [
-                {"bucketId": "gemini-5h", "window": "5h", "remainingFraction": 0.2, "resetTime": "2026-11-25T09:38:00Z"}
+                {"bucketId": "gemini-5h", "window": "5h", "remainingFraction": 0.2, "resetTime": "2026-11-25T09:38:00Z"},
+                {"bucketId": "gemini-weekly", "window": "weekly", "remainingFraction": 0.7}
               ]}
             ]}
             """;
@@ -420,6 +421,28 @@ public class AntigravityNativeClientTests
     }
 
     [TestMethod]
+    [DataRow("{}", NativeUsageStatus.Failed)]
+    [DataRow(LoadCodeAssistJson, NativeUsageStatus.Ok)]
+    [DataRow("""{"currentTier":{"id":"free-tier"}}""", NativeUsageStatus.Ok)]
+    public async Task FetchAsync_WhenModelsShowFullQuota_RequiresOnboardingEvidence(string codeAssist, NativeUsageStatus expected)
+    {
+        var (client, handler) = Create(Blob(Now.AddMinutes(30)), request => request.RequestUri!.AbsolutePath switch
+        {
+            "/v1internal:loadCodeAssist" => Json(codeAssist),
+            "/v1internal:fetchAvailableModels" => Json("""
+                {"models":{"gemini-pro":{"quotaInfo":{"remainingFraction":1}}}}
+                """),
+            _ => new HttpResponseMessage(HttpStatusCode.NotFound)
+        });
+
+        var result = await client.FetchAsync();
+
+        handler.Requests.Should().HaveCount(3);
+        result.Status.Should().Be(expected);
+        if (expected == NativeUsageStatus.Ok) result.Primary!.UsedPercent.Should().Be(0);
+    }
+
+    [TestMethod]
     public async Task FetchAsync_WhenLoadCodeAssistUnauthorized_ReturnsUnauthorized()
     {
         var (client, _) = Create(Blob(Now.AddMinutes(30)), _ => new HttpResponseMessage(HttpStatusCode.Unauthorized));
@@ -446,8 +469,29 @@ public class AntigravityNativeClientTests
         result.Primary!.UsedPercent.Should().BeApproximately(10, 1e-9, "the versioned Gemini group is Gemini family by title");
         result.Primary.WindowMinutes.Should().Be(0);
         result.Secondary!.UsedPercent.Should().BeApproximately(50, 1e-9);
-        result.ExtraWindows.Select(e => e.Title).Should().Equal("Claude and GPT 5-hour", "Gemini 4 Argon Daily");
+        result.ExtraWindows.Select(e => e.Title).Should().Equal("Gemini 4 Argon Daily");
         result.LoginMethod.Should().Be("Paid");
+    }
+
+    [TestMethod]
+    public void MapQuotaSummary_WhenGeminiWeeklyIsAbsent_PrefersOrdinaryThirdPartyBucketWithoutDuplicatingIt()
+    {
+        var summary = System.Text.Json.JsonSerializer.Deserialize("""
+            {"groups":[
+              {"displayName":"Gemini models","buckets":[{"bucketId":"gemini-5h","remainingFraction":0.8}]},
+              {"displayName":"Claude and GPT models","buckets":[
+                {"bucketId":"3p-daily","remainingFraction":0.1},
+                {"bucketId":"3p-weekly","remainingFraction":0.7},
+                {"bucketId":"3p-5h","remainingFraction":0.9}
+              ]}
+            ]}
+            """, NativeJsonContext.Default.QuotaSummaryResponse)!;
+
+        var result = AntigravityNativeClient.MapQuotaSummary(summary, null, Now)!;
+
+        result.Secondary!.UsedPercent.Should().BeApproximately(30, 1e-9);
+        result.ExtraWindows.Select(e => e.Id).Should().BeEquivalentTo(
+            "antigravity-quota-summary-3p-daily", "antigravity-quota-summary-3p-5h");
     }
 
     [TestMethod]

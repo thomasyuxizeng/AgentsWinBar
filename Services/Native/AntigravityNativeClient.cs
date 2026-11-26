@@ -223,7 +223,8 @@ public sealed class AntigravityNativeClient : INativeUsageClient
             var (modelsStatus, models, modelsRetryAfter) = await PostAsync(_options.AvailableModelsUri, accessToken, body,
                 _options.RequestTimeout, NativeJsonContext.Default.AvailableModelsResponse, ct).ConfigureAwait(false);
             if (modelsStatus != HttpStatusCode.OK || models == null) return HttpFailure(modelsStatus, calls, "fetchAvailableModels", modelsRetryAfter);
-            return (MapAvailableModels(models, plan, _clock.GetUtcNow())
+            var onboarded = codeAssist.ProjectId != null || NativeParse.NonEmpty(codeAssist.CurrentTier?.Id) != null;
+            return (MapAvailableModels(models, plan, _clock.GetUtcNow(), onboarded)
                     ?? Fail(NativeUsageStatus.Failed, 200, "Antigravity reported no usable quota.")) with { NetworkCalls = calls };
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
@@ -321,14 +322,14 @@ public sealed class AntigravityNativeClient : INativeUsageClient
         foreach (var n in named) byId[n.Id] = n;
 
         // Upstream's representatives, then the shim's override with Gemini's own 5-hour and weekly windows.
-        var primary = byId.GetValueOrDefault(GeminiFiveHourId)?.Window ?? Representative(known, "gemini");
-        var secondary = byId.GetValueOrDefault(GeminiWeeklyId)?.Window ?? Representative(known, "claude-gpt");
-        primary = WithResetsIn(primary, now);
-        secondary = WithResetsIn(secondary, now);
+        var primary = byId.GetValueOrDefault(GeminiFiveHourId)?.Window ?? Representative(known, "gemini")?.Window;
+        var secondary = byId.GetValueOrDefault(GeminiWeeklyId);
+        if (secondary?.Window == null) secondary = Representative(known, "claude-gpt");
 
         var extraIds = new HashSet<string>(StringComparer.Ordinal);
         var extras = known
-            .Where(n => !n.Id.StartsWith(WindowIdPrefix + "gemini", StringComparison.Ordinal) && extraIds.Add(n.Id))
+            .Where(n => n.Id != secondary?.Id &&
+                !n.Id.StartsWith(WindowIdPrefix + "gemini", StringComparison.Ordinal) && extraIds.Add(n.Id))
             .Select(n => new NativeExtraWindow(n.Id, n.Id switch
             {
                 WindowIdPrefix + "3p-5h" => "Claude and GPT 5-hour",
@@ -345,8 +346,8 @@ public sealed class AntigravityNativeClient : INativeUsageClient
             Source = "remote",
             Status = NativeUsageStatus.Ok,
             LoginMethod = plan,
-            Primary = primary,
-            Secondary = secondary,
+            Primary = WithResetsIn(primary, now),
+            Secondary = WithResetsIn(secondary?.Window, now),
             ExtraWindows = extras,
             UpdatedAt = now
         };
@@ -356,7 +357,8 @@ public sealed class AntigravityNativeClient : INativeUsageClient
     /// Simplified fallback when the quota summary is unavailable: the most used Gemini model as primary and the most
     /// used Claude/GPT model as secondary. Upstream's model normalization is richer; see the spike report.
     /// </summary>
-    public static NativeUsageResult? MapAvailableModels(AvailableModelsResponse response, string? plan, DateTimeOffset now)
+    public static NativeUsageResult? MapAvailableModels(AvailableModelsResponse response, string? plan, DateTimeOffset now,
+        bool onboarded = false)
     {
         var quotas = (response.Models ?? [])
             .Where(m => m.Value?.QuotaInfo?.RemainingFraction is { } f && double.IsFinite(f))
@@ -364,8 +366,8 @@ public sealed class AntigravityNativeClient : INativeUsageClient
                         !m.Key.Contains("autocomplete", StringComparison.OrdinalIgnoreCase) && !m.Key.Contains("tab_", StringComparison.OrdinalIgnoreCase))
             .Select(m => (Id: m.Key, Fraction: m.Value!.QuotaInfo!.RemainingFraction!.Value, Reset: ParseResetTime(m.Value.QuotaInfo.ResetTime)))
             .ToList();
-        // All models at 100% is the placeholder answer for unonboarded clients; upstream verifies it, we refuse it.
-        if (quotas.Count == 0 || quotas.All(q => q.Fraction >= 0.999)) return null;
+        // An unonboarded client can receive placeholder quotas at 100% remaining.
+        if (quotas.Count == 0 || (!onboarded && quotas.All(q => q.Fraction >= 0.999))) return null;
         NativeUsageWindow? Pick(Func<string, bool> family) => quotas.Where(q => family(q.Id.ToLowerInvariant()))
             .OrderBy(q => q.Fraction).Select(q => new NativeUsageWindow(100 - Math.Clamp(q.Fraction * 100, 0, 100), 0, q.Reset, null))
             .FirstOrDefault();
@@ -382,10 +384,13 @@ public sealed class AntigravityNativeClient : INativeUsageClient
     private static NativeUsageWindow? WithResetsIn(NativeUsageWindow? window, DateTimeOffset now) =>
         window?.ResetsAt is { } reset ? window with { ResetDescription = NativeParse.ResetsInDescription(reset, now) } : window;
 
-    private static NativeUsageWindow? Representative(List<NamedWindow> known, string family)
+    private static NamedWindow? Representative(List<NamedWindow> known, string family)
     {
         var members = known.Where(n => Family(n) == family).ToList();
-        var ordinaryIds = SessionAliases.Append("weekly").Select(a => WindowIdPrefix + "gemini-" + a).ToHashSet(StringComparer.Ordinal);
+        // Prefer the family's standard session and weekly buckets over specialized quotas.
+        string[] prefixes = family == "gemini" ? ["gemini-"] : ["3p-", "third-party-"];
+        var ordinaryIds = prefixes.SelectMany(prefix => SessionAliases.Append("weekly")
+            .Select(alias => WindowIdPrefix + prefix + alias)).ToHashSet(StringComparer.Ordinal);
         var ordinary = members.Where(n =>
         {
             var id = n.Id.ToLowerInvariant().Replace('_', '-');
@@ -395,7 +400,7 @@ public sealed class AntigravityNativeClient : INativeUsageClient
         return (ordinary.Count > 0 ? ordinary : members)
             .OrderByDescending(n => n.Window!.UsedPercent)
             .ThenBy(n => n.Title, StringComparer.OrdinalIgnoreCase)
-            .FirstOrDefault()?.Window;
+            .FirstOrDefault();
     }
 
     private static string? Family(NamedWindow window)
