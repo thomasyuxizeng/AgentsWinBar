@@ -94,6 +94,32 @@ public class AppSettingsTests
     }
 
     [TestMethod]
+    public void Deserialize_ActivityRefreshOptionMissing_DefaultsToTrue()
+    {
+        AppSettings.GetDefaults().ActivityRefreshEnabled.Should().BeTrue();
+        new AppSettings().ActivityRefreshEnabled.Should().BeTrue();
+        var settings = System.Text.Json.JsonSerializer.Deserialize(
+            """{"refreshIntervalSeconds":300,"adaptiveRefreshEnabled":false}""", AppJsonSerializerContext.Default.AppSettings)!;
+        settings.Normalize();
+        settings.ActivityRefreshEnabled.Should().BeTrue();
+        settings.RefreshIntervalSeconds.Should().Be(300);
+    }
+
+    [TestMethod]
+    [DataRow(true)]
+    [DataRow(false)]
+    public void Serialize_ActivityRefreshOption_RoundTrips(bool enabled)
+    {
+        var settings = AppSettings.GetDefaults();
+        settings.ActivityRefreshEnabled = enabled;
+        var json = System.Text.Json.JsonSerializer.Serialize(settings, AppJsonSerializerContext.Default.AppSettings);
+        json.Should().Contain("\"activityRefreshEnabled\": " + enabled.ToString().ToLowerInvariant());
+        var restored = System.Text.Json.JsonSerializer.Deserialize(json, AppJsonSerializerContext.Default.AppSettings)!;
+        restored.Normalize();
+        restored.ActivityRefreshEnabled.Should().Be(enabled);
+    }
+
+    [TestMethod]
     public void Normalize_NullSectionsAndInvalidNumbers_RecoversDefaults()
     {
         var settings = System.Text.Json.JsonSerializer.Deserialize(

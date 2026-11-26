@@ -68,6 +68,11 @@ public class AppSettings
     public List<ProviderConfig> Providers { get; set; } = [];
     public int RefreshIntervalSeconds { get; set; } = 120;
     public bool AdaptiveRefreshEnabled { get; set; } = true;
+    /// <summary>
+    /// Refresh a provider faster while its tool writes local logs (the "Refresh faster while a tool is in use" setting).
+    /// Off keeps one schedule for all providers, as before.
+    /// </summary>
+    public bool ActivityRefreshEnabled { get; set; } = true;
     public int LockedRefreshIntervalMinutes { get; set; } = 30;
     public bool StartWithWindows { get; set; } = false;
     public bool StartMinimized { get; set; } = false;
@@ -230,6 +235,7 @@ public class AppSettings
         Providers = ProviderConfig.GetDefaults().ToList(),
         RefreshIntervalSeconds = 120,
         AdaptiveRefreshEnabled = true,
+        ActivityRefreshEnabled = true,
         LockedRefreshIntervalMinutes = 30,
         StartWithWindows = false,
         StartMinimized = true,
