@@ -380,12 +380,15 @@ public sealed partial class DashboardPage : Page
                 _graphToggles[provider.Id] = toggle;
             }
             var shown = !_hiddenGraphs.Contains(provider.Id);
-            if (!string.Equals(toggle.Content as string, provider.DisplayName, StringComparison.Ordinal) || toggle.IsChecked != shown)
+            var tip = shown ? $"Hide {provider.DisplayName} graphs" : $"Show {provider.DisplayName} graphs";
+            // The tooltip is compared too: a click flips IsChecked before this runs, so it alone cannot tell the tip is stale
+            if (!string.Equals(toggle.Content as string, provider.DisplayName, StringComparison.Ordinal) || toggle.IsChecked != shown ||
+                !string.Equals(ToolTipService.GetToolTip(toggle) as string, tip, StringComparison.Ordinal))
             {
                 toggle.Content = provider.DisplayName;
                 if (toggle.IsChecked != shown) toggle.IsChecked = shown;
                 Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(toggle, $"{provider.DisplayName} graphs");
-                ToolTipService.SetToolTip(toggle, shown ? $"Hide {provider.DisplayName} graphs" : $"Show {provider.DisplayName} graphs");
+                ToolTipService.SetToolTip(toggle, tip);
             }
 
             if (shown)
