@@ -318,8 +318,8 @@ function Test-WindowsSignIn([string] $Provider) {
         }
         default { return 'missing' }
     }
-    # Presence only, by design: the installer never opens a credential file. A signed-out file still reads as present
-    # here; the app then shows its Signed out banner with a Sign in button.
+    # Presence only, by design: this check never opens the file. A signed-out file still reads as present here; the
+    # app then shows its Signed out banner with a Sign in button.
     if ((Test-Path -LiteralPath $path -PathType Leaf -ErrorAction SilentlyContinue) -and
         (Get-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue).Length -gt 0) { return 'present' }
     return 'missing'
