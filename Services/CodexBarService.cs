@@ -1361,7 +1361,7 @@ public class CodexBarService : ICodexBarService
                 if (_settingsService?.Settings?.AlertsEnabled == true)
                 {
                     // Reserve notification synchronously; persist the reservation before showing it.
-                    // Save failures are logged by the store; the in-memory reservation still prevents repeats.
+                    // The in-memory reservation still prevents repeats if the save fails.
                     _earlyResetStore.MarkNotified(earlyReset);
                     var durable = _earlyResetStore.FlushAsync();
                     lock (_earlyResetTaskGate)
@@ -1369,9 +1369,17 @@ public class CodexBarService : ICodexBarService
                         var preceding = _earlyResetNotifications;
                         _earlyResetNotifications = Task.Run(async () =>
                         {
+                            // Every queued operation contains its own failure before the next one runs.
                             await preceding.ConfigureAwait(false);
-                            await durable.ConfigureAwait(false);
-                            ShowEarlyResetNotification(earlyReset, nowUtc);
+                            try
+                            {
+                                await durable.ConfigureAwait(false);
+                                ShowEarlyResetNotification(earlyReset, nowUtc);
+                            }
+                            catch (Exception ex)
+                            {
+                                _logger.LogWarning(ex, "Failed to save early reset notification for {Provider}", earlyReset.Provider);
+                            }
                         });
                     }
                 }
