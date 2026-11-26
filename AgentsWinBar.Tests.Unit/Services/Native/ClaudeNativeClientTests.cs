@@ -169,6 +169,60 @@ public class ClaudeNativeClientTests
     }
 
     [TestMethod]
+    public async Task FetchAsync_When429_LogsProviderAndCooldownAndReportsItsEnd()
+    {
+        var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.TooManyRequests));
+        var logger = new ListLogger<ClaudeNativeClient>();
+        var clock = new TestClock(Now);
+        var client = new ClaudeNativeClient(handler.Client(), logger,
+            new ClaudeNativeOptions { CredentialsPath = _path, DisplayTimeZone = TimeZoneInfo.Utc }, clock);
+
+        client.RateLimitedUntil.Should().BeNull();
+        await client.FetchAsync();
+
+        logger.Messages.Should().Contain(m => m.StartsWith("claude usage endpoint answered 429; cooling down 600 s until "));
+        logger.Messages.Should().NotContain(m => m.Contains(_path, StringComparison.OrdinalIgnoreCase));
+        client.RateLimitedUntil.Should().Be(Now.AddMinutes(10));
+        clock.Now = Now.AddMinutes(10);
+        client.RateLimitedUntil.Should().BeNull();
+    }
+
+    [TestMethod]
+    public async Task FetchAsync_CacheLifetimeSource_IsAskedOnEveryRead()
+    {
+        var lifetime = TimeSpan.FromSeconds(90);
+        var (client, handler, clock) = Create(options: new ClaudeNativeOptions { CacheLifetimeSource = () => lifetime });
+
+        await client.FetchAsync();
+        clock.Now = Now.AddSeconds(80);
+        (await client.FetchAsync()).Cached.Should().BeTrue();
+        clock.Now = Now.AddSeconds(100);
+        (await client.FetchAsync()).Cached.Should().BeFalse();
+        lifetime = TimeSpan.FromMinutes(10);
+        clock.Now = Now.AddMinutes(5);
+        (await client.FetchAsync()).Cached.Should().BeTrue();
+
+        handler.Requests.Should().HaveCount(2);
+    }
+
+    [TestMethod]
+    public async Task FetchAsync_WhenScheduleIsOn_DueRefreshAtClaudeFloorAlwaysCalls()
+    {
+        var (client, handler, clock) = Create(options: NativeUsageService.CreateClaudeOptions() with
+        {
+            CacheLifetimeSource = () => NativeUsageService.ClaudeCacheLifetimeFor(true)
+        });
+
+        await client.FetchAsync();
+        clock.Now = Now + AgentsWinBar.Helpers.ProviderRefreshPlanner.ClaudeActiveFloor;
+        var due = await client.FetchAsync();
+
+        due.Cached.Should().BeFalse();
+        handler.Requests.Should().HaveCount(2);
+        NativeUsageService.ClaudeCacheLifetimeFor(false).Should().Be(NativeUsageService.ClaudeCacheLifetime);
+    }
+
+    [TestMethod]
     public async Task FetchAsync_When429WithLongRetryAfter_HonoursRetryAfter()
     {
         var (client, _, _) = Create(_ =>

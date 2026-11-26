@@ -21,6 +21,19 @@ public class NativeRateLimitHoldTests
     };
 
     [TestMethod]
+    public void Until_WhileHeld_ReturnsTheEndAndNullAfterwards()
+    {
+        var hold = new NativeRateLimitHold();
+        hold.Until(Now).Should().BeNull();
+        hold.Remember(RateLimited(), null, Now, FirstCredential);
+
+        hold.Until(Now.AddMinutes(9)).Should().Be(Now.AddMinutes(10));
+        hold.Until(Now.AddMinutes(10)).Should().BeNull();
+        // The clock set back an hour keeps the hold's length, not its end time.
+        hold.Until(Now.AddHours(-1)).Should().Be(Now.AddHours(-1).AddMinutes(10));
+    }
+
+    [TestMethod]
     public void Get_WhenSameCredentialIsHeld_ReturnsTheHeldFailure()
     {
         var hold = new NativeRateLimitHold();

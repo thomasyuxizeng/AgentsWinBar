@@ -66,3 +66,10 @@ public interface INativeUsageClient
     /// <summary>Reads usage. Never throws for provider, network or sign-in failures; returns a status instead.</summary>
     Task<NativeUsageResult> FetchAsync(CancellationToken ct = default);
 }
+
+/// <summary>A reader that holds back after an HTTP 429 and can say until when (for the refresh schedule).</summary>
+public interface IRateLimitedUsageClient
+{
+    /// <summary>The end of the current 429 cooldown, or null when the reader would call now.</summary>
+    DateTimeOffset? RateLimitedUntil { get; }
+}

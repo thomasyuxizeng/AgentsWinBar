@@ -162,7 +162,9 @@ public class CodexNativeClientTests
         }, clock);
         var good = await client.FetchAsync();
         limited = true;
+        client.RateLimitedUntil.Should().BeNull();
         var rateLimited = await client.FetchAsync();
+        client.RateLimitedUntil.Should().Be(Now.AddSeconds(seconds));
 
         clock.Now = Now.AddSeconds(seconds - 1);
         limited = false;

@@ -3,6 +3,7 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Text.Json;
 using System.Text.Json.Serialization.Metadata;
+using Microsoft.Extensions.Logging;
 
 namespace AgentsWinBar.Services.Native;
 
@@ -65,6 +66,17 @@ public static class NativeHttp
     /// <see cref="MaxRetryAfter"/> (including absurd or infinite values) is cut to it, and NaN or negative values are ignored.
     /// </summary>
     public static DateTimeOffset? RetryAfter(HttpResponseMessage response, DateTimeOffset now)
+        => RetryAfterCore(response, now);
+
+    /// <summary>One line per HTTP 429: the provider and how long the reader now holds back (no token, no response text).</summary>
+    public static void LogRateLimited(ILogger logger, string provider, DateTimeOffset limitedAt, DateTimeOffset? until)
+    {
+        var seconds = until is { } end ? Math.Max(0, (end - limitedAt).TotalSeconds) : 0;
+        logger.LogWarning("{Provider} usage endpoint answered 429; cooling down {CooldownSeconds:0} s until {Until:o}",
+            provider, seconds, until ?? limitedAt);
+    }
+
+    private static DateTimeOffset? RetryAfterCore(HttpResponseMessage response, DateTimeOffset now)
     {
         var header = response.Headers.RetryAfter;
         if (header?.Delta is { } delta && delta >= TimeSpan.Zero) return Bounded(delta, now);

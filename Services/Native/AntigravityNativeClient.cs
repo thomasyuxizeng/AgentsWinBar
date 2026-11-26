@@ -45,7 +45,7 @@ public sealed record AntigravityNativeOptions
 /// refreshes the token itself: an expired access token has agy renew its own sign-in (<c>agy models</c>, when the
 /// RenewGeminiSignIn setting allows) and yields <see cref="NativeUsageStatus.SignInExpired"/> when that does not help. An expired sign-in and transient failures (network, timeout, 5xx, 429) serve the last good reading as cached.
 /// </summary>
-public sealed class AntigravityNativeClient : INativeUsageClient
+public sealed class AntigravityNativeClient : INativeUsageClient, IRateLimitedUsageClient
 {
     public static readonly Uri LoadCodeAssistUri = new("https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist");
     public static readonly Uri QuotaSummaryUri = new("https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary");
@@ -88,6 +88,8 @@ public sealed class AntigravityNativeClient : INativeUsageClient
 
     /// <summary>"gemini": Antigravity quota is shown as the app's Gemini provider.</summary>
     public string ProviderId { get; }
+
+    public DateTimeOffset? RateLimitedUntil => _rateLimit.Until(_clock.GetUtcNow());
 
     public async Task<NativeUsageResult> FetchAsync(CancellationToken ct = default) =>
         _lastGood.Apply(await FetchCoreAsync(ct).ConfigureAwait(false), _clock.GetUtcNow());
@@ -261,9 +263,14 @@ public sealed class AntigravityNativeClient : INativeUsageClient
         var code = (int)status;
         _logger.LogWarning("Antigravity {Step} answered {Status}", step, code);
         if (status == HttpStatusCode.TooManyRequests)
-            return _rateLimit.Remember(
+        {
+            var limitedAt = _clock.GetUtcNow();
+            var limited = _rateLimit.Remember(
                 Fail(NativeUsageStatus.RateLimited, code, "Antigravity quota is rate limited right now.") with { NetworkCalls = calls },
-                retryAfter, _clock.GetUtcNow(), accessToken);
+                retryAfter, limitedAt, accessToken);
+            NativeHttp.LogRateLimited(_logger, ProviderId, limitedAt, limited.RetryAfter);
+            return limited;
+        }
         return (status switch
         {
             HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden => Fail(NativeUsageStatus.Unauthorized, code,

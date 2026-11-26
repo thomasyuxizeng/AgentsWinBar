@@ -1,4 +1,5 @@
 using System.Text.Json;
+using AgentsWinBar.Helpers;
 using AgentsWinBar.Models;
 using Microsoft.Extensions.Logging;
 
@@ -24,11 +25,18 @@ public interface INativeTypedUsageService : INativeUsageService
     Task<UsageDataDto> FetchUsageDtoAsync(string provider, CancellationToken ct = default);
 }
 
+/// <summary>Until when a native reader holds back after an HTTP 429 (a hint for the refresh schedule).</summary>
+public interface INativeRateLimitInfo
+{
+    /// <summary>The end of the provider's current 429 cooldown, or null when it would be called now.</summary>
+    DateTimeOffset? RateLimitedUntil(string provider);
+}
+
 /// <summary>
 /// Owns the shared <see cref="HttpClient"/> from <see cref="NativeHttp"/> and the three native readers
 /// ("gemini" is read through the Antigravity client).
 /// </summary>
-public sealed class NativeUsageService : INativeTypedUsageService, IDisposable
+public sealed class NativeUsageService : INativeTypedUsageService, INativeRateLimitInfo, IDisposable
 {
     /// <summary>
     /// Claude's last good reading is served for this long. At a 300 s refresh interval the rate-limited endpoint
@@ -48,12 +56,21 @@ public sealed class NativeUsageService : INativeTypedUsageService, IDisposable
     /// RenewGeminiSignIn setting). <paramref name="testOverrides"/> (<see cref="NativeTestOverrides.Current"/>, always
     /// null in a Release build) points the readers at a fake profile, credential and server.
     /// </summary>
+    /// <param name="activityRefresh">
+    /// Asked on every Claude read: true while the "Refresh faster while a tool is in use" setting is on, so Claude's
+    /// cache follows the per-provider schedule (<see cref="ClaudeCacheLifetimeFor"/>). Null keeps the fixed lifetime.
+    /// </param>
     public NativeUsageService(ILoggerFactory loggerFactory, Func<bool>? renewClaudeSignIn = null,
-        NativeTestOverrides? testOverrides = null, Func<bool>? renewGeminiSignIn = null, CancellationToken shutdownToken = default)
+        NativeTestOverrides? testOverrides = null, Func<bool>? renewGeminiSignIn = null, CancellationToken shutdownToken = default,
+        Func<bool>? activityRefresh = null)
     {
         _logger = loggerFactory.CreateLogger<NativeUsageService>();
         _ownedHttp = testOverrides?.CreateHttpClient() ?? NativeHttp.CreateClient();
-        var claude = CreateClaudeOptions() with { RenewExpiredSignIn = renewClaudeSignIn, ShutdownToken = shutdownToken };
+        var claude = CreateClaudeOptions() with
+        {
+            RenewExpiredSignIn = renewClaudeSignIn, ShutdownToken = shutdownToken,
+            CacheLifetimeSource = activityRefresh is null ? null : () => ClaudeCacheLifetimeFor(activityRefresh())
+        };
         var codex = new CodexNativeOptions();
         var antigravity = new AntigravityNativeOptions { RenewExpiredSignIn = renewGeminiSignIn, ShutdownToken = shutdownToken };
         if (testOverrides is not null)
@@ -78,6 +95,20 @@ public sealed class NativeUsageService : INativeTypedUsageService, IDisposable
     {
         _logger = logger;
         _clients = Index(clients);
+    }
+
+    /// <summary>
+    /// How long Claude's last reading is served: just under Claude's floor while the activity schedule is on (the
+    /// schedule decides when to call, and the cache never turns a due refresh into a no-op), else the fixed lifetime.
+    /// </summary>
+    public static TimeSpan ClaudeCacheLifetimeFor(bool activityRefresh) =>
+        activityRefresh ? ProviderRefreshPlanner.ClaudeCacheLifetime : ClaudeCacheLifetime;
+
+    public DateTimeOffset? RateLimitedUntil(string provider)
+    {
+        if (string.IsNullOrWhiteSpace(provider) || !ProviderConstants.IsValidProvider(provider.Trim())) return null;
+        return _clients.TryGetValue(ProviderConstants.ValidateAndNormalize(provider), out var client) &&
+            client is IRateLimitedUsageClient limited ? limited.RateLimitedUntil : null;
     }
 
     /// <summary>Options the app constructs the Claude reader with.</summary>

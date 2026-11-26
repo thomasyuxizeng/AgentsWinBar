@@ -41,7 +41,7 @@ public sealed record CodexNativeOptions
 /// Never refreshes or writes the token: an expired token yields <see cref="NativeUsageStatus.SignInExpired"/>. An
 /// expired sign-in and transient failures (network, timeout, 5xx, 429) serve the last good reading as cached.
 /// </summary>
-public sealed class CodexNativeClient : INativeUsageClient
+public sealed class CodexNativeClient : INativeUsageClient, IRateLimitedUsageClient
 {
     public static readonly Uri UsageUri = new("https://chatgpt.com/backend-api/wham/usage");
 
@@ -62,6 +62,8 @@ public sealed class CodexNativeClient : INativeUsageClient
     }
 
     public string ProviderId { get; }
+
+    public DateTimeOffset? RateLimitedUntil => _rateLimit.Until(_clock.GetUtcNow());
 
     public async Task<NativeUsageResult> FetchAsync(CancellationToken ct = default) =>
         _lastGood.Apply(await FetchCoreAsync(ct).ConfigureAwait(false), _clock.GetUtcNow());
@@ -112,14 +114,16 @@ public sealed class CodexNativeClient : INativeUsageClient
                     ? Fail(NativeUsageStatus.Failed, status, "Codex usage response had no usage windows.") with { NetworkCalls = 1 }
                     : result with { NetworkCalls = 1 };
             }
-            _logger.LogWarning("Codex usage endpoint answered {Status}", status);
             if (response.StatusCode == HttpStatusCode.TooManyRequests)
             {
                 var limitedAt = _clock.GetUtcNow();
-                return _rateLimit.Remember(
+                var limited = _rateLimit.Remember(
                     Fail(NativeUsageStatus.RateLimited, status, "Codex usage is rate limited right now.") with { NetworkCalls = 1 },
                     NativeHttp.RetryAfter(response, limitedAt), limitedAt, credentials.AccessToken);
+                NativeHttp.LogRateLimited(_logger, ProviderId, limitedAt, limited.RetryAfter);
+                return limited;
             }
+            _logger.LogWarning("Codex usage endpoint answered {Status}", status);
             return (response.StatusCode switch
             {
                 HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden => Fail(NativeUsageStatus.Unauthorized, status,

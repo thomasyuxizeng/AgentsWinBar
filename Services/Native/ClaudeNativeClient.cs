@@ -25,6 +25,11 @@ public sealed record ClaudeNativeOptions
     public TimeSpan RequestTimeout { get; init; } = TimeSpan.FromSeconds(30);
     /// <summary>Serve the last good reading for this long without calling (the WSL shim uses 10 minutes).</summary>
     public TimeSpan CacheLifetime { get; init; } = TimeSpan.FromMinutes(10);
+    /// <summary>
+    /// When set, asked on every read instead of <see cref="CacheLifetime"/>: the app's refresh schedule decides how
+    /// long a reading is served (shorter while Claude Code is in use).
+    /// </summary>
+    public Func<TimeSpan>? CacheLifetimeSource { get; init; }
     /// <summary>After a 429, do not call again for at least this long (or Retry-After, whichever is later).</summary>
     public TimeSpan RateLimitCooldown { get; init; } = TimeSpan.FromMinutes(10);
     /// <summary>Use the last-good cache for fresh-cache hits. Failures still fall back to it.</summary>
@@ -59,7 +64,7 @@ public sealed record ClaudeNativeOptions
 /// unless renewal is on: then Claude Code is asked for its status (<c>claude auth status --json</c>), which makes it
 /// renew and rewrite its own sign-in, and the read goes ahead with the renewed token.
 /// </summary>
-public sealed class ClaudeNativeClient : INativeUsageClient
+public sealed class ClaudeNativeClient : INativeUsageClient, IRateLimitedUsageClient
 {
     public static readonly Uri UsageUri = new("https://api.anthropic.com/api/oauth/usage");
     public const string BetaHeader = "oauth-2025-04-20";
@@ -111,6 +116,25 @@ public sealed class ClaudeNativeClient : INativeUsageClient
     /// <summary>When the client will call the endpoint again after a 429 (MinValue when not blocked).</summary>
     public DateTimeOffset BlockedUntil { get { lock (_gate) return _blockedUntil; } }
 
+    public DateTimeOffset? RateLimitedUntil
+    {
+        get
+        {
+            var now = _clock.GetUtcNow();
+            lock (_gate)
+            {
+                if (_blockedUntil <= now) return null;
+                // The clock stepped back since the cooldown began: keep its length, as a read would.
+                if (now < _blockedSince)
+                {
+                    var length = _blockedUntil - _blockedSince;
+                    return now + (length > MaxPersistedCooldown ? MaxPersistedCooldown : length);
+                }
+                return _blockedUntil;
+            }
+        }
+    }
+
     public async Task<NativeUsageResult> FetchAsync(CancellationToken ct = default)
     {
         if (TryAnswerWithoutCalling() is { } quick) return quick;
@@ -144,7 +168,8 @@ public sealed class ClaudeNativeClient : INativeUsageClient
 
         // 1. Fresh cache: answer immediately (the shim's 10-minute cache), unless a window has reset since or the
         // clock has stepped back past the reading.
-        if (_options.UseFreshCache && lastGood?.UpdatedAt is { } updated && now >= updated && now - updated < _options.CacheLifetime &&
+        var cacheLifetime = _options.CacheLifetimeSource?.Invoke() ?? _options.CacheLifetime;
+        if (_options.UseFreshCache && lastGood?.UpdatedAt is { } updated && now >= updated && now - updated < cacheLifetime &&
             !NativeLastGood.HasPastReset(lastGood, now))
             return lastGood with { Cached = true, CacheUpdatedAt = updated, NetworkCalls = 0 };
 
@@ -231,7 +256,8 @@ public sealed class ClaudeNativeClient : INativeUsageClient
                     if (candidate > _blockedUntil) { _blockedUntil = candidate; _blockedSince = callNow; }
                     blockedUntil = _blockedUntil;
                 }
-                _logger.LogWarning("Claude usage endpoint answered 429; cooling down until {Until:o}", blockedUntil);
+                _logger.LogWarning("{Provider} usage endpoint answered 429; cooling down {CooldownSeconds:0} s until {Until:o}",
+                    ProviderId, Math.Max(0, (blockedUntil - callNow).TotalSeconds), blockedUntil);
                 if (_cooldownStore != null) await _cooldownStore.SaveAsync(blockedUntil, CancellationToken.None).ConfigureAwait(false);
                 return FromCacheOr(lastGood, Fail(NativeUsageStatus.RateLimited, status,
                     "Claude usage is rate limited right now; retrying shortly.") with { RetryAfter = blockedUntil, NetworkCalls = 1 });

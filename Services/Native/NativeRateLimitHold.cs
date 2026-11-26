@@ -19,6 +19,21 @@ internal sealed class NativeRateLimitHold
     /// <summary>The held failure while a hold set for <paramref name="credential"/> lasts; otherwise null.</summary>
     public NativeUsageResult? Get(DateTimeOffset now, string credential) => Get(now, Hash(credential));
 
+    /// <summary>
+    /// The end of the hold at <paramref name="now"/>, whatever credential set it (a schedule hint only: a request with
+    /// another credential still ends the hold), or null when none lasts.
+    /// </summary>
+    public DateTimeOffset? Until(DateTimeOffset now)
+    {
+        lock (_gate)
+        {
+            if (_failure?.RetryAfter is not { } until) return null;
+            // The clock was set back since the hold began: keep its length, as Get does.
+            if (now < _started) until = now + (until - _started);
+            return now < until ? until : null;
+        }
+    }
+
     public NativeUsageResult Remember(NativeUsageResult failure, DateTimeOffset? retryAfter, DateTimeOffset now, string credential)
     {
         var until = retryAfter ?? now + DefaultDelay;
