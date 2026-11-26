@@ -285,10 +285,9 @@ public sealed partial class MainWindow : Window
     {
         try
         {
+            // The dashboard window is kept (hidden) after its first close, so this reuses it
             var dashboard = App.Windows.OfType<DashboardAppWindow>().FirstOrDefault() ?? new DashboardAppWindow();
-            if (dashboard.AppWindow.Presenter is OverlappedPresenter { State: OverlappedPresenterState.Minimized } presenter)
-                presenter.Restore();
-            dashboard.Activate();
+            dashboard.ShowDashboard();
             // The flyout is a quick glance; once the full dashboard is open it only gets in the way
             HideWindow();
         }

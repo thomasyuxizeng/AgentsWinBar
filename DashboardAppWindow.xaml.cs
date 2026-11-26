@@ -19,13 +19,25 @@ namespace AgentsWinBar;
 /// The full-window dashboard: resizable, maximizable, full-screen capable, showing everything the app knows
 /// at once. It listens to the main view model for new results and redraws from a fresh snapshot.
 /// </summary>
+/// <remarks>
+/// The window is created on the first open and then kept for the life of the app: closing it ends the session (the
+/// page, its subscriptions, timers and cost demand are released) and hides the window, and the next open starts a
+/// new session on the same window. Destroying the window instead leaked about 30 GDI objects and 40 handles per
+/// open (mostly the WinUI custom title bar), so a long-running app that opened the dashboard a few hundred times
+/// would reach the 10,000 GDI object limit.
+/// </remarks>
 public sealed partial class DashboardAppWindow : Window
 {
     private readonly MainViewModel _viewModel;
     private readonly IDashboardService _dashboardService;
     private readonly ISettingsService _settings;
     private readonly ILogger<DashboardAppWindow> _logger;
-    private DashboardPage? _page = new();
+    /// <summary>The page of the current session; null while the window is closed (hidden) or destroyed.</summary>
+    private DashboardPage? _page;
+    /// <summary>True from the open that started a session until the close that ended it.</summary>
+    private bool _sessionActive;
+    /// <summary>Set by a close: the next open leaves full screen and always on top.</summary>
+    private bool _resetPresenterOnShow;
     private readonly DispatcherQueueTimer _redrawTimer;
     private readonly DispatcherQueueTimer _clockTimer;
     private MicaController? _micaController;
@@ -60,17 +72,9 @@ public sealed partial class DashboardAppWindow : Window
         SizeAndCenter(1360, 880);
         SetupMicaBackdrop();
 
-        PageHost.Content = _page;
         App.Windows.Add(this);
         App.ApplyTheme();
         UpdateWindowIcon();
-
-        _page.RefreshRequested += OnRefreshRequested;
-        _page.SettingsRequested += OnSettingsRequested;
-        _page.TopmostChanged += OnTopmostChanged;
-        _page.FullScreenChanged += OnFullScreenChanged;
-        _page.GraphVisibilityChanged += OnGraphVisibilityChanged;
-        _settings.SettingsChanged += OnSettingsChanged;
 
         // Redraw shortly after new data arrives (several providers can land in quick succession).
         // Every 30 seconds: take a fresh snapshot (the page skips whatever did not change and just refreshes the
@@ -84,11 +88,7 @@ public sealed partial class DashboardAppWindow : Window
         _clockTimer.Interval = TimeSpan.FromSeconds(30);
         _clockTimer.IsRepeating = true;
         _clockTimer.Tick += OnTimerTick;
-        _clockTimer.Start();
 
-        _viewModel.Providers.CollectionChanged += OnProvidersChanged;
-        _viewModel.PropertyChanged += OnViewModelPropertyChanged;
-        _viewModel.ApiCreditsRefreshed += OnApiCreditsRefreshed;
         Closed += OnClosed;
         Activated += OnActivated;
         _appWindow.Changed += OnAppWindowChanged;
@@ -108,12 +108,92 @@ public sealed partial class DashboardAppWindow : Window
             root.KeyboardAccelerators.Add(escape);
         }
 
+        BeginSession();
+    }
+
+    /// <summary>
+    /// Opens the dashboard: starts a session on this window if it was closed (hidden), then shows and activates it.
+    /// </summary>
+    public void ShowDashboard()
+    {
+        if (_closed) return;
+        BeginSession();
+        if (_resetPresenterOnShow)
+        {
+            // Reopened after a close: start in a normal window, as the new page shows its full-screen and on-top
+            // toggles off
+            _resetPresenterOnShow = false;
+            try { ResetPresenter(); }
+            catch (Exception ex) { _logger.LogError(ex, "Dashboard presenter reset failed"); }
+        }
+        if (_appWindow.Presenter is OverlappedPresenter { State: OverlappedPresenterState.Minimized } presenter)
+            presenter.Restore();
+        Activate();
+    }
+
+    /// <summary>Creates the page and subscribes to the data it shows. Does nothing while a session is open.</summary>
+    private void BeginSession()
+    {
+        if (_closed || _sessionActive) return;
+        _sessionActive = true;
+        _page = new DashboardPage();
+        PageHost.Content = _page;
+        _page.RefreshRequested += OnRefreshRequested;
+        _page.SettingsRequested += OnSettingsRequested;
+        _page.TopmostChanged += OnTopmostChanged;
+        _page.FullScreenChanged += OnFullScreenChanged;
+        _page.GraphVisibilityChanged += OnGraphVisibilityChanged;
+        _settings.SettingsChanged += OnSettingsChanged;
+        _viewModel.Providers.CollectionChanged += OnProvidersChanged;
+        _viewModel.PropertyChanged += OnViewModelPropertyChanged;
+        _viewModel.ApiCreditsRefreshed += OnApiCreditsRefreshed;
+
+        _clockTimer.Start();
         _page.SetBusy(_viewModel.IsLoading);
         Redraw();
-        _costDemand = _viewModel.AcquireCostDemand();
+        _costDemand ??= _viewModel.AcquireCostDemand();
 
         // CLI version and similar facts come from WSL; fetch them in the background and redraw when known.
         RefreshDiagnosticsAsync().SafeFireAndForget(onError: ex => _logger.LogDebug(ex, "Dashboard diagnostics refresh failed"));
+    }
+
+    /// <summary>
+    /// Releases everything a session holds: timers, cost demand, visibility, subscriptions and the page. The window
+    /// itself stays. Safe to call when no session is open.
+    /// </summary>
+    private void EndSession()
+    {
+        if (!_sessionActive) return;
+        _sessionActive = false;
+        try { _redrawTimer.Stop(); _clockTimer.Stop(); }
+        catch (Exception ex) { _logger.LogError(ex, "Dashboard timer cleanup failed"); }
+        _visibility?.Dispose();
+        _visibility = null;
+        _costDemand?.Dispose();
+        _costDemand = null;
+        _viewModel.Providers.CollectionChanged -= OnProvidersChanged;
+        _viewModel.PropertyChanged -= OnViewModelPropertyChanged;
+        _viewModel.ApiCreditsRefreshed -= OnApiCreditsRefreshed;
+        _settings.SettingsChanged -= OnSettingsChanged;
+        var page = _page;
+        _page = null;
+        if (page != null)
+        {
+            page.RefreshRequested -= OnRefreshRequested;
+            page.SettingsRequested -= OnSettingsRequested;
+            page.TopmostChanged -= OnTopmostChanged;
+            page.FullScreenChanged -= OnFullScreenChanged;
+            page.GraphVisibilityChanged -= OnGraphVisibilityChanged;
+            try { page.Cleanup(); }
+            catch (Exception ex)
+            {
+                // app.log keeps only the exception type; the crash log keeps its stack frames, which name the failing step
+                _logger.LogError(ex, "Dashboard page cleanup failed");
+                App.LogHandled("Dashboard page cleanup", ex);
+            }
+        }
+        try { PageHost.Content = null; }
+        catch (Exception ex) { _logger.LogError(ex, "Dashboard page host detach failed"); }
     }
 
     [System.Runtime.InteropServices.DllImport("user32.dll")]
@@ -236,7 +316,8 @@ public sealed partial class DashboardAppWindow : Window
     {
         var visible = _appWindow.IsVisible && _appWindow.Presenter is not
             OverlappedPresenter { State: OverlappedPresenterState.Minimized };
-        if (visible && _visibility == null)
+        // Only a session holds the visibility, cost demand and clock: a closed (hidden) dashboard holds nothing
+        if (visible && _visibility == null && _sessionActive)
         {
             _visibility = _viewModel.AcquireDashboardVisibility();
             // Back from the taskbar: take up the cost demand and the 30-second clock again, and catch the display up
@@ -329,7 +410,36 @@ public sealed partial class DashboardAppWindow : Window
         _appWindow.SetIcon($"Assets/{(light ? "app-dark.ico" : "app.ico")}");
     }
 
-    private void OnAppWindowClosing(AppWindow sender, AppWindowClosingEventArgs args) => Teardown();
+    /// <summary>
+    /// The user closed the dashboard (title bar, Alt+F4, taskbar): end the session and hide the window instead of
+    /// destroying it (see the class remarks). A programmatic Close at exit does not raise this and tears down fully.
+    /// </summary>
+    private void OnAppWindowClosing(AppWindow sender, AppWindowClosingEventArgs args)
+    {
+        if (_closed) return;
+        args.Cancel = true;
+        try { EndSession(); }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Dashboard session cleanup failed");
+            App.LogHandled("Dashboard session cleanup", ex);
+        }
+        finally
+        {
+            _appWindow.Hide();
+            // Not now: changing the presenter of a hidden window shows it again (an empty dashboard after closing
+            // from full screen). The next open resets it.
+            _resetPresenterOnShow = true;
+        }
+    }
+
+    private void ResetPresenter()
+    {
+        _topmost = false;
+        if (_appWindow.Presenter.Kind == AppWindowPresenterKind.FullScreen)
+            _appWindow.SetPresenter(AppWindowPresenterKind.Default);
+        if (_appWindow.Presenter is OverlappedPresenter presenter) presenter.IsAlwaysOnTop = false;
+    }
 
     private void OnClosed(object sender, WindowEventArgs args) => Teardown();
 
@@ -340,42 +450,16 @@ public sealed partial class DashboardAppWindow : Window
         _appWindow.Closing -= OnAppWindowClosing;
         Closed -= OnClosed;
         Activated -= OnActivated;
-        _costDemand?.Dispose();
-        _costDemand = null;
-        _visibility?.Dispose();
-        _visibility = null;
+        try { EndSession(); }
+        catch (Exception ex) { _logger.LogError(ex, "Dashboard session cleanup failed"); }
         _redrawTimer.Tick -= OnTimerTick;
         _clockTimer.Tick -= OnTimerTick;
-        if (_page != null)
-        {
-            _page.RefreshRequested -= OnRefreshRequested;
-            _page.SettingsRequested -= OnSettingsRequested;
-            _page.TopmostChanged -= OnTopmostChanged;
-            _page.FullScreenChanged -= OnFullScreenChanged;
-            _page.GraphVisibilityChanged -= OnGraphVisibilityChanged;
-        }
-        _settings.SettingsChanged -= OnSettingsChanged;
         foreach (var accelerator in _accelerators)
         {
             accelerator.Invoked -= OnF11Invoked;
             accelerator.Invoked -= OnEscapeInvoked;
         }
         _accelerators.Clear();
-        try { _redrawTimer.Stop(); _clockTimer.Stop(); }
-        catch (Exception ex) { _logger.LogError(ex, "Dashboard timer cleanup failed"); }
-        _viewModel.Providers.CollectionChanged -= OnProvidersChanged;
-        _viewModel.PropertyChanged -= OnViewModelPropertyChanged;
-        _viewModel.ApiCreditsRefreshed -= OnApiCreditsRefreshed;
-        try { _page?.Cleanup(); }
-        catch (Exception ex)
-        {
-            // app.log keeps only the exception type; the crash log keeps its stack frames, which name the failing step
-            _logger.LogError(ex, "Dashboard page cleanup failed");
-            App.LogHandled("Dashboard page cleanup", ex);
-        }
-        _page = null;
-        try { PageHost.Content = null; }
-        catch (Exception ex) { _logger.LogError(ex, "Dashboard page host detach failed"); }
         _appWindow.Changed -= OnAppWindowChanged;
         if (Content is FrameworkElement root)
         {
