@@ -33,6 +33,7 @@
     <Compile Include="..\Helpers\AsyncHelper.cs" Link="Linked\AsyncHelper.cs" />
     <Compile Include="..\Helpers\AuthFailureDetector.cs" Link="Linked\AuthFailureDetector.cs" />
     <Compile Include="..\Helpers\AdaptiveRefreshPolicy.cs" Link="Linked\AdaptiveRefreshPolicy.cs" />
+    <Compile Include="..\Helpers\ProviderRefreshPlanner.cs" Link="Linked\ProviderRefreshPlanner.cs" />
     <Compile Include="..\Helpers\ResetRefreshScheduler.cs" Link="Linked\ResetRefreshScheduler.cs" />
     <Compile Include="..\Helpers\ResetRefreshOutcome.cs" Link="Linked\ResetRefreshOutcome.cs" />
     <Compile Include="..\Helpers\ResetAnimationGate.cs" Link="Linked\ResetAnimationGate.cs" />
