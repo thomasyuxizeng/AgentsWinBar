@@ -24,7 +24,9 @@ public static class CostFormatter
     public static string Summary(CostData data) =>
         $"Est. today {Money(data.TodayCostUSD, data.CurrencyCode)}, {Tokens(data.TodayTokens)} tokens · 30 days {Money(data.Last30DaysCostUSD, data.CurrencyCode)}, {Tokens(data.Last30DaysTokens)} tokens";
 
+    // The card's two lines stay short enough for one line each at caption size; the card's tooltip (Summary) keeps
+    // "Est." and says the figures are list-price estimates.
     public static string CardSummary(CostData data) =>
-        $"Est. today {Money(data.TodayCostUSD, data.CurrencyCode)} · {Tokens(data.TodayTokens)} tokens\n" +
-        $"Est. 30 days {Money(data.Last30DaysCostUSD, data.CurrencyCode)} · {Tokens(data.Last30DaysTokens)} tokens";
+        $"Today {Money(data.TodayCostUSD, data.CurrencyCode)} · {Tokens(data.TodayTokens)} tokens\n" +
+        $"30 days {Money(data.Last30DaysCostUSD, data.CurrencyCode)} · {Tokens(data.Last30DaysTokens)} tokens";
 }

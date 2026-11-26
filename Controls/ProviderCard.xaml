@@ -254,7 +254,7 @@
                            Foreground="{ThemeResource SystemFillColorCautionBrush}"/>
             </StackPanel>
             <TextBlock x:Name="CostSummary" Visibility="Collapsed"
-                       FontSize="10" TextWrapping="Wrap"
+                       FontSize="12" TextWrapping="Wrap"
                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
         </StackPanel>
 
