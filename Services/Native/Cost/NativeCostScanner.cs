@@ -93,7 +93,7 @@ public sealed partial class NativeCostScanner
         {
             changedPaths = RelevantPaths(roots, changedPaths);
             if (changedPaths.Count == 0 &&
-                ReadReportsFromDisk(reportProviders, pricing, asOf, historyDays, zone, cancellationToken) is { } skippedReports)
+                TryReadReportsFromDisk(reportProviders, pricing, asOf, historyDays, zone, cancellationToken) is { } skippedReports)
             {
                 return (new(0, 0, 0, 0, 0, 0, 0), skippedReports);
             }
@@ -166,16 +166,16 @@ public sealed partial class NativeCostScanner
     {
         cancellationToken.ThrowIfCancellationRequested();
         Directory.CreateDirectory(Path.GetDirectoryName(_indexPath)!);
-        using var database = OpenForUpdate(cancellationToken, out var indexRebuilt);
+        using var database = OpenForUpdate(cancellationToken, out var indexRebuilt, out var indexCreated);
         using var index = new CostIndex(database);
         database.Execute("BEGIN IMMEDIATE");
         index.SetZone(zone, cancellationToken);
         database.Execute("COMMIT");
-        if (indexRebuilt && changedPaths is not null)
+        if (changedPaths is not null && (indexRebuilt || (indexCreated && changedPaths.Count == 0)))
         {
             // A new index holds nothing: filling it from the changed files alone would report far too little
             // while looking fresh. List every log instead.
-            _logger.LogInformation("The native cost index was rebuilt during an update of changed files; listing every log");
+            _logger.LogInformation("The native cost index is new during an incremental update; listing every log");
             changedPaths = null;
         }
 
@@ -467,7 +467,7 @@ public sealed partial class NativeCostScanner
         return BuildReport(provider, rows, pricing, today, historyDays);
     }
 
-    private IReadOnlyDictionary<CostProvider, CostDataDto>? ReadReportsFromDisk(
+    private IReadOnlyDictionary<CostProvider, CostDataDto>? TryReadReportsFromDisk(
         IReadOnlyList<CostProvider>? reportProviders,
         CostPricing? pricing,
         DateTimeOffset? asOf,
@@ -475,31 +475,24 @@ public sealed partial class NativeCostScanner
         TimeZoneInfo zone,
         CancellationToken cancellationToken)
     {
-        if (File.Exists(_indexPath))
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!File.Exists(_indexPath))
+            return reportProviders is { Count: > 0 } ? null : new Dictionary<CostProvider, CostDataDto>();
+        try
         {
             using var database = new CostIndexDatabase(_indexPath, readOnly: true);
             database.Execute("PRAGMA busy_timeout=5000; BEGIN");
-            if (CostIndex.ReadVersion(database) == CostIndex.SchemaVersion)
-            {
-                using var index = new CostIndex(database);
-                if (index.ReadZone() != zone.Id) return null;
-                return ReadReportsFromIndex(index, reportProviders, pricing, asOf, historyDays, zone, cancellationToken);
-            }
+            if (CostIndex.ReadVersion(database) != CostIndex.SchemaVersion || !ValidateIndex(database)) return null;
+            using var index = new CostIndex(database);
+            if (index.ReadZone() != zone.Id) return null;
+            return ReadReportsFromIndex(index, reportProviders, pricing, asOf, historyDays, zone, cancellationToken);
         }
-
-        if (reportProviders is null || reportProviders.Count == 0)
-            return new Dictionary<CostProvider, CostDataDto>();
-
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(historyDays);
-        pricing ??= new CostPricing();
-        var today = CostIndex.LocalDay(asOf ?? DateTimeOffset.UtcNow, zone);
-        var reports = new Dictionary<CostProvider, CostDataDto>(reportProviders.Count);
-        foreach (var provider in reportProviders)
+        catch (CostIndexDatabase.SqliteException ex) when (ex.InvalidIndex)
         {
-            if (!reports.ContainsKey(provider))
-                reports[provider] = BuildReport(provider, [], pricing, today, historyDays);
+            // Recheck under the writer mutex before replacing an unreadable index.
+            Volatile.Write(ref _fullCheckDue, 1);
+            return null;
         }
-        return reports;
     }
 
     private static IReadOnlyDictionary<CostProvider, CostDataDto> ReadReportsFromIndex(
@@ -627,9 +620,11 @@ public sealed partial class NativeCostScanner
     }
 
     /// <param name="rebuilt">True when an existing index failed validation and was replaced by an empty one.</param>
-    private CostIndexDatabase OpenForUpdate(CancellationToken token, out bool rebuilt)
+    /// <param name="created">True when there was no usable index and a new one was created.</param>
+    private CostIndexDatabase OpenForUpdate(CancellationToken token, out bool rebuilt, out bool created)
     {
         rebuilt = false;
+        created = false;
         if (File.Exists(_indexPath))
         {
             CostIndexDatabase? existing = null;
@@ -664,6 +659,7 @@ public sealed partial class NativeCostScanner
         {
             ConfigureWriter(database);
             database.Execute(CostIndex.Schema);
+            created = true;
             return database;
         }
         catch
@@ -688,6 +684,8 @@ public sealed partial class NativeCostScanner
                 OR EXISTS (SELECT 1 FROM settings WHERE id=1 AND zone<>'')
             """);
         if (!layout.Step() || layout.Number(0) != 1) return false;
+        // A table with the right name can still have columns incompatible with the report query.
+        using var reportLayout = CostIndex.PrepareReadDays(database);
 
         // quick_check reads the whole index, which grows with the lifetime history: run it on the first open of
         // this scanner (one per process) and again after an update failed, not on every refresh.

@@ -265,12 +265,15 @@ internal sealed class CostIndex(CostIndexDatabase database) : IDisposable
         row.Write();
     }
 
-    internal List<IndexedDay> ReadDays(CostProvider provider, int first, int last, CancellationToken token)
-    {
-        using var row = database.Prepare("""
+    internal static CostIndexDatabase.Statement PrepareReadDays(CostIndexDatabase database) =>
+        database.Prepare("""
             SELECT day,model,band,count,input,output,read,written,one_hour,reasoning
             FROM days WHERE provider=? AND day BETWEEN ? AND ? AND count>0 ORDER BY day,model,band
             """);
+
+    internal List<IndexedDay> ReadDays(CostProvider provider, int first, int last, CancellationToken token)
+    {
+        using var row = PrepareReadDays(database);
         row.Bind(1, (int)provider);
         row.Bind(2, first);
         row.Bind(3, last);

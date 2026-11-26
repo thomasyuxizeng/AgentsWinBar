@@ -610,6 +610,44 @@ public sealed partial class NativeCostScannerTests
         result.Reports[CostProvider.Claude].SessionTokens.Should().Be(15);
     }
 
+    [TestMethod]
+    [DataRow("PRAGMA user_version=1", true)]
+    [DataRow("PRAGMA user_version=0", true)]
+    [DataRow("DROP TABLE days", true)]
+    [DataRow("DROP TRIGGER usage_delete", true)]
+    [DataRow("ALTER TABLE days RENAME COLUMN reasoning TO broken", true)]
+    [DataRow("corrupt file", true)]
+    [DataRow("deleted file", false)]
+    public void UpdateAndReadReports_WhenNoPathsChangedAndIndexIsUnreadable_IndexesEveryLog(
+        string damage, bool rebuilt)
+    {
+        File.WriteAllLines(Path.Combine(Claude, "a.jsonl"), [ClaudeLine("1", 10)]);
+        File.WriteAllLines(Path.Combine(Claude, "b.jsonl"), [ClaudeLine("2", 25)]);
+        var scanner = Scanner();
+        IReadOnlyList<CostLogRoot> roots = [new(CostProvider.Claude, Claude)];
+        scanner.Update(roots);
+        switch (damage)
+        {
+            case "deleted file":
+                File.Delete(IndexPath);
+                break;
+            case "corrupt file":
+                File.WriteAllText(IndexPath, "not SQLite");
+                break;
+            default:
+                using (var database = new CostIndexDatabase(IndexPath)) database.Execute(damage);
+                break;
+        }
+
+        var result = scanner.UpdateAndReadReports(
+            roots, 1, [CostProvider.Claude], null, Today, 30, CancellationToken.None, changedPaths: []);
+
+        result.Reports[CostProvider.Claude].SessionTokens.Should().Be(35);
+        result.ScanResult.DiscoveredFiles.Should().Be(2);
+        result.ScanResult.FilesRead.Should().Be(2);
+        result.ScanResult.IndexRebuilt.Should().Be(rebuilt);
+    }
+
     private static ILogger<NativeCostScanner> OnBatchCommitted(Action action)
     {
         var logger = new Mock<ILogger<NativeCostScanner>>();
