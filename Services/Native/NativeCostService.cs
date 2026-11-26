@@ -57,13 +57,14 @@ public sealed class NativeCostService : INativeTypedCostService, IDisposable
     }
 
     /// <summary>Test constructor: explicit folders, optionally without OS watchers or price downloads.</summary>
+    /// <param name="scanner">A scanner to use instead of the default one in <paramref name="dataDirectory"/> (tests inject failures).</param>
     public NativeCostService(string dataDirectory, IReadOnlyList<CostLogRoot> roots, ILoggerFactory loggerFactory,
         TimeProvider? clock = null, TimeZoneInfo? zone = null, bool watch = true, bool refreshPrices = true,
-        CostPriceStore? prices = null)
+        CostPriceStore? prices = null, NativeCostScanner? scanner = null)
     {
         _roots = roots;
         _logger = loggerFactory.CreateLogger<NativeCostService>();
-        _scanner = new NativeCostScanner(Path.Combine(dataDirectory, IndexFolderName),
+        _scanner = scanner ?? new NativeCostScanner(Path.Combine(dataDirectory, IndexFolderName),
             loggerFactory.CreateLogger<NativeCostScanner>(), zone);
         _watcher = new CostLogWatcher(roots, loggerFactory.CreateLogger<CostLogWatcher>(), clock, watch);
         _prices = prices ?? new CostPriceStore(dataDirectory, loggerFactory.CreateLogger<CostPriceStore>(), clock);
@@ -122,7 +123,7 @@ public sealed class NativeCostService : INativeTypedCostService, IDisposable
         {
             return UpdateAndBuildReports(plan, providers, pricing, asOf, ct);
         }
-        catch (CostIndexDatabase.SqliteException ex) when (ex.InvalidIndex)
+        catch (Exception ex) when (IsDamagedIndex(ex))
         {
             // A damaged index is replaced now (opening it for an update validates it), not at the next listing.
             _logger.LogInformation("Native cost index is damaged; rebuilding it");
@@ -130,6 +131,17 @@ public sealed class NativeCostService : INativeTypedCostService, IDisposable
             return UpdateAndBuildReports(_watcher.TakePlan(), providers, pricing, asOf, ct);
         }
     }
+
+    /// <summary>
+    /// True for a damaged-index error however it arrives: thrown directly, or wrapped in an
+    /// <see cref="AggregateException"/> by a parallel reader.
+    /// </summary>
+    internal static bool IsDamagedIndex(Exception exception) => exception switch
+    {
+        CostIndexDatabase.SqliteException sqlite => sqlite.InvalidIndex,
+        AggregateException aggregate => aggregate.Flatten().InnerExceptions.Any(IsDamagedIndex),
+        _ => false
+    };
 
     private IReadOnlyDictionary<string, CostDataDto?> UpdateAndBuildReports(
         CostScanPlan plan,

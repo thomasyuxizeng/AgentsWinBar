@@ -326,6 +326,21 @@ public sealed partial class NativeCostScannerTests
             changedPaths: [changed]).ScanResult.IndexRebuilt.Should().BeFalse();
     }
 
+    [TestMethod]
+    public void Update_WhenAParallelWorkerHitsADamagedIndex_ThrowsTheSqliteErrorItself()
+    {
+        File.WriteAllText(Path.Combine(Claude, "a.jsonl"), ClaudeLine("1", 10) + "\n");
+        File.WriteAllText(Path.Combine(Claude, "b.jsonl"), ClaudeLine("2", 25) + "\n");
+        var scanner = new NativeCostScanner(IndexDirectory, Mock.Of<ILogger<NativeCostScanner>>(), TimeZoneInfo.Utc)
+        {
+            ReadHook = _ => throw new CostIndexDatabase.SqliteException(11)
+        };
+
+        var act = () => scanner.Update(Claude, Codex, workers: 2);
+
+        act.Should().Throw<CostIndexDatabase.SqliteException>().Which.InvalidIndex.Should().BeTrue();
+    }
+
     // Review finding 10: a timestamp at the edge of the calendar is skipped instead of failing the whole scan.
     [TestMethod]
     [DataRow(9.0, "9999-12-31T20:00:00Z")]

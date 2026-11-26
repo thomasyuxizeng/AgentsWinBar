@@ -432,18 +432,31 @@ public sealed partial class NativeCostScanner
             return;
         }
 
-        Parallel.ForEach(batch, new ParallelOptions { MaxDegreeOfParallelism = workers, CancellationToken = cancellationToken },
-            () => (Buffer: ArrayPool<byte>.Shared.Rent(BufferBytes), Priority: new BackgroundPriority()),
-            (input, _, local) =>
-            {
-                read(input, local.Buffer);
-                return local;
-            },
-            local =>
-            {
-                try { ArrayPool<byte>.Shared.Return(local.Buffer, clearArray: true); }
-                finally { local.Priority.Dispose(); }
-            });
+        try
+        {
+            Parallel.ForEach(batch, new ParallelOptions { MaxDegreeOfParallelism = workers, CancellationToken = cancellationToken },
+                () => (Buffer: ArrayPool<byte>.Shared.Rent(BufferBytes), Priority: new BackgroundPriority()),
+                (input, _, local) =>
+                {
+                    read(input, local.Buffer);
+                    return local;
+                },
+                local =>
+                {
+                    try { ArrayPool<byte>.Shared.Return(local.Buffer, clearArray: true); }
+                    finally { local.Priority.Dispose(); }
+                });
+        }
+        catch (AggregateException ex)
+        {
+            // Parallel.ForEach wraps what a worker throws. Callers match on the real exception, such as the
+            // damaged-index error that triggers a rebuild, so hand it on as it was thrown.
+            var failures = ex.Flatten().InnerExceptions;
+            var first = failures.OfType<CostIndexDatabase.SqliteException>().FirstOrDefault(e => e.InvalidIndex) ??
+                (failures.Count == 1 ? failures[0] : null);
+            if (first is null) throw;
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(first).Throw();
+        }
     }
 
     public CostDataDto ReadReport(CostProvider provider, CostPricing? pricing = null, DateTimeOffset? asOf = null,

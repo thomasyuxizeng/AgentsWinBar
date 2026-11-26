@@ -255,6 +255,39 @@ public sealed class NativeCostServiceTests
     }
 
     [TestMethod]
+    public async Task FetchCostJsonAsync_WhenAWorkerFindsTheIndexDamagedDuringAFullListing_RebuildsAndReports()
+    {
+        File.WriteAllText(Path.Combine(Claude, "a.jsonl"), Lines(ClaudeLine("1", 100)));
+        File.WriteAllText(Path.Combine(Claude, "b.jsonl"), Lines(ClaudeLine("2", 50)));
+        var failures = 1;
+        // SQLITE_CORRUPT from a reader thread reaches the caller wrapped in an AggregateException.
+        var scanner = new NativeCostScanner(Path.Combine(Data, NativeCostService.IndexFolderName),
+            NullLogger<NativeCostScanner>.Instance, TimeZoneInfo.Utc)
+        {
+            ReadHook = _ => { if (Interlocked.Decrement(ref failures) >= 0) throw new CostIndexDatabase.SqliteException(11); }
+        };
+        using var service = new NativeCostService(Data, [new(CostProvider.Claude, Claude)], NullLoggerFactory.Instance,
+            new ManualClock(Now), TimeZoneInfo.Utc, watch: false, refreshPrices: false, scanner: scanner);
+
+        var report = Read((await service.FetchCostJsonAsync(["claude"], Now))["claude"]);
+
+        report.SessionTokens.Should().Be(150);
+        failures.Should().BeLessThan(0, "the failing read really happened");
+    }
+
+    [TestMethod]
+    public void IsDamagedIndex_WhenErrorIsWrappedInAggregateExceptions_FindsIt()
+    {
+        var damaged = new CostIndexDatabase.SqliteException(11);
+        var busy = new CostIndexDatabase.SqliteException(5);
+
+        NativeCostService.IsDamagedIndex(damaged).Should().BeTrue();
+        NativeCostService.IsDamagedIndex(new AggregateException(new AggregateException(busy, damaged))).Should().BeTrue();
+        NativeCostService.IsDamagedIndex(new AggregateException(busy)).Should().BeFalse("a lock error must not rebuild the index");
+        NativeCostService.IsDamagedIndex(new IOException()).Should().BeFalse();
+    }
+
+    [TestMethod]
     public void DefaultRoots_WhenGivenAProfile_CoversClaudeProjectsAndBothCodexFolders()
     {
         var roots = NativeCostService.DefaultRoots(@"C:\Users\someone");
