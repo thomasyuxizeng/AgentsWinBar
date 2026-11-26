@@ -203,6 +203,7 @@ public sealed partial class SettingsPage : Page
             }
         }
 
+        ActivityRefreshToggle.IsOn = ViewModel.ActivityRefresh;
         StartWithWindowsToggle.IsOn = ViewModel.StartWithWindows;
         StartMinimizedToggle.IsOn = ViewModel.StartMinimized;
         AlwaysOnOverlayToggle.IsOn = ViewModel.AlwaysOnOverlay;
@@ -543,6 +544,7 @@ public sealed partial class SettingsPage : Page
                 ViewModel.RefreshInterval = seconds;
             }
 
+            ViewModel.ActivityRefresh = ActivityRefreshToggle.IsOn;
             ViewModel.StartWithWindows = StartWithWindowsToggle.IsOn;
             ViewModel.StartMinimized = StartMinimizedToggle.IsOn;
             ViewModel.AlwaysOnOverlay = AlwaysOnOverlayToggle.IsOn;

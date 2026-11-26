@@ -21,6 +21,10 @@ public partial class SettingsViewModel : ObservableObject
     [ObservableProperty]
     private int _refreshInterval;
 
+    /// <summary>"Refresh faster while a tool is in use".</summary>
+    [ObservableProperty]
+    private bool _activityRefresh = true;
+
     [ObservableProperty]
     private bool _startWithWindows;
 
@@ -99,6 +103,7 @@ public partial class SettingsViewModel : ObservableObject
         }
 
         RefreshInterval = settings.RefreshIntervalSeconds;
+        ActivityRefresh = settings.ActivityRefreshEnabled;
         StartWithWindows = settings.StartWithWindows;
         StartMinimized = settings.StartMinimized;
         AlwaysOnOverlay = settings.AlwaysOnOverlayEnabled;
@@ -153,6 +158,7 @@ public partial class SettingsViewModel : ObservableObject
             settings.ShowCostTotals, settings.Theme, settings.DeveloperModeEnabled, settings.ResetAnimationMode,
             settings.ApiCreditsMonthlyUsd, settings.ApiCreditsCycleStartDay);
         var previousTaskbarPosition = settings.TaskbarDisplayPosition;
+        var previousActivityRefresh = settings.ActivityRefreshEnabled;
 
         // Update providers (including order)
         foreach (var provider in Providers)
@@ -167,6 +173,7 @@ public partial class SettingsViewModel : ObservableObject
         }
 
         settings.RefreshIntervalSeconds = RefreshInterval;
+        settings.ActivityRefreshEnabled = ActivityRefresh;
         settings.StartWithWindows = StartWithWindows;
         settings.StartMinimized = StartMinimized;
         settings.AlwaysOnOverlayEnabled = AlwaysOnOverlay;
@@ -191,6 +198,7 @@ public partial class SettingsViewModel : ObservableObject
                 settings.ShowCostTotals, settings.Theme, settings.DeveloperModeEnabled, settings.ResetAnimationMode,
                 settings.ApiCreditsMonthlyUsd, settings.ApiCreditsCycleStartDay) = previous;
             settings.TaskbarDisplayPosition = previousTaskbarPosition;
+            settings.ActivityRefreshEnabled = previousActivityRefresh;
             throw;
         }
 

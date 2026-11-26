@@ -422,6 +422,37 @@
                     </ComboBox>
                 </Grid>
 
+                <!-- Refresh Faster While In Use Card -->
+                <Grid
+                    Padding="16,12"
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                    BorderThickness="1,0,1,1"
+                    CornerRadius="0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+
+                    <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,16,0">
+                        <TextBlock Text="Refresh faster while a tool is in use" Style="{StaticResource BodyTextBlockStyle}"/>
+                        <TextBlock
+                            Text="Check a provider every 2 minutes while you use its tool on this PC"
+                            Style="{StaticResource CaptionTextBlockStyle}"
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                            TextWrapping="Wrap"/>
+                    </StackPanel>
+
+                    <ToggleSwitch
+                        Grid.Column="1"
+                        x:Name="ActivityRefreshToggle" AutomationProperties.Name="Refresh faster while a tool is in use"
+                        OnContent=""
+                        OffContent=""
+                        MinWidth="0"
+                        Margin="0,-4,0,-4"
+                        VerticalAlignment="Center"/>
+                </Grid>
+
                 <!-- Start with Windows Card -->
                 <Grid
                     Padding="16,12"
