@@ -44,8 +44,10 @@ $script:ghRelease = $false
 $runtimeName = 'Microsoft.WindowsAppRuntime.1.8'
 $runtimeMinimum = [version]'8000.731.1532.0'
 $script:rememberedState = $null
-# Set from the independently verified stable release certificate before publishing this installer.
-$ExpectedReleaseCertificateThumbprint = ''
+# SHA-1 thumbprint of the release signing certificate (CN=CodexBarWin OSS, valid to 2036). The installer trusts and
+# installs only packages signed by this certificate; change it here, and in the release workflow's pin check, if the
+# signing key is ever replaced.
+$ExpectedReleaseCertificateThumbprint = '4E280F44AE28900533BBC497F28F62505990F3BD'
 
 function Assert-ReleaseSigner([string] $Thumbprint, [string] $ExpectedThumbprint, [switch] $AllowDeveloperPackage) {
     $expected = $ExpectedThumbprint -replace '\s', ''
@@ -53,7 +55,7 @@ function Assert-ReleaseSigner([string] $Thumbprint, [string] $ExpectedThumbprint
     if ($AllowDeveloperPackage) {
         Write-Warning 'LOCAL DEVELOPER PACKAGE: release certificate pinning is explicitly bypassed.'
     } elseif (-not $expected) {
-        Write-Warning 'SECURITY WARNING: ExpectedReleaseCertificateThumbprint is unset. Release signer continuity is NOT enforced; legacy certificate trust behavior remains enabled.'
+        throw 'This installer has no release certificate thumbprint pinned, so it cannot verify the MSIX signer. Nothing has been trusted.'
     } elseif ($Thumbprint -ine $expected) {
         throw 'MSIX signer does not match ExpectedReleaseCertificateThumbprint. Nothing has been trusted.'
     }
@@ -392,7 +394,7 @@ function Resolve-Release {
         $public = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/latest" -UseBasicParsing -Headers @{ 'User-Agent' = 'AgentsWinBar-Setup'; Accept = 'application/vnd.github+json' } -TimeoutSec 30
         return [pscustomobject]@{ tagName = $public.tag_name; assets = $public.assets }
     } catch {
-        Fail 40 "Cannot access the latest release for $Repo. If private, ask the owner for access and run 'gh auth login', then rerun; otherwise wait for the repository to become public."
+        Fail 40 "Cannot access the latest release for $Repo. Check the network connection and the repository name (-Repo owner/name), then rerun."
     }
 }
 function Download-Asset([string] $Name, [string] $Directory) {
@@ -413,8 +415,12 @@ function Read-Package([string] $Path) {
     try {
         $entry = $zip.GetEntry('AppxManifest.xml')
         if (-not $entry) { throw 'MSIX has no AppxManifest.xml.' }
-        $reader = New-Object IO.StreamReader($entry.Open())
-        try { [xml]$manifest = $reader.ReadToEnd() } finally { $reader.Dispose() }
+        # The manifest is read before the signature is checked: refuse DTDs and external entities.
+        $xmlSettings = New-Object Xml.XmlReaderSettings
+        $xmlSettings.DtdProcessing = [Xml.DtdProcessing]::Prohibit
+        $xmlSettings.XmlResolver = $null
+        $reader = [Xml.XmlReader]::Create($entry.Open(), $xmlSettings)
+        try { $manifest = New-Object Xml.XmlDocument; $manifest.XmlResolver = $null; $manifest.Load($reader) } finally { $reader.Dispose() }
         $identity = $manifest.SelectSingleNode("/*[local-name()='Package']/*[local-name()='Identity']")
         $application = $manifest.SelectSingleNode("/*[local-name()='Package']/*[local-name()='Applications']/*[local-name()='Application']")
         if ($identity.Name -ne 'AgentsWinBar' -or $identity.Publisher -ne 'CN=CodexBarWin OSS') { throw 'MSIX identity or publisher is not AgentsWinBar.' }
@@ -451,7 +457,9 @@ try {
         $script:rememberedState = Get-Content -Raw -Encoding UTF8 -LiteralPath $statePath | ConvertFrom-Json
     }
     if (-not $Repo) {
-        if (Get-Command git -ErrorAction SilentlyContinue) {
+        # Only a checkout whose root holds this script names the repository; git would otherwise walk up into any
+        # unrelated repository the script happens to be saved in.
+        if ($PSScriptRoot -and (Test-Path -LiteralPath (Join-Path $PSScriptRoot '.git')) -and (Get-Command git -ErrorAction SilentlyContinue)) {
             $remote = Invoke-Native 'git' @('-C', $PSScriptRoot, 'remote', 'get-url', 'origin')
             if ($remote.Code -eq 0 -and $remote.Output -match 'github\.com[:/]([^/]+/[^/]+?)(?:\.git)?$') { $Repo = $Matches[1] }
         }

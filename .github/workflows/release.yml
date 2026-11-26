@@ -4,6 +4,8 @@
 # [IO.File]::WriteAllText("signing.base64", [Convert]::ToBase64String([IO.File]::ReadAllBytes("signing.pfx")))
 # gh secret set SIGNING_PFX_BASE64 < signing.base64  (use a shell supporting input redirection)
 # gh secret set SIGNING_PFX_PASSWORD  (enter the same password at the prompt)
+# The certificate's thumbprint must equal $ExpectedReleaseCertificateThumbprint in install.ps1; the cert job checks it.
+# Actions are pinned to commit SHAs (the tag each SHA had is in the trailing comment).
 name: Release
 
 on:
@@ -61,7 +63,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Prepare signing certificate
         shell: pwsh
@@ -76,22 +78,36 @@ jobs:
             throw "Repository secrets SIGNING_PFX_BASE64 and SIGNING_PFX_PASSWORD are required to sign a release (see the comment at the top of this workflow)."
           }
           New-Item -ItemType Directory -Path signing | Out-Null
-          [IO.File]::WriteAllBytes("$PWD\signing\AgentsWinBar.pfx", [Convert]::FromBase64String($env:SIGNING_PFX_BASE64))
-          $password = ConvertTo-SecureString -String $env:SIGNING_PFX_PASSWORD -Force -AsPlainText
-          $cert = Import-PfxCertificate -FilePath signing/AgentsWinBar.pfx -Password $password -CertStoreLocation "Cert:\CurrentUser\My" |
-            Where-Object { $_.HasPrivateKey }
-          Remove-Item signing/AgentsWinBar.pfx
-          if (@($cert).Count -ne 1) { throw "Signing PFX must contain exactly one certificate with a private key." }
+          $pfx = Join-Path $env:RUNNER_TEMP 'AgentsWinBar.pfx'
+          $imported = @()
+          try {
+            [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:SIGNING_PFX_BASE64))
+            $password = ConvertTo-SecureString -String $env:SIGNING_PFX_PASSWORD -Force -AsPlainText
+            $imported = @(Import-PfxCertificate -FilePath $pfx -Password $password -CertStoreLocation "Cert:\CurrentUser\My")
+            Remove-Item -LiteralPath $pfx -Force
+            $cert = @($imported | Where-Object { $_.HasPrivateKey })
+            if ($cert.Count -ne 1) { throw "Signing PFX must contain exactly one certificate with a private key." }
+            $cert = $cert[0]
 
-          [xml]$manifest = Get-Content Package.appxmanifest -Raw
-          if ($cert.Subject -ne $manifest.Package.Identity.Publisher) {
-            throw "Signing certificate subject must match Package.appxmanifest Publisher."
+            [xml]$manifest = Get-Content Package.appxmanifest -Raw
+            if ($cert.Subject -ne $manifest.Package.Identity.Publisher) {
+              throw "Signing certificate subject must match Package.appxmanifest Publisher."
+            }
+            # Installers refuse any other signer, so a swapped or rotated secret must fail here, not on users' PCs.
+            $pin = Select-String -Path install.ps1 -Pattern '^\$ExpectedReleaseCertificateThumbprint = ''([A-F0-9]{40})''' | Select-Object -First 1
+            if (-not $pin) { throw "install.ps1 does not pin a release certificate thumbprint." }
+            if ($cert.Thumbprint -ne $pin.Matches[0].Groups[1].Value) {
+              throw "The signing certificate differs from the thumbprint pinned in install.ps1."
+            }
+            Export-Certificate -Cert $cert -FilePath "signing/AgentsWinBar-$env:TAG-Certificate.cer" | Out-Null
+            Copy-Item "signing/AgentsWinBar-$env:TAG-Certificate.cer" signing/AgentsWinBar-Certificate.cer
+          } finally {
+            Remove-Item -LiteralPath $pfx -Force -ErrorAction SilentlyContinue
+            foreach ($item in $imported) { Remove-Item -LiteralPath "Cert:\CurrentUser\My\$($item.Thumbprint)" -DeleteKey -ErrorAction SilentlyContinue }
           }
-          Export-Certificate -Cert $cert -FilePath "signing/AgentsWinBar-$env:TAG-Certificate.cer" | Out-Null
-          Copy-Item "signing/AgentsWinBar-$env:TAG-Certificate.cer" signing/AgentsWinBar-Certificate.cer
 
       - name: Upload public certificates
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: release-certificate
           path: signing/*.cer
@@ -99,48 +115,31 @@ jobs:
           if-no-files-found: error
 
   build:
-    needs: [validate, cert, tests, licenses]
+    needs: [validate, tests, licenses]
     runs-on: windows-latest
 
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - platform: x64
-            rid: win-x64
-          - platform: ARM64
-            rid: win-arm64
+        platform: [x64, ARM64]
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0  # Required for MinVer
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
       - name: Setup MSBuild
-        uses: microsoft/setup-msbuild@v2
+        uses: microsoft/setup-msbuild@6fb02220983dee41ce7ae257b6f4d8f9bf5ed4ce # v2
 
-      - name: Cache NuGet packages
-        uses: actions/cache@v4
-        with:
-          path: ${{ github.workspace }}/.nuget/packages
-          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
-          restore-keys: |
-            ${{ runner.os }}-nuget-
-
+      # No package cache: a release restores everything fresh from NuGet.
       - name: Restore dependencies
         run: dotnet restore AgentsWinBar.csproj -p:Platform=${{ matrix.platform }}
-
-      - name: Download public certificates
-        uses: actions/download-artifact@v4
-        with:
-          name: release-certificate
-          path: signing
 
       - name: Update Package.appxmanifest version
         shell: pwsh
@@ -163,40 +162,90 @@ jobs:
 
           msbuild AgentsWinBar.csproj /p:Configuration=Release /p:Platform=${{ matrix.platform }} /p:UapAppxPackageBuildMode=SideloadOnly /p:AppxBundle=Never /p:AppxPackageDir="AppPackages\" /p:AppxPackageSigningEnabled=false /p:GenerateAppxPackageOnBuild=true /p:PublishReadyToRun=false /p:AppxVersion="$appxVersion"
 
+          $msix = @(Get-ChildItem -Path "AppPackages" -Filter "*.msix" -Recurse)
+          if ($msix.Count -ne 1) { throw "Expected exactly one MSIX package, found $($msix.Count)." }
+          New-Item -ItemType Directory -Path unsigned | Out-Null
+          Copy-Item $msix[0].FullName -Destination unsigned/AgentsWinBar-unsigned.msix
+
+      - name: Upload unsigned package
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: unsigned-${{ matrix.platform }}
+          path: unsigned/AgentsWinBar-unsigned.msix
+          retention-days: 1
+          if-no-files-found: error
+
+  sign:
+    needs: [validate, tests, licenses, cert, build]
+    runs-on: windows-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [x64, ARM64]
+
+    # The private key is only ever on this runner, which checks out no code and restores and builds nothing: it
+    # receives the unsigned package and the public certificate, and runs the Windows SDK signtool.
+    steps:
+      - name: Download unsigned package
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: unsigned-${{ matrix.platform }}
+          path: unsigned
+
+      - name: Download public certificates
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-certificate
+          path: signing
+
       - name: Sign MSIX package
         shell: pwsh
         env:
           SIGNING_PFX_BASE64: ${{ secrets.SIGNING_PFX_BASE64 }}
           SIGNING_PFX_PASSWORD: ${{ secrets.SIGNING_PFX_PASSWORD }}
         run: |
-          $msixPath = Get-ChildItem -Path "AppPackages" -Filter "*.msix" -Recurse | Select-Object -First 1
-          # Find signtool.exe dynamically
+          $msix = (Resolve-Path unsigned/AgentsWinBar-unsigned.msix).Path
           $signtool = Get-ChildItem -Path "C:\Program Files (x86)\Windows Kits\10\bin" -Recurse -Filter "signtool.exe" |
             Where-Object { $_.FullName -match "x64" } |
             Sort-Object { [version]($_.Directory.Parent.Name -replace '\.0$', '') } -Descending |
             Select-Object -First 1
+          if (-not $signtool) { throw "signtool.exe was not found." }
           if (-not ($env:SIGNING_PFX_BASE64 -and $env:SIGNING_PFX_PASSWORD)) { throw "Signing secrets are missing." }
-          # Decode the stable private key directly from secrets; it never travels through artifacts.
-          [IO.File]::WriteAllBytes("$PWD\signing\AgentsWinBar.pfx", [Convert]::FromBase64String($env:SIGNING_PFX_BASE64))
-          $signingPassword = $env:SIGNING_PFX_PASSWORD
-          # Handle native failures explicitly so transient timestamp failures can be retried.
-          $PSNativeCommandUseErrorActionPreference = $false
-          for ($attempt = 1; $attempt -le 3; $attempt++) {
-            & $signtool.FullName sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 /a /f signing/AgentsWinBar.pfx /p $signingPassword $msixPath.FullName
-            $signingExitCode = $LASTEXITCODE
-            if ($signingExitCode -eq 0) { break }
-            if ($attempt -eq 3) {
-              throw "MSIX signing failed after 3 attempts with exit code $signingExitCode."
+          $published = [Security.Cryptography.X509Certificates.X509Certificate2]::new("$PWD\signing\AgentsWinBar-$env:TAG-Certificate.cer")
+          $pfx = Join-Path $env:RUNNER_TEMP 'AgentsWinBar.pfx'
+          $imported = @()
+          try {
+            # The key goes into this runner's certificate store and signtool selects it by thumbprint, so the
+            # password never appears on a command line and the PFX file is gone before signtool runs.
+            [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:SIGNING_PFX_BASE64))
+            $password = ConvertTo-SecureString -String $env:SIGNING_PFX_PASSWORD -Force -AsPlainText
+            $imported = @(Import-PfxCertificate -FilePath $pfx -Password $password -CertStoreLocation "Cert:\CurrentUser\My")
+            Remove-Item -LiteralPath $pfx -Force
+            $cert = @($imported | Where-Object { $_.HasPrivateKey })
+            if ($cert.Count -ne 1) { throw "Signing PFX must contain exactly one certificate with a private key." }
+            if ($cert[0].Thumbprint -ne $published.Thumbprint) { throw "Signing certificate differs from the published certificate." }
+            # Handle native failures explicitly so transient timestamp failures can be retried.
+            $PSNativeCommandUseErrorActionPreference = $false
+            for ($attempt = 1; $attempt -le 3; $attempt++) {
+              & $signtool.FullName sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 /s My /sha1 $cert[0].Thumbprint $msix
+              $signingExitCode = $LASTEXITCODE
+              if ($signingExitCode -eq 0) { break }
+              if ($attempt -eq 3) {
+                throw "MSIX signing failed after 3 attempts with exit code $signingExitCode."
+              }
+              Write-Warning "MSIX signing attempt $attempt failed with exit code $signingExitCode. Retrying in 10 seconds."
+              Start-Sleep -Seconds 10
             }
-            Write-Warning "MSIX signing attempt $attempt failed with exit code $signingExitCode. Retrying in 10 seconds."
-            Start-Sleep -Seconds 10
+          } finally {
+            Remove-Item -LiteralPath $pfx -Force -ErrorAction SilentlyContinue
+            foreach ($item in $imported) { Remove-Item -LiteralPath "Cert:\CurrentUser\My\$($item.Thumbprint)" -DeleteKey -ErrorAction SilentlyContinue }
           }
 
       - name: Verify MSIX signer matches published certificate
         shell: pwsh
         run: |
-          $msixPath = Get-ChildItem -Path "AppPackages" -Filter "*.msix" -Recurse | Select-Object -First 1
-          $signature = Get-AuthenticodeSignature -FilePath $msixPath.FullName
+          $signature = Get-AuthenticodeSignature -FilePath unsigned/AgentsWinBar-unsigned.msix
           $publishedCert = [Security.Cryptography.X509Certificates.X509Certificate2]::new("$PWD\signing\AgentsWinBar-$env:TAG-Certificate.cer")
           if (-not $signature.SignerCertificate -or $signature.SignerCertificate.Thumbprint -ne $publishedCert.Thumbprint) {
             throw "MSIX signer thumbprint does not match the published certificate."
@@ -207,10 +256,8 @@ jobs:
         run: |
           $version = $env:TAG
           $platform = "${{ matrix.platform }}"
-          $msixPath = Get-ChildItem -Path "AppPackages" -Filter "*.msix" -Recurse | Select-Object -First 1
-
-          Copy-Item $msixPath.FullName -Destination "AgentsWinBar-$version-$platform.msix"
-          Copy-Item $msixPath.FullName -Destination "AgentsWinBar-$platform.msix"
+          Copy-Item unsigned/AgentsWinBar-unsigned.msix -Destination "AgentsWinBar-$version-$platform.msix"
+          Copy-Item unsigned/AgentsWinBar-unsigned.msix -Destination "AgentsWinBar-$platform.msix"
 
       - name: Generate checksum
         shell: pwsh
@@ -221,7 +268,7 @@ jobs:
           "$hash  AgentsWinBar-$version-$platform.msix" | Out-File -FilePath "AgentsWinBar-$version-$platform.msix.sha256" -Encoding utf8NoBOM
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: release-${{ matrix.platform }}
           path: |
@@ -229,19 +276,20 @@ jobs:
             AgentsWinBar-${{ matrix.platform }}.msix
             AgentsWinBar-${{ github.ref_name }}-${{ matrix.platform }}.msix.sha256
           retention-days: 1
+          if-no-files-found: error
 
   release:
-    needs: [validate, cert, build, tests, licenses]
+    needs: [validate, cert, build, sign, tests, licenses]
     runs-on: ubuntu-latest
     permissions:
       contents: write
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           path: artifacts
           pattern: release-*
@@ -312,7 +360,7 @@ jobs:
           echo "$NOTES" > release_notes.md
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           body_path: release_notes.md
           files: |

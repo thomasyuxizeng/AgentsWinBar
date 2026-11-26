@@ -39,8 +39,9 @@ if ($Group -eq 'Signer') {
     $trustCheck = $ast.Find({ param($n) $n -is [System.Management.Automation.Language.AssignmentStatementAst] -and $n.Left.Extent.Text -eq '$trustNeeded' -and $n.Right.Extent.Text -like '*TrustedPeople*' }, $true)
     Assert-True ($null -ne $pinCall -and $null -ne $trustCheck -and $pinCall.Extent.StartOffset -lt $trustCheck.Extent.StartOffset) 'release pin is enforced before planning certificate trust'
     Assert-True ($pinCall.Extent.Text.Contains('$ExpectedReleaseCertificateThumbprint') -and $pinCall.Extent.Text.Contains('-AllowDeveloperPackage:$AllowDeveloperPackage')) 'trust flow uses configured pin and explicit override'
-    $warnings = @(Assert-ReleaseSigner $pin '' 3>&1)
-    Assert-True ($warnings.Count -eq 1 -and $warnings[0] -is [System.Management.Automation.WarningRecord] -and $warnings[0].Message -like '*SECURITY WARNING*unset*') 'unset pin explicitly warns and preserves legacy acceptance'
+    Assert-Throws { Assert-ReleaseSigner $pin '' } 'unset pin fails closed'
+    $shippedPin = $ast.Find({ param($n) $n -is [System.Management.Automation.Language.AssignmentStatementAst] -and $n.Left.Extent.Text -eq '$ExpectedReleaseCertificateThumbprint' }, $true)
+    Assert-True ($null -ne $shippedPin -and $shippedPin.Right.Extent.Text -match "^'[A-F0-9]{40}'$") 'installer ships a 40-hex release certificate pin'
     $warnings = @(Assert-ReleaseSigner ('B' * 40) $pin -AllowDeveloperPackage 3>&1)
     Assert-True ($warnings.Count -eq 1 -and $warnings[0].Message -like '*LOCAL DEVELOPER PACKAGE*') 'explicit developer override warns'
 
@@ -193,8 +194,8 @@ if ($Group -eq 'Workflow') {
     $licenses = [IO.File]::ReadAllText((Join-Path $root '.github/workflows/licenses.yml'))
     $jobs = @{}
     foreach ($match in [regex]::Matches($release, '(?ms)^  ([a-z][a-z-]*):\r?\n(.*?)(?=^  [a-z][a-z-]*:\r?\n|\z)')) { $jobs[$match.Groups[1].Value] = $match.Groups[2].Value }
-    foreach ($id in @('validate', 'cert', 'build', 'release', 'tests', 'licenses')) { Assert-True $jobs.ContainsKey($id) "release job $id exists" }
-    foreach ($id in @('cert', 'build', 'release')) {
+    foreach ($id in @('validate', 'cert', 'build', 'sign', 'release', 'tests', 'licenses')) { Assert-True $jobs.ContainsKey($id) "release job $id exists" }
+    foreach ($id in @('cert', 'build', 'sign', 'release')) {
         $needs = [regex]::Match($jobs[$id], '(?m)^    needs: \[([^\]]+)\]').Groups[1].Value.Split(',') | ForEach-Object { $_.Trim() }
         foreach ($dependency in @('validate', 'tests', 'licenses')) { Assert-True ($needs -contains $dependency) "$id is gated by $dependency" }
         foreach ($dependency in $needs) { Assert-True $jobs.ContainsKey($dependency) "$id references existing job $dependency" }
@@ -209,6 +210,15 @@ if ($Group -eq 'Workflow') {
     Assert-True (([regex]::Matches($release, 'contents: write')).Count -eq 1) 'only publish job has contents write'
     Assert-True ($release -notmatch 'RestorePackagesWithLockFile|--locked-mode|RestoreLockedMode') 'unverified NuGet lock mode is not enabled'
     Assert-True ($release.Contains('secrets.SIGNING_PFX_BASE64') -and $release.Contains('secrets.SIGNING_PFX_PASSWORD')) 'signing secret names are preserved'
+    $uses = @([regex]::Matches($release, '(?m)^\s+uses:\s*(\S+)') | ForEach-Object { $_.Groups[1].Value })
+    Assert-True (@($uses | Where-Object { $_ -notlike './*' -and $_ -notmatch '@[0-9a-f]{40}$' }).Count -eq 0) 'every external action is pinned to a commit SHA'
+    Assert-True ($jobs.build -notmatch 'SIGNING_PFX' -and $jobs.release -notmatch 'SIGNING_PFX') 'the build and publish jobs never see the signing key'
+    Assert-True ($jobs.sign -notmatch 'actions/checkout|actions/cache|dotnet |msbuild') 'the signing job checks out, restores and builds nothing'
+    Assert-True ($jobs.sign -match '/sha1' -and $release -notmatch 'signtool[^\r\n]*\s/p\s') 'signtool selects the key by thumbprint and never takes the password'
+    Assert-True ($jobs.cert -match 'ExpectedReleaseCertificateThumbprint' -and $jobs.cert -match 'differs from the thumbprint pinned in install.ps1') 'the signing secret is checked against the installer pin'
+    Assert-True ($jobs.build -notmatch 'actions/cache') 'release builds restore without a package cache'
+    $needsSign = [regex]::Match($jobs.release, '(?m)^    needs: \[([^\]]+)\]').Groups[1].Value
+    Assert-True ($needsSign -match '\bsign\b') 'publish waits for the signing job'
 }
 
 Write-Host "$Group release security tests passed."
