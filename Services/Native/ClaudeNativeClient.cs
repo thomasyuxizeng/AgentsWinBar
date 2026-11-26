@@ -187,8 +187,11 @@ public sealed class ClaudeNativeClient : INativeUsageClient
             {
                 var ago = now - expiresAt;
                 _logger.LogInformation("Claude access token expired {Ago} ago; not renewed", NativeParse.Ago(ago));
+                var manualRenewal = _renewer?.HasNpmShimOnly() == true
+                    ? "This Claude Code install cannot be renewed in the background. "
+                    : string.Empty;
                 return FromCacheOr(lastGood, Fail(NativeUsageStatus.SignInExpired, null,
-                    $"Claude sign-in expired {NativeParse.Ago(ago)} ago. Open Claude Code on Windows to renew it.") with { ExpiredFor = ago });
+                    $"Claude sign-in expired {NativeParse.Ago(ago)} ago. {manualRenewal}Open Claude Code on Windows to renew it.") with { ExpiredFor = ago });
             }
         }
 

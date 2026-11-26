@@ -70,6 +70,36 @@ public class ClaudeSignInRenewalTests
     }
 
     [TestMethod]
+    [DataRow(true)]
+    [DataRow(false)]
+    public async Task FetchAsync_WhenOnlyNpmShimIsOnAbsolutePath_ExplainsManualRenewal(bool enabled)
+    {
+        var folder = Directory.CreateTempSubdirectory("fake-npm-");
+        try
+        {
+            // Empty file used solely for existence checks.
+            File.WriteAllText(Path.Combine(folder.FullName, "claude.cmd"), string.Empty);
+            var runner = new ClaudeAuthStatusRunner([], () => $"relative;\"{folder.FullName}\"", () => folder.FullName);
+            var handler = new RecordingHandler(_ => Json(UsageJson));
+            var client = new ClaudeNativeClient(handler.Client(), new ListLogger<ClaudeNativeClient>(),
+                new ClaudeNativeOptions { CredentialsPath = _path, RenewExpiredSignIn = () => enabled },
+                new TestClock(Now), renewer: runner);
+
+            var result = await client.FetchAsync();
+
+            result.Status.Should().Be(NativeUsageStatus.SignInExpired);
+            result.Message.Should().Contain("cannot be renewed in the background")
+                .And.Contain("Open Claude Code on Windows to renew it.");
+            handler.Requests.Should().BeEmpty();
+        }
+        finally
+        {
+            File.Delete(Path.Combine(folder.FullName, "claude.cmd"));
+            folder.Delete();
+        }
+    }
+
+    [TestMethod]
     public async Task FetchAsync_WhenApplicationShutsDown_CancelsInFlightRenewal()
     {
         using var shutdown = new CancellationTokenSource();
@@ -274,6 +304,7 @@ public class ClaudeSignInRenewalTests
         public Task Started => _started.Task;
         public List<TimeSpan> Timeouts { get; } = [];
 
+        public bool HasNpmShimOnly() => false;
         public string? FindClaudeExecutable() => executable;
 
         public async Task<ClaudeAuthStatusRun> RunAuthStatusAsync(string path, TimeSpan timeout, CancellationToken ct)
