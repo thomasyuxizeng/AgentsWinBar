@@ -22,6 +22,8 @@ public class SignInLauncherTests
         public HashSet<string> Failing { get; } = new(StringComparer.OrdinalIgnoreCase);
         public List<SignInProcess> Started { get; } = [];
         public List<SignInProcess> Attempts { get; } = [];
+        /// <summary>The folder tools on <see cref="OnPath"/> are found in.</summary>
+        public string ToolFolder { get; set; } = SignInLauncherTests.ToolFolder;
         public string LocalAppData => SignInLauncherTests.LocalAppData;
         public string SystemDirectory => System32;
 
@@ -179,6 +181,32 @@ public class SignInLauncherTests
 
         result.Route.Should().Be(SignInRoute.Browser);
         _system.Started.Single().Should().Be(new SignInProcess("https://antigravity.google", string.Empty));
+    }
+
+    [TestMethod]
+    [DataRow(@"C:\Users\a,b\AppData\Roaming\npm")]
+    [DataRow(@"C:\Users\a;b\AppData\Roaming\npm")]
+    [DataRow(@"C:\Users\a=b\AppData\Roaming\npm")]
+    [DataRow(@"C:\Users\a b,c\AppData\Roaming\npm")]
+    public void Launch_WhenToolPathHasCommaSemicolonOrEquals_UsesCommandPromptEvenWithWindowsTerminal(string folder)
+    {
+        _system.ToolFolder = folder;
+        _system.OnPath.UnionWith(["claude", "wt"]);
+
+        var result = Launcher().Launch("claude");
+
+        result.Route.Should().Be(SignInRoute.CommandPrompt);
+        _system.Attempts.Should().NotContain(a => a.FileName == Wt);
+        _system.Started.Single().Arguments.Should().EndWith($"& \"{folder}\\claude.cmd\" auth login");
+    }
+
+    [TestMethod]
+    public void Launch_WhenToolPathHasNoSpaceOrSpecialCharacter_UsesWindowsTerminal()
+    {
+        _system.ToolFolder = @"C:\Users\ab\AppData\Roaming\npm";
+        _system.OnPath.UnionWith(["claude", "wt"]);
+
+        Launcher().Launch("claude").Route.Should().Be(SignInRoute.WindowsTerminal);
     }
 
     [TestMethod]

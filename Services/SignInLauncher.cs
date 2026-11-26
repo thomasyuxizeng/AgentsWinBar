@@ -87,9 +87,10 @@ public sealed class SignInLauncher(ISignInSystem system, ILogger<SignInLauncher>
         var command = arguments.Length == 0 ? $"\"{executable}\"" : $"\"{executable}\" {arguments}";
         // Starting with the title command keeps cmd from stripping the executable's quotes from the /k tail.
         var shellArgs = $"/d /v:off /k title {title}& {prompt}{command}";
-        // Windows Terminal reparses arguments and uses semicolons to separate commands.
-        // Use Command Prompt directly when a path needs quotes Windows Terminal may not preserve.
-        if (!executable.Contains(';') &&
+        // Windows Terminal reparses arguments and uses semicolons to separate commands. It also drops the quotes of a
+        // path without spaces, and cmd splits an unquoted path at commas and equals signs. Use Command Prompt directly
+        // when a path needs quotes Windows Terminal may not preserve.
+        if (executable.AsSpan().IndexOfAny(",;=") < 0 &&
             (executable.Contains(' ') || executable.AsSpan().IndexOfAny("&()^") < 0) &&
             system.FindOnPath("wt") is { } wt)
         {
