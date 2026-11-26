@@ -77,6 +77,9 @@ internal static class NativeMethods
     [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)]
     public static extern IntPtr GetModuleHandle(string lpModuleName);
 
+    [DllImport("user32.dll")]
+    public static extern uint GetDpiForWindow(IntPtr hwnd);
+
     /// <summary>
     /// Apply rounded corners to the window.
     /// </summary>
@@ -97,9 +100,20 @@ public sealed partial class MainWindow : Window
     private readonly UISettings _uiSettings;
     private TaskbarIcon? _trayIcon;
     private const int WindowWidth = 400;
+    /// <summary>The flyout's original fixed height, now its minimum: it grows to fit every provider card (FitFlyoutHeight).</summary>
     private const int WindowHeight = 480;
     private const int WindowMarginRight = 7;  // Adjusted for window shadow (target: 15px from edge)
     private const int WindowMarginBottom = 2; // Adjusted for window shadow (target: 10px from taskbar)
+    /// <summary>Space kept between a work-area-tall flyout and the top of the screen (DIPs).</summary>
+    private const double WindowTopGapDip = 12;
+    /// <summary>The last fitted height (physical pixels), so a reopened flyout starts at its right size.</summary>
+    private int _windowHeight = WindowHeight;
+    /// <summary>
+    /// The work area the flyout was opened on. Kept from ShowWindow because, mid-slide, the window still overlaps the
+    /// right edge, where a fresh lookup could return a neighbouring monitor.
+    /// </summary>
+    private RectInt32 _flyoutWorkArea;
+    private MainPage? _cardsPage;
     private bool _isWindowVisible;
     private IDisposable? _costDemand;
     private bool _isAnimating;
@@ -229,8 +243,19 @@ public sealed partial class MainWindow : Window
 
     private void OnFrameNavigated(object sender, Microsoft.UI.Xaml.Navigation.NavigationEventArgs e)
     {
+        // Follow only the page on show: a released or replaced page must not resize the flyout or stay referenced
+        if (_cardsPage != null && !ReferenceEquals(_cardsPage, e.Content))
+        {
+            _cardsPage.CardsHeightChanged -= OnCardsHeightChanged;
+            _cardsPage = null;
+        }
         if (e.Content is MainPage mainPage)
         {
+            if (!ReferenceEquals(_cardsPage, mainPage))
+            {
+                _cardsPage = mainPage;
+                mainPage.CardsHeightChanged += OnCardsHeightChanged;
+            }
             mainPage.SettingsRequested -= OnSettingsRequested;
             mainPage.SettingsRequested += OnSettingsRequested;
             mainPage.DashboardRequested -= OnDashboardRequested;
@@ -571,6 +596,8 @@ public sealed partial class MainWindow : Window
         StopAnimationTimer();
         UninstallMouseHook();
         StopFlyoutForegroundWatcher();
+        if (_cardsPage != null) _cardsPage.CardsHeightChanged -= OnCardsHeightChanged;
+        _cardsPage = null;
         _settingsService.SettingsChanged -= OnSettingsChanged;
         _overlay?.Close();
         _overlay = null;
@@ -618,8 +645,12 @@ public sealed partial class MainWindow : Window
         if (displayArea == null) return;
 
         var workArea = displayArea.WorkArea;
+        _flyoutWorkArea = workArea;
         var finalX = workArea.X + workArea.Width - WindowWidth - WindowMarginRight;
-        _fixedY = workArea.Y + workArea.Height - WindowHeight - WindowMarginBottom;
+        // Start at the height that fitted the cards last time (within this work area); FitFlyoutHeight corrects it once
+        // the fresh page is laid out
+        var height = Math.Clamp(_windowHeight, 1, FlyoutHeight.Max(workArea.Height, WindowMarginBottom, WindowTopGapDip, CurrentScale()));
+        _fixedY = workArea.Y + workArea.Height - height - WindowMarginBottom;
 
         // Start from right edge (off-screen)
         _startX = workArea.X + workArea.Width;
@@ -639,11 +670,13 @@ public sealed partial class MainWindow : Window
         }
 
         // Position window at start location (off-screen right)
-        AppWindow.Move(new PointInt32(_startX, _fixedY));
+        AppWindow.MoveAndResize(new RectInt32(_startX, _fixedY, WindowWidth, height));
 
         WindowExtensions.Show(this);
         Activate();
         _isWindowVisible = true;
+        // A page that is already laid out (the first open) raises no size change: check its height once now
+        DispatcherQueue.TryEnqueue(FitFlyoutHeight);
         _viewModel.SetFlyoutVisible(true);
         _costDemand ??= _viewModel.AcquireCostDemand();
         _viewModel.RefreshIfStaleAsync(TimeSpan.FromMinutes(2)).SafeFireAndForget(
@@ -667,6 +700,48 @@ public sealed partial class MainWindow : Window
 
         // Animate window sliding left
         PlaySlideAnimation(isShowing: true);
+    }
+
+    private void OnCardsHeightChanged(object? sender, EventArgs e)
+    {
+        // After the layout pass that raised it, not inside it
+        if (_isWindowVisible) DispatcherQueue.TryEnqueue(FitFlyoutHeight);
+    }
+
+    /// <summary>
+    /// Sizes the open flyout to show every provider card without scrolling when the work area has room (it scrolls only
+    /// when they cannot all fit), keeping its bottom edge, width and x. The slide animation keeps re-applying
+    /// <see cref="_fixedY"/>, so the new top is used from the next step on. The provider detail page keeps the height.
+    /// </summary>
+    private void FitFlyoutHeight()
+    {
+        try
+        {
+            if (!_isWindowVisible || (_isAnimating && !_isShowingAnimation)) return;
+            if (ContentFrame.Content is not MainPage page || !page.CardsMeasured) return;
+            var workArea = _flyoutWorkArea;
+            if (workArea.Height <= 0) return;
+            var scale = CurrentScale();
+            var chrome = AppWindow.Size.Height - AppWindow.ClientSize.Height;
+            var height = FlyoutHeight.Fit(page.FullHeight(), scale, chrome, WindowHeight,
+                FlyoutHeight.Max(workArea.Height, WindowMarginBottom, WindowTopGapDip, scale));
+            _windowHeight = height;
+            if (Math.Abs(height - AppWindow.Size.Height) <= 1) return;
+            _fixedY = workArea.Y + workArea.Height - height - WindowMarginBottom;
+            AppWindow.MoveAndResize(new RectInt32(AppWindow.Position.X, _fixedY, WindowWidth, height));
+        }
+        catch (Exception ex)
+        {
+            App.Services.GetRequiredService<ILogger<MainWindow>>().LogError(ex, "Fitting the flyout height failed");
+        }
+    }
+
+    private double CurrentScale()
+    {
+        var scale = ContentFrame.XamlRoot?.RasterizationScale ?? 0;
+        if (scale > 0) return scale;
+        var dpi = NativeMethods.GetDpiForWindow(WindowNative.GetWindowHandle(this));
+        return dpi > 0 ? dpi / 96.0 : 1.0;
     }
 
     private void HideWindow()

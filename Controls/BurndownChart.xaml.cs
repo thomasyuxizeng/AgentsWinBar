@@ -52,7 +52,7 @@ public sealed partial class BurndownChart : UserControl
         Plot.SizeChanged -= OnPlotSizeChanged;
         Plot.Children.Clear();
         Plot.Clip = null;
-        UsageLegend.Foreground = null;
+        UsageKey.Stroke = GuideKey.Stroke = ProjectionKey.Stroke = null;
         _drawnSeries = null;
         _drawnSignature = null;
         SetValue(SeriesProperty, null);
@@ -126,7 +126,9 @@ public sealed partial class BurndownChart : UserControl
             ? new SolidColorBrush(ActualTheme == ElementTheme.Light
                 ? Color.FromArgb(255, 0x65, 0x51, 0xA3) : Color.FromArgb(255, 0xB9, 0xAA, 0xFF))
             : UsageMeter.GetBarBrush(0, Accent);
-        UsageLegend.Foreground = usageBrush;
+        // The legend keys are drawn like the lines; the legend text itself stays neutral so it reads in any colour state
+        UsageKey.Stroke = ProjectionKey.Stroke = usageBrush;
+        GuideKey.Stroke = guideBrush;
         var sampleText = $"{series.SampleCount} sample{(series.SampleCount == 1 ? "" : "s")}";
         Placeholder.Text = series.IsReady ? string.Empty : $"{series.Message} · {sampleText}";
         CaptureText.Text = series.CapturedAt.HasValue
@@ -137,18 +139,40 @@ public sealed partial class BurndownChart : UserControl
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(this, $"Usage history. {Placeholder.Text} {CaptureText.Text}");
         if (width <= 0 || !series.IsReady) return;
         // The even-use guide is only a reference: keep it faint so the observed usage line reads first.
-        AddLine(series.Guide, guideBrush, width, height, dashed: false, thickness: 1.5, opacity: 0.4);
+        AddLine(series.Guide, guideBrush, width, height, dashed: false, thickness: 1.5, opacity: GuideOpacity);
         AddLine(series.Usage, usageBrush, width, height, dashed: false, thickness: 2);
-        AddLine(series.Projection, usageBrush, width, height, dashed: true, thickness: 1);
+        // A projection past the limit stops where it reaches 100% (on the top line) with a dot, instead of leaving the plot
+        var projection = BurndownGeometry.ClipAtCeiling(series.Projection, out var hitsLimit);
+        AddLine(projection, usageBrush, width, height, dashed: true, thickness: 1);
+        if (hitsLimit) AddLimitDot(projection[^1], usageBrush, width, height);
     }
+
+    /// <summary>Space kept free above 100% and below 0%, so a line at either edge (2 DIP thick) is drawn whole.</summary>
+    private const double PlotInset = 4;
+    private const double GuideOpacity = 0.4;
+    private const double ProjectionOpacity = 0.6;
+    private const double LimitDotSize = 5;
+
+    private static Point ToPlot(BurndownPoint point, double width, double height) =>
+        new(Math.Clamp(point.ElapsedFraction, 0, 1) * width, BurndownGeometry.Y(point.UsedPercent, height, PlotInset));
 
     private void AddLine(IReadOnlyList<BurndownPoint> points, Brush brush, double width, double height, bool dashed, double thickness, double opacity = 1)
     {
         if (points.Count < 2) return;
         var line = new Polyline { Stroke = brush, StrokeThickness = thickness, Opacity = opacity };
-        // Leave projections above 100% outside the canvas so clipping keeps their slope accurate.
-        foreach (var point in points) line.Points.Add(new Point(point.ElapsedFraction * width, height * (1 - point.UsedPercent / 100)));
-        if (dashed) { line.StrokeDashArray = new DoubleCollection { 3, 3 }; line.Opacity = 0.6; }
+        foreach (var point in points) line.Points.Add(ToPlot(point, width, height));
+        if (dashed) { line.StrokeDashArray = new DoubleCollection { 3, 3 }; line.Opacity = ProjectionOpacity; }
         Plot.Children.Add(line);
+    }
+
+    /// <summary>Marks where the projected pace reaches the limit.</summary>
+    private void AddLimitDot(BurndownPoint point, Brush brush, double width, double height)
+    {
+        var at = ToPlot(point, width, height);
+        var dot = new Ellipse { Width = LimitDotSize, Height = LimitDotSize, Fill = brush, Opacity = ProjectionOpacity + 0.2 };
+        // Kept inside the plot horizontally so the dot is never cut in half at the reset edge
+        Canvas.SetLeft(dot, Math.Clamp(at.X - LimitDotSize / 2, 0, Math.Max(0, width - LimitDotSize)));
+        Canvas.SetTop(dot, at.Y - LimitDotSize / 2);
+        Plot.Children.Add(dot);
     }
 }

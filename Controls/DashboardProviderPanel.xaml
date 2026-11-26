@@ -373,10 +373,10 @@
                                             <ColumnDefinition Width="Auto" MinWidth="56"/>
                                             <ColumnDefinition Width="36"/>
                                         </Grid.ColumnDefinitions>
-                                        <TextBlock Text="{x:Bind Label}" FontSize="13" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"
+                                        <TextBlock Text="{x:Bind Label}" FontSize="13" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" TextWrapping="WrapWholeWords" MaxLines="2"
                                                    ToolTipService.ToolTip="{x:Bind Label}"
                                                    Visibility="{x:Bind views:DashboardFormat.VisNot(IsOthers)}"/>
-                                        <TextBlock Text="{x:Bind Label}" FontSize="13" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"
+                                        <TextBlock Text="{x:Bind Label}" FontSize="13" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" TextWrapping="WrapWholeWords" MaxLines="2"
                                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                                    Visibility="{x:Bind views:DashboardFormat.Vis(IsOthers)}"/>
                                         <!-- A neutral fill that differs from the track (ControlStrong... is the track's own colour) -->

@@ -235,7 +235,7 @@ public sealed partial class ProviderDetailPage : Page
         if (!string.IsNullOrEmpty(_data.Plan))
         {
             PlanRow.Visibility = Visibility.Visible;
-            PlanText.Text = _data.Plan;
+            PlanText.Text = Helpers.PlanNameFormatter.Display(_data.Plan);
         }
         else
         {

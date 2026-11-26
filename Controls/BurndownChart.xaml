@@ -15,11 +15,32 @@
             <TextBlock Text="Reset" FontSize="10" HorizontalAlignment="Right"
                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
         </Grid>
-        <StackPanel x:Name="LegendPanel" Orientation="Horizontal" Spacing="12">
-            <TextBlock x:Name="UsageLegend" Text="Usage" FontSize="10"/>
-            <TextBlock Text="Even use" FontSize="10" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
-            <TextBlock Text="Dashed: projection" FontSize="10" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
-        </StackPanel>
+        <!-- Legend: plain secondary text (readable in both themes, unlike text in the line's own colour) after a short key
+             drawn like each line. Each entry is one inline object of a RichTextBlock, so in a narrow flyout the entries
+             wrap onto a second line instead of being cut off. -->
+        <RichTextBlock x:Name="LegendPanel" IsTextSelectionEnabled="False" TextWrapping="Wrap" FontSize="10">
+            <Paragraph>
+                <InlineUIContainer>
+                    <StackPanel Orientation="Horizontal" Spacing="4" Margin="0,0,8,0">
+                        <Line x:Name="UsageKey" X2="16" Y1="1" Y2="1" StrokeThickness="2" VerticalAlignment="Center"/>
+                        <TextBlock Text="Usage" FontSize="10" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                    </StackPanel>
+                </InlineUIContainer>
+                <InlineUIContainer>
+                    <StackPanel Orientation="Horizontal" Spacing="4" Margin="0,0,8,0">
+                        <Line x:Name="GuideKey" X2="16" Y1="1" Y2="1" StrokeThickness="1.5" Opacity="0.4" VerticalAlignment="Center"/>
+                        <TextBlock Text="Even use" FontSize="10" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                    </StackPanel>
+                </InlineUIContainer>
+                <InlineUIContainer>
+                    <StackPanel Orientation="Horizontal" Spacing="4">
+                        <Line x:Name="ProjectionKey" X2="15" Y1="1" Y2="1" StrokeThickness="1" StrokeDashArray="3,3" Opacity="0.6"
+                              VerticalAlignment="Center"/>
+                        <TextBlock Text="Projection" FontSize="10" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                    </StackPanel>
+                </InlineUIContainer>
+            </Paragraph>
+        </RichTextBlock>
         <TextBlock x:Name="CaptureText" FontSize="10" TextWrapping="Wrap"
                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
     </StackPanel>

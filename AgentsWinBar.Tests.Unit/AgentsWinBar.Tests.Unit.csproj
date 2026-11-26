@@ -100,6 +100,9 @@
     <EmbeddedResource Include="..\Services\Native\Cost\Pricing\*.json" LogicalName="AgentsWinBar.Pricing.%(Filename)%(Extension)" Link="Linked\Pricing\%(Filename)%(Extension)" />
     <Compile Include="..\Models\UsageHistorySample.cs" Link="Linked\UsageHistorySample.cs" />
     <Compile Include="..\Helpers\BurndownBuilder.cs" Link="Linked\BurndownBuilder.cs" />
+    <Compile Include="..\Helpers\BurndownGeometry.cs" Link="Linked\BurndownGeometry.cs" />
+    <Compile Include="..\Helpers\PlanNameFormatter.cs" Link="Linked\PlanNameFormatter.cs" />
+    <Compile Include="..\Helpers\FlyoutHeight.cs" Link="Linked\FlyoutHeight.cs" />
     <Compile Include="..\Services\UsageHistoryStore.cs" Link="Linked\UsageHistoryStore.cs" />
     <Compile Include="..\Services\UsageHistoryPersistence.cs" Link="Linked\UsageHistoryPersistence.cs" />
     <Compile Include="..\Services\UsageChangeTracker.cs" Link="Linked\UsageChangeTracker.cs" />

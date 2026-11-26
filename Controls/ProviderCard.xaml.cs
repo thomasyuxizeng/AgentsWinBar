@@ -43,6 +43,23 @@ public sealed partial class ProviderCard : UserControl
         set => SetValue(DataProperty, value);
     }
 
+    /// <summary>
+    /// The label column width shared by every card on the flyout (the widest label of any provider, see
+    /// <see cref="LabelColumnWidthFor"/>), so the bars of all cards end at the same x. A card's own labels can only widen it.
+    /// </summary>
+    public static readonly DependencyProperty SharedLabelWidthProperty =
+        DependencyProperty.Register(
+            nameof(SharedLabelWidth),
+            typeof(double),
+            typeof(ProviderCard),
+            new PropertyMetadata(0d, OnDataChanged));
+
+    public double SharedLabelWidth
+    {
+        get => (double)GetValue(SharedLabelWidthProperty);
+        set => SetValue(SharedLabelWidthProperty, value);
+    }
+
     public event EventHandler<UsageData>? DetailRequested;
 
     private string? _iconProvider;
@@ -137,8 +154,9 @@ public sealed partial class ProviderCard : UserControl
         // Extra windows (Fable, External, ...) get their own bars under session/weekly
         var extras = hasAnyData ? Data.ExtraWindows : [];
 
-        // Right-aligned labels share one width, so the bars of session, weekly and the extras line up
-        var labelWidth = LabelColumnWidth(Data.SessionLabel, Data.WeeklyLabel, extras);
+        // Right-aligned labels share one width, so the bars of session, weekly and the extras line up, within this card
+        // and (through SharedLabelWidth) with the other cards
+        var labelWidth = Math.Min(MaxLabelWidth, Math.Max(LabelColumnWidth(Data.SessionLabel, Data.WeeklyLabel, extras), SharedLabelWidth));
         if (labelWidth != _lastAppliedLabelWidth)
         {
             _lastAppliedLabelWidth = labelWidth;
@@ -240,17 +258,7 @@ public sealed partial class ProviderCard : UserControl
             return _lastLabelWidth;
         }
 
-        var style = (Style)Application.Current.Resources["CaptionTextBlockStyle"];
-        var cache = _labelWidthCache ??= new Dictionary<(double Scale, string Label), double>();
-        var widest = MinLabelWidth;
-        widest = Math.Max(widest, MeasureLabel(sessionLabel, scale, style, cache));
-        widest = Math.Max(widest, MeasureLabel(weeklyLabel, scale, style, cache));
-        for (var i = 0; i < extras.Count; i++)
-        {
-            widest = Math.Max(widest, MeasureLabel(extras[i].Title, scale, style, cache));
-        }
-
-        var result = Math.Min(MaxLabelWidth, Math.Ceiling(widest));
+        var result = MeasureLabelColumn(sessionLabel, weeklyLabel, extras, scale);
         _lastLabelScale = scale;
         _lastSessionLabel = sessionLabel;
         _lastWeeklyLabel = weeklyLabel;
@@ -266,6 +274,30 @@ public sealed partial class ProviderCard : UserControl
         }
         _lastLabelWidth = result;
         return result;
+    }
+
+    /// <summary>
+    /// The label column width the card for <paramref name="data"/> needs (the same labels the card shows), so the flyout
+    /// can give every card the widest one. Measured once per label and scale (cached), on the UI thread.
+    /// </summary>
+    internal static double LabelColumnWidthFor(UsageData data, double scale)
+    {
+        var extras = data.Session != null || data.Weekly != null ? data.ExtraWindows : [];
+        return MeasureLabelColumn(data.SessionLabel, data.WeeklyLabel, extras, scale);
+    }
+
+    private static double MeasureLabelColumn(string sessionLabel, string weeklyLabel, IReadOnlyList<ExtraUsageWindow> extras, double scale)
+    {
+        var style = (Style)Application.Current.Resources["CaptionTextBlockStyle"];
+        var cache = _labelWidthCache ??= new Dictionary<(double Scale, string Label), double>();
+        var widest = MinLabelWidth;
+        widest = Math.Max(widest, MeasureLabel(sessionLabel, scale, style, cache));
+        widest = Math.Max(widest, MeasureLabel(weeklyLabel, scale, style, cache));
+        for (var i = 0; i < extras.Count; i++)
+        {
+            widest = Math.Max(widest, MeasureLabel(extras[i].Title, scale, style, cache));
+        }
+        return Math.Min(MaxLabelWidth, Math.Ceiling(widest));
     }
 
     private static bool ExtraTitlesMatch(IReadOnlyList<ExtraUsageWindow> extras, string[]? cached)
