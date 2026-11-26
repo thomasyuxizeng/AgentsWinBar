@@ -83,6 +83,40 @@ public class SettingsViewModelTests
     }
 
     [TestMethod]
+    public async Task SaveAsync_TaskbarDisplayPositionChanged_PersistsAndLoadsBack()
+    {
+        var vm = Create();
+        vm.TaskbarDisplayPosition.Should().Be("auto");
+        vm.TaskbarDisplayPosition = "right";
+        _settings.TaskbarDisplayPosition.Should().Be("auto"); // Edits stay local until Save.
+        await vm.SaveCommand.ExecuteAsync(null);
+        _settings.TaskbarDisplayPosition.Should().Be("right");
+        vm.Load();
+        vm.TaskbarDisplayPosition.Should().Be("right");
+    }
+
+    [TestMethod]
+    public async Task SaveAsync_FailedPersistence_RollsBackTaskbarDisplayPosition()
+    {
+        var vm = Create();
+        vm.TaskbarDisplayPosition = "left";
+        _store.Setup(s => s.SaveAsync()).ThrowsAsync(new IOException("disk unavailable"));
+        Func<Task> save = () => vm.SaveCommand.ExecuteAsync(null);
+        await save.Should().ThrowAsync<IOException>();
+        _settings.TaskbarDisplayPosition.Should().Be("auto");
+    }
+
+    [TestMethod]
+    [DataRow("Left")]
+    [DataRow("sideways")]
+    public void Load_UnknownStoredTaskbarDisplayPosition_ShowsAutomatic(string stored)
+    {
+        _settings.TaskbarDisplayPosition = stored;
+        var vm = Create();
+        vm.TaskbarDisplayPosition.Should().Be("auto");
+    }
+
+    [TestMethod]
     public async Task SaveAsync_InvalidBillingEdits_NormalizesValues()
     {
         var vm = Create(); vm.ApiCreditsMonthlyUsd = -1; vm.ApiCreditsCycleStartDay = 31;

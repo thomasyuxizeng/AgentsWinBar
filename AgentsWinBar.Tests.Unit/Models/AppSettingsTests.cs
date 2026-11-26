@@ -333,6 +333,57 @@ public class AppSettingsTests
     }
 
     [TestMethod]
+    [DataRow("auto", "auto")]
+    [DataRow("left", "left")]
+    [DataRow("right", "right")]
+    [DataRow("Left", "auto")]
+    [DataRow("RIGHT", "auto")]
+    [DataRow(" left", "auto")]
+    [DataRow("middle", "auto")]
+    [DataRow("", "auto")]
+    [DataRow(null, "auto")]
+    public void Normalize_TaskbarDisplayPosition_KeepsExactValuesOtherwiseAuto(string? stored, string expected)
+    {
+        var settings = new AppSettings { TaskbarDisplayPosition = stored! };
+
+        settings.Normalize();
+
+        settings.TaskbarDisplayPosition.Should().Be(expected);
+        TaskbarDisplayPositions.Normalize(stored).Should().Be(expected);
+    }
+
+    [TestMethod]
+    public void Deserialize_TaskbarDisplayPositionMissingOrNull_IsAuto()
+    {
+        var older = System.Text.Json.JsonSerializer.Deserialize("""{"Version":1}""", AppJsonSerializerContext.Default.AppSettings)!;
+        var nulled = System.Text.Json.JsonSerializer.Deserialize("""{"taskbarDisplayPosition":null}""", AppJsonSerializerContext.Default.AppSettings)!;
+
+        older.Normalize();
+        nulled.Normalize();
+
+        older.TaskbarDisplayPosition.Should().Be("auto");
+        nulled.TaskbarDisplayPosition.Should().Be("auto");
+        AppSettings.GetDefaults().TaskbarDisplayPosition.Should().Be("auto");
+        new AppSettings().TaskbarDisplayPosition.Should().Be("auto");
+    }
+
+    [TestMethod]
+    [DataRow("left")]
+    [DataRow("right")]
+    public void Serialize_TaskbarDisplayPosition_RoundTripsUnderCamelCaseKey(string position)
+    {
+        var settings = AppSettings.GetDefaults();
+        settings.TaskbarDisplayPosition = position;
+
+        var json = System.Text.Json.JsonSerializer.Serialize(settings, AppJsonSerializerContext.Default.AppSettings);
+        var loaded = System.Text.Json.JsonSerializer.Deserialize(json, AppJsonSerializerContext.Default.AppSettings)!;
+        loaded.Normalize();
+
+        json.Should().Contain($"\"taskbarDisplayPosition\": \"{position}\"");
+        loaded.TaskbarDisplayPosition.Should().Be(position);
+    }
+
+    [TestMethod]
     public void Overlay_SettingsRoundTripThroughJson()
     {
         // Arrange

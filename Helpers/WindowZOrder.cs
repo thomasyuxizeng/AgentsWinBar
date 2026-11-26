@@ -322,6 +322,118 @@ internal static class WindowZOrder
         return (data.rc.Left, data.rc.Top, data.rc.Right, data.rc.Bottom, edge);
     }
 
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern IntPtr FindWindowEx(IntPtr hWndParent, IntPtr hWndChildAfter, string? lpszClass, string? lpszWindow);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool IsWindow(IntPtr hWnd);
+
+    private delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool EnumChildWindows(IntPtr hWndParent, EnumWindowsProc lpEnumFunc, IntPtr lParam);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern int GetClassName(IntPtr hWnd, [Out] char[] lpClassName, int nMaxCount);
+
+    /// <summary>
+    /// The TaskbarAl value (Windows 11 taskbar alignment: 0 = left, 1 = center), or null when it is not set or cannot be
+    /// read. A registry read: call it when the taskbar or the settings change, not on every tick.
+    /// </summary>
+    public static int? ReadTaskbarAlignment()
+    {
+        try
+        {
+            using var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(
+                @"Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced");
+            return key?.GetValue("TaskbarAl") is int value ? value : null;
+        }
+        catch (Exception ex) when (ex is System.Security.SecurityException or UnauthorizedAccessException or IOException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Reads the rectangles of the primary taskbar's Start button (class "Start") and system tray (class
+    /// "TrayNotifyWnd") with plain Win32 calls. The window handles are cached and looked up again only when
+    /// IsWindow says one is gone (for example after an Explorer restart). Thread-safe.
+    /// </summary>
+    public sealed class TaskbarParts
+    {
+        private const string TrayClass = "Shell_TrayWnd";
+        private const string StartClass = "Start";
+        private const string NotifyClass = "TrayNotifyWnd";
+
+        private readonly object _lock = new();
+        private readonly char[] _classBuffer = new char[64];
+        private readonly EnumWindowsProc _enumProc;
+        private string _searchClass = string.Empty;
+        private IntPtr _found;
+        private IntPtr _start;
+        private IntPtr _notify;
+
+        public TaskbarParts()
+        {
+            // One delegate for the object's life: the descendant search allocates nothing per call
+            _enumProc = MatchClass;
+        }
+
+        /// <summary>
+        /// The current Start and tray rectangles (null when a window is missing or empty). A cached handle that
+        /// IsWindow rejects is looked up again at once (once per lost handle: a failed lookup leaves no handle). A
+        /// window that was not found is searched for again only with <paramref name="lookUpMissing"/>, so a check that
+        /// runs on every tick never walks the taskbar's child windows for a window this Windows build does not have.
+        /// </summary>
+        public (ScreenRect? Start, ScreenRect? Tray) Read(bool lookUpMissing)
+        {
+            lock (_lock)
+            {
+                var findStart = NeedsLookup(_start, lookUpMissing);
+                var findNotify = NeedsLookup(_notify, lookUpMissing);
+                if (findStart || findNotify)
+                {
+                    var taskbar = FindWindow(TrayClass, null);
+                    if (findStart) _start = FindDescendant(taskbar, StartClass);
+                    if (findNotify) _notify = FindDescendant(taskbar, NotifyClass);
+                }
+                return (RectOf(_start), RectOf(_notify));
+            }
+        }
+
+        private static bool NeedsLookup(IntPtr hwnd, bool lookUpMissing) =>
+            hwnd == IntPtr.Zero ? lookUpMissing : !IsWindow(hwnd);
+
+        private static ScreenRect? RectOf(IntPtr hwnd) =>
+            hwnd != IntPtr.Zero && TryGetWindowRect(hwnd, out var rect) && !rect.IsEmpty ? rect : null;
+
+        /// <summary>A direct child first (the usual place), then any descendant.</summary>
+        private IntPtr FindDescendant(IntPtr parent, string className)
+        {
+            if (parent == IntPtr.Zero) return IntPtr.Zero;
+            var child = FindWindowEx(parent, IntPtr.Zero, className, null);
+            if (child != IntPtr.Zero) return child;
+
+            _searchClass = className;
+            _found = IntPtr.Zero;
+            EnumChildWindows(parent, _enumProc, IntPtr.Zero);
+            return _found;
+        }
+
+        private bool MatchClass(IntPtr hwnd, IntPtr _)
+        {
+            var length = GetClassName(hwnd, _classBuffer, _classBuffer.Length);
+            if (length == _searchClass.Length && _searchClass.AsSpan().SequenceEqual(_classBuffer.AsSpan(0, length)))
+            {
+                _found = hwnd;
+                return false;
+            }
+            return true;
+        }
+    }
+
     public static IntPtr GetForeground() => GetForegroundWindow();
 
     /// <summary>

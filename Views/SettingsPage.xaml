@@ -452,11 +452,15 @@
                         <ColumnDefinition Width="*"/>
                         <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
 
                     <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,16,0">
                         <TextBlock Text="Taskbar display" Style="{StaticResource BodyTextBlockStyle}"/>
                         <TextBlock
-                            Text="Show a compact usage strip on the taskbar, bottom-left corner"
+                            Text="Show a compact usage strip on the taskbar"
                             Style="{StaticResource CaptionTextBlockStyle}"
                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                             TextWrapping="Wrap"/>
@@ -470,6 +474,27 @@
                         MinWidth="0"
                         Margin="0,-4,0,-4"
                         VerticalAlignment="Center"/>
+
+                    <!-- Position: under the toggle row, laid out like the theme card (label, then the dropdown below it),
+                         as the window is too narrow for "Right end, next to the system tray" beside its label -->
+                    <StackPanel Grid.Row="1" Grid.ColumnSpan="2" Margin="0,12,0,0">
+                        <StackPanel Margin="0,0,0,10">
+                            <TextBlock Text="Position" Style="{StaticResource BodyTextBlockStyle}"/>
+                            <TextBlock
+                                Text="Automatic uses the right end when Start is at the left end of the taskbar"
+                                Style="{StaticResource CaptionTextBlockStyle}"
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                TextWrapping="Wrap"/>
+                        </StackPanel>
+                        <ComboBox
+                            x:Name="TaskbarPositionComboBox" AutomationProperties.Name="Taskbar display position"
+                            MinWidth="220"
+                            HorizontalAlignment="Left">
+                            <ComboBoxItem Content="Automatic" Tag="auto"/>
+                            <ComboBoxItem Content="Left end" Tag="left"/>
+                            <ComboBoxItem Content="Right end, next to the system tray" Tag="right"/>
+                        </ComboBox>
+                    </StackPanel>
                 </Grid>
 
                 <!-- Usage Alerts Card -->

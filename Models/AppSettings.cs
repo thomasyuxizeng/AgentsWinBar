@@ -18,6 +18,24 @@ public enum ResetAnimationMode
 }
 
 /// <summary>
+/// Values of <see cref="AppSettings.TaskbarDisplayPosition"/>: where the taskbar strip sits.
+/// </summary>
+public static class TaskbarDisplayPositions
+{
+    public const string Auto = "auto";
+    public const string Left = "left";
+    public const string Right = "right";
+
+    /// <summary>"left" and "right" exactly as written stay; anything else (null, empty, unknown, other case) is "auto".</summary>
+    public static string Normalize(string? value) => value switch
+    {
+        Left => Left,
+        Right => Right,
+        _ => Auto
+    };
+}
+
+/// <summary>
 /// Timeout settings for various operations.
 /// </summary>
 public class TimeoutSettings
@@ -67,9 +85,16 @@ public class AppSettings
     public bool AlwaysOnOverlayEnabled { get; set; } = false;
 
     /// <summary>
-    /// Shows a compact usage strip on the taskbar (bottom-left corner), independent of the floating overlay.
+    /// Shows a compact usage strip on the taskbar, independent of the floating overlay.
     /// </summary>
     public bool TaskbarDisplayEnabled { get; set; } = false;
+
+    /// <summary>
+    /// Which end of the taskbar the strip sits at: "auto" (default: the right end, next to the system tray, when the
+    /// Start button is at the taskbar's left end, otherwise the left end), "left" or "right". Set in settings.json;
+    /// anything else, including a missing value or another letter case, reads as "auto".
+    /// </summary>
+    public string TaskbarDisplayPosition { get; set; } = TaskbarDisplayPositions.Auto;
 
     /// <summary>
     /// Shows a Windows notification when usage is far ahead of pace, nearly out, or at the limit.
@@ -151,6 +176,7 @@ public class AppSettings
             .ToList();
         UsageSources = NormalizeUsageSources(UsageSources);
         CostSource = UsageSource.Normalize(CostSource);
+        TaskbarDisplayPosition = TaskbarDisplayPositions.Normalize(TaskbarDisplayPosition);
         if (!Enum.IsDefined(Theme)) Theme = AppTheme.System;
         if (!Enum.IsDefined(ResetAnimationMode)) ResetAnimationMode = ResetAnimationMode.WhenNotBatterySaver;
         RefreshIntervalSeconds = ValidRange(RefreshIntervalSeconds, 86400, 120);
@@ -215,6 +241,7 @@ public class AppSettings
         DeveloperModeEnabled = false,
         AlwaysOnOverlayEnabled = false,
         TaskbarDisplayEnabled = false,
+        TaskbarDisplayPosition = TaskbarDisplayPositions.Auto,
         AlertsEnabled = true,
         ShowCostTotals = true,
         ApiCreditsMonthlyUsd = 200,

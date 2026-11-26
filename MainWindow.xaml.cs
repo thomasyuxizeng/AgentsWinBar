@@ -388,13 +388,18 @@ public sealed partial class MainWindow : Window
     }
 
     /// <summary>
-    /// Creates or closes the taskbar strip so it matches the saved setting.
+    /// Creates or closes the taskbar strip so it matches the saved setting, and moves a shown strip to the saved
+    /// position (a new strip reads the position itself).
     /// </summary>
     private void ApplyTaskbarSetting()
     {
         var enabled = _settingsService.Settings.TaskbarDisplayEnabled;
 
-        if (enabled && _taskbarWindow == null)
+        if (enabled && _taskbarWindow != null)
+        {
+            _taskbarWindow.ApplyPositionSetting(_settingsService.Settings.TaskbarDisplayPosition);
+        }
+        else if (enabled && _taskbarWindow == null)
         {
             _taskbarWindow = new TaskbarWindow();
             _taskbarWindow.OpenDetailsRequested += (_, _) => ToggleWindow();

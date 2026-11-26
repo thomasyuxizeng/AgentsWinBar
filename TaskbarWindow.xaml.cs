@@ -123,15 +123,15 @@ public sealed class TaskbarStripGrid : Microsoft.UI.Xaml.Controls.Grid
 }
 
 /// <summary>
-/// Compact usage strip shown on the taskbar, bottom-left corner. Never takes focus;
-/// click opens the flyout, right-click for the menu.
+/// Compact usage strip shown on the taskbar, at its left end or just left of the system tray (see
+/// <see cref="TaskbarPlacement"/>). Never takes focus; click opens the flyout, right-click for the menu.
 /// </summary>
 public sealed partial class TaskbarWindow : Window
 {
     // Item = 16 icon + 10 gap + 56 bar + 6 gap + about 28 number (the number column is always as wide as
     // "100%", so the strip never changes width with the digits); strip = 18 padding per side, no border.
     // These give a lower bound only: Reposition() grows the strip to the measured content if needed.
-    // The strip sits flush: full taskbar height, starting at the taskbar's left edge.
+    // The strip sits flush: full taskbar height, starting at the taskbar's left edge or ending just before the tray.
     private const double ClipSlackDip = 2;
     private const double ItemWidthDip = 116;
     private const double ItemSpacingDip = 24;
@@ -165,7 +165,20 @@ public sealed partial class TaskbarWindow : Window
     private volatile bool _taskbarWatcherActive;
     private volatile bool _taskbarBoundsStale = true;
     private (int Left, int Top, int Right, int Bottom, WindowZOrder.TaskbarEdge Edge)? _taskbarBounds;
-    private bool _roundedRightEnd;
+    private bool _roundedCorners;
+    private static readonly int WindowsBuild = Environment.OSVersion.Version.Build;
+    // Start button and tray rectangles for the placement; read on the UI thread and by the poll's cheap check
+    private readonly WindowZOrder.TaskbarParts _taskbarParts = new();
+    private volatile string _position = TaskbarDisplayPositions.Auto;
+    // TaskbarAl is a registry read: only when the taskbar or the settings change, never on a plain tick
+    private volatile bool _taskbarAlignmentStale = true;
+    private int? _taskbarAlignment;
+    // True while the placement depends on the Start and tray rectangles (bottom taskbar, position not "left")
+    private volatile bool _watchTaskbarParts;
+    private string? _lastPosition;
+    private int? _lastTaskbarAlignment;
+    private ScreenRect? _lastStartRect;   // with _lastTrayRect: under _stateLock (the poll thread compares them)
+    private ScreenRect? _lastTrayRect;
     private volatile bool _hiddenForFullscreen;
     private volatile bool _wasLocked;
     private bool _shown;
@@ -212,6 +225,8 @@ public sealed partial class TaskbarWindow : Window
         _sessionState = App.Services.GetRequiredService<ISessionStateSource>();
         _displayState = App.Services.GetRequiredService<IDisplayStateSource>();
         _hwnd = WindowNative.GetWindowHandle(this);
+        _position = TaskbarDisplayPositions.Normalize(
+            App.Services.GetRequiredService<ISettingsService>().Settings.TaskbarDisplayPosition);
 
         ConfigureWindow();
         SetupAcrylicBackdrop();
@@ -242,9 +257,15 @@ public sealed partial class TaskbarWindow : Window
         WindowZOrder.RemoveSystemBorder(_hwnd);
         WindowZOrder.RestoreForeground(previousForeground);
 
-        _taskbarChangeWatcher ??= new TaskbarChangeWatcher(_hwnd, () => _taskbarBoundsStale = true);
+        _taskbarChangeWatcher ??= new TaskbarChangeWatcher(_hwnd, () =>
+        {
+            // A setting change (the taskbar alignment included) or a moved taskbar: re-read both
+            _taskbarBoundsStale = true;
+            _taskbarAlignmentStale = true;
+        });
         _taskbarWatcherActive = _taskbarChangeWatcher.IsActive;
         _taskbarBoundsStale = true;
+        _taskbarAlignmentStale = true;
         Reposition();
         WindowZOrder.AssertTopmost(_hwnd);
 
@@ -276,6 +297,22 @@ public sealed partial class TaskbarWindow : Window
         {
             SetTickInterval(ActiveTick);
         }
+    }
+
+    /// <summary>
+    /// Applies the TaskbarDisplayPosition setting after Settings were saved, so the strip moves without a restart.
+    /// Also re-reads the taskbar and its alignment, as any settings change may come with a changed taskbar.
+    /// </summary>
+    public void ApplyPositionSetting(string? position)
+    {
+        if (_closed) return;
+        _position = TaskbarDisplayPositions.Normalize(position);
+        _taskbarBoundsStale = true;
+        _taskbarAlignmentStale = true;
+        // Hidden or locked: the strip is placed again when it comes back
+        if (!_shown || _wasLocked || _hiddenForFullscreen || !WindowZOrder.IsWindowVisible(_hwnd)) return;
+        try { Reposition(); }
+        catch (Exception ex) { App.Services.GetRequiredService<ILogger<TaskbarWindow>>().LogError(ex, "Taskbar position change failed"); }
     }
 
     /// <summary>
@@ -431,6 +468,12 @@ public sealed partial class TaskbarWindow : Window
                 {
                     needsUiWork = true;
                 }
+                else if (_watchTaskbarParts && TaskbarPartsMoved())
+                {
+                    // The tray grew or shrank, or Start moved: place the strip again, with a fresh taskbar read
+                    _taskbarBoundsStale = true;
+                    needsUiWork = true;
+                }
             }
 
             var needsRaise = !needsUiWork && WindowZOrder.NeedsRaise(_hwnd);
@@ -451,6 +494,18 @@ public sealed partial class TaskbarWindow : Window
             ReschedulePoll(ActiveTick);
         }
         finally { Volatile.Write(ref _pollBusy, 0); }
+    }
+
+    /// <summary>
+    /// Two GetWindowRect calls on the poll thread: whether the Start button or the tray moved since the strip was placed.
+    /// </summary>
+    private bool TaskbarPartsMoved()
+    {
+        var (start, tray) = _taskbarParts.Read(lookUpMissing: false);
+        lock (_stateLock)
+        {
+            return start != _lastStartRect || tray != _lastTrayRect;
+        }
     }
 
     /// <summary>
@@ -741,24 +796,57 @@ public sealed partial class TaskbarWindow : Window
     private static SolidColorBrush DarkPrimaryBrush => _darkPrimaryBrush ??= new SolidColorBrush(ColorHelper.FromArgb(255, 240, 240, 240));
 
     /// <summary>
-    /// Places the strip over the bottom-left of the taskbar (or the screen's bottom-left if the
-    /// taskbar isn't docked at the bottom). Only moves the window when something changed.
+    /// Places the strip over the taskbar, at its left end or just left of the system tray (see
+    /// <see cref="TaskbarPlacement"/>), or at the screen's bottom-left if the taskbar isn't docked at the bottom.
+    /// Only moves the window when something changed.
     /// </summary>
     private void Reposition()
     {
         var scale = WindowZOrder.GetScale(_hwnd);
+        var lookUpParts = false;
         if (_taskbarBoundsStale)
         {
-            _taskbarBounds = WindowZOrder.GetTaskbarBounds();
+            // Cleared first, so a request made while the taskbar is being read is not lost
             _taskbarBoundsStale = false;
+            var bounds = WindowZOrder.GetTaskbarBounds();
+            if (!Nullable.Equals(bounds, _taskbarBounds)) _taskbarAlignmentStale = true;
+            _taskbarBounds = bounds;
+            lookUpParts = true;
         }
         var bar = _taskbarBounds is { Edge: WindowZOrder.TaskbarEdge.Bottom } b ? b : ((int, int, int, int, WindowZOrder.TaskbarEdge)?)null;
         var screen = bar == null ? DisplayArea.Primary.OuterBounds : default;
 
+        // The Start button, the tray and TaskbarAl only matter on a bottom taskbar when the position is not "left"
+        var position = _position;
+        var watchParts = bar != null && position != TaskbarDisplayPositions.Left;
+        ScreenRect? start = null;
+        ScreenRect? tray = null;
+        if (watchParts)
+        {
+            (start, tray) = _taskbarParts.Read(lookUpParts);
+            if (_taskbarAlignmentStale)
+            {
+                _taskbarAlignmentStale = false;
+                _taskbarAlignment = WindowZOrder.ReadTaskbarAlignment();
+            }
+        }
+        _watchTaskbarParts = watchParts;
+
+        ScreenRect? lastStart;
+        ScreenRect? lastTray;
+        lock (_stateLock)
+        {
+            lastStart = _lastStartRect;
+            lastTray = _lastTrayRect;
+        }
+
         var contentChanged = _lastRepositionSignature != _lastSignature;
         var environmentChanged = scale != _lastScale ||
             !Equals(bar, _lastTaskbarBounds) ||
-            (bar == null && (screen.X != _lastScreenBounds.X || screen.Y != _lastScreenBounds.Y || screen.Width != _lastScreenBounds.Width || screen.Height != _lastScreenBounds.Height));
+            (bar == null && (screen.X != _lastScreenBounds.X || screen.Y != _lastScreenBounds.Y || screen.Width != _lastScreenBounds.Width || screen.Height != _lastScreenBounds.Height)) ||
+            !string.Equals(position, _lastPosition, StringComparison.Ordinal) ||
+            start != lastStart || tray != lastTray ||
+            _taskbarAlignment != _lastTaskbarAlignment;
 
         if (!contentChanged && !environmentChanged && _hasTarget)
         {
@@ -776,18 +864,44 @@ public sealed partial class TaskbarWindow : Window
         _lastTaskbarBounds = bar;
         _lastScreenBounds = screen;
         _lastRepositionSignature = _lastSignature;
+        _lastPosition = position;
+        _lastTaskbarAlignment = _taskbarAlignment;
         lock (_stateLock)
         {
             _lastScale = scale;
+            _lastStartRect = start;
+            _lastTrayRect = tray;
         }
 
         var count = Math.Max(1, Items.Count);
 
-        // Rounded right end, square left end: DWM rounds all four corners or none, so when nothing is
+        // Never narrower than the content, so the right edge can't be clipped (e.g. after a display scale change).
+        // The width with the same padding on both sides (no overhang) is the strip at the right end; the left end
+        // adds its overhang to it. The measured size includes the current padding, which is swapped for that one.
+        RootGrid.Measure(new Windows.Foundation.Size(double.PositiveInfinity, double.PositiveInfinity));
+        var currentPadding = RootGrid.Padding;
+        var baseDip = Math.Max(
+            count * ItemWidthDip + (count - 1) * ItemSpacingDip + HorizontalPaddingDip,
+            RootGrid.DesiredSize.Width - currentPadding.Left - currentPadding.Right + HorizontalPaddingDip);
+        var rightEndWidth = (int)Math.Ceiling((baseDip + ClipSlackDip) * scale);
+
+        var side = TaskbarStripSide.Left;
+        var rightEndX = 0;
+        if (bar is { } placed)
+        {
+            var placement = TaskbarPlacement.Decide(
+                new ScreenRect(placed.Item1, placed.Item2, placed.Item3, placed.Item4),
+                start, tray, _taskbarAlignment, WindowsBuild, rightEndWidth, scale, position);
+            side = placement.Side;
+            rightEndX = placement.X;
+        }
+
+        // Left end: rounded right end, square left end. DWM rounds all four corners or none, so when nothing is
         // to the left of the taskbar we push the window's left end just past the screen edge, where
         // its (rounded) left corners are off-screen, and add the same amount of left padding.
+        // Right end: no overhang, the same padding on both sides, small rounded corners at both ends.
         var overhangDip = 0.0;
-        if (bar is { } probe)
+        if (side == TaskbarStripSide.Left && bar is { } probe)
         {
             var probePoint = new PointInt32(probe.Item1 - 1, probe.Item2 + (probe.Item4 - probe.Item2) / 2);
             if (DisplayArea.GetFromPoint(probePoint, DisplayAreaFallback.None) == null)
@@ -796,30 +910,28 @@ public sealed partial class TaskbarWindow : Window
             }
         }
 
-        var rounded = overhangDip > 0;
-        if (rounded != _roundedRightEnd)
+        var rounded = side == TaskbarStripSide.Right || overhangDip > 0;
+        if (rounded != _roundedCorners)
         {
-            _roundedRightEnd = rounded;
+            _roundedCorners = rounded;
             if (rounded) WindowZOrder.UseSmallRoundedCorners(_hwnd); else WindowZOrder.DisableRoundedCorners(_hwnd);
         }
 
         RootGrid.Padding = new Thickness(SidePaddingDip + overhangDip, 0, SidePaddingDip, 0);
 
-        // Never narrower than the content, so the right edge can't be clipped (e.g. after a display scale change)
-        RootGrid.Measure(new Windows.Foundation.Size(double.PositiveInfinity, double.PositiveInfinity));
-        var contentDip = Math.Max(
-            count * ItemWidthDip + (count - 1) * ItemSpacingDip + HorizontalPaddingDip + overhangDip,
-            RootGrid.DesiredSize.Width);
-        var width = (int)Math.Ceiling((contentDip + ClipSlackDip) * scale);
+        var width = side == TaskbarStripSide.Right
+            ? rightEndWidth
+            : (int)Math.Ceiling((baseDip + overhangDip + ClipSlackDip) * scale);
         var overhang = (int)Math.Ceiling(overhangDip * scale);
 
-        // Flush with the taskbar's left and bottom edges, but starting just below the thin line that
-        // runs along the taskbar's top edge so the strip never covers it
+        // Flush with the taskbar's bottom edge (and its left edge, or just before the tray), but starting just
+        // below the thin line that runs along the taskbar's top edge so the strip never covers it
         var topLine = (int)Math.Ceiling(TopLineDip * scale);
         RectInt32 target;
         if (bar is { } taskbar)
         {
-            target = new RectInt32(taskbar.Item1 - overhang, taskbar.Item2 + topLine, width,
+            var x = side == TaskbarStripSide.Right ? rightEndX : taskbar.Item1 - overhang;
+            target = new RectInt32(x, taskbar.Item2 + topLine, width,
                 Math.Max(1, taskbar.Item4 - taskbar.Item2 - topLine));
         }
         else

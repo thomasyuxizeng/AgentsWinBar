@@ -177,6 +177,11 @@ public sealed partial class SettingsPage : Page
         StartMinimizedToggle.IsOn = ViewModel.StartMinimized;
         AlwaysOnOverlayToggle.IsOn = ViewModel.AlwaysOnOverlay;
         TaskbarDisplayToggle.IsOn = ViewModel.TaskbarDisplay;
+        // Plain ComboBoxItems tagged with the stored value (see the reset animation note above)
+        TaskbarPositionComboBox.SelectedItem = TaskbarPositionComboBox.Items
+            .OfType<ComboBoxItem>()
+            .FirstOrDefault(item => item.Tag is string tag && tag == ViewModel.TaskbarDisplayPosition)
+            ?? TaskbarPositionComboBox.Items.OfType<ComboBoxItem>().FirstOrDefault();
         AlertsToggle.IsOn = ViewModel.AlertsEnabled;
         CostTotalsToggle.IsOn = ViewModel.ShowCostTotals;
         ApiCreditsMonthlyBox.Value = (double)ViewModel.ApiCreditsMonthlyUsd;
@@ -234,6 +239,10 @@ public sealed partial class SettingsPage : Page
             ViewModel.StartMinimized = StartMinimizedToggle.IsOn;
             ViewModel.AlwaysOnOverlay = AlwaysOnOverlayToggle.IsOn;
             ViewModel.TaskbarDisplay = TaskbarDisplayToggle.IsOn;
+            if (TaskbarPositionComboBox.SelectedItem is ComboBoxItem { Tag: string position })
+            {
+                ViewModel.TaskbarDisplayPosition = Models.TaskbarDisplayPositions.Normalize(position);
+            }
             ViewModel.AlertsEnabled = AlertsToggle.IsOn;
             ViewModel.ShowCostTotals = CostTotalsToggle.IsOn;
             // A cleared NumberBox reports NaN: keep the previous value

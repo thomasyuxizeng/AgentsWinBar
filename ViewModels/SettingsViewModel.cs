@@ -33,6 +33,10 @@ public partial class SettingsViewModel : ObservableObject
     [ObservableProperty]
     private bool _taskbarDisplay;
 
+    /// <summary>Where the taskbar strip sits: "auto", "left" or "right" (see <see cref="TaskbarDisplayPositions"/>).</summary>
+    [ObservableProperty]
+    private string _taskbarDisplayPosition = TaskbarDisplayPositions.Auto;
+
     [ObservableProperty]
     private bool _alertsEnabled;
 
@@ -99,6 +103,7 @@ public partial class SettingsViewModel : ObservableObject
         StartMinimized = settings.StartMinimized;
         AlwaysOnOverlay = settings.AlwaysOnOverlayEnabled;
         TaskbarDisplay = settings.TaskbarDisplayEnabled;
+        TaskbarDisplayPosition = TaskbarDisplayPositions.Normalize(settings.TaskbarDisplayPosition);
         AlertsEnabled = settings.AlertsEnabled;
         ShowCostTotals = settings.ShowCostTotals;
         ApiCreditsMonthlyUsd = settings.ApiCreditsMonthlyUsd;
@@ -147,6 +152,7 @@ public partial class SettingsViewModel : ObservableObject
             settings.AlwaysOnOverlayEnabled, settings.TaskbarDisplayEnabled, settings.AlertsEnabled,
             settings.ShowCostTotals, settings.Theme, settings.DeveloperModeEnabled, settings.ResetAnimationMode,
             settings.ApiCreditsMonthlyUsd, settings.ApiCreditsCycleStartDay);
+        var previousTaskbarPosition = settings.TaskbarDisplayPosition;
 
         // Update providers (including order)
         foreach (var provider in Providers)
@@ -165,6 +171,7 @@ public partial class SettingsViewModel : ObservableObject
         settings.StartMinimized = StartMinimized;
         settings.AlwaysOnOverlayEnabled = AlwaysOnOverlay;
         settings.TaskbarDisplayEnabled = TaskbarDisplay;
+        settings.TaskbarDisplayPosition = TaskbarDisplayPositions.Normalize(TaskbarDisplayPosition);
         settings.AlertsEnabled = AlertsEnabled;
         settings.ShowCostTotals = ShowCostTotals;
         settings.ApiCreditsMonthlyUsd = Helpers.ApiCreditsCalculator.NormalizeMonthlyUsd(ApiCreditsMonthlyUsd);
@@ -183,6 +190,7 @@ public partial class SettingsViewModel : ObservableObject
                 settings.AlwaysOnOverlayEnabled, settings.TaskbarDisplayEnabled, settings.AlertsEnabled,
                 settings.ShowCostTotals, settings.Theme, settings.DeveloperModeEnabled, settings.ResetAnimationMode,
                 settings.ApiCreditsMonthlyUsd, settings.ApiCreditsCycleStartDay) = previous;
+            settings.TaskbarDisplayPosition = previousTaskbarPosition;
             throw;
         }
 
