@@ -8,8 +8,8 @@ authoritative text.
 
 | Component | Used for | License |
 | --- | --- | --- |
-| [CodexBar](https://github.com/steipete/CodexBar) by Peter Steinberger | The usage readers in `Services/Native/` are ports of CodexBar's fetchers and normalizers, and `Services/Native/Cost/Pricing/pricing-overlay.json` is a port of its built-in price tables. The optional WSL route runs the CodexBar CLI itself. | MIT |
-| [models.dev](https://models.dev) | `Services/Native/Cost/Pricing/models-dev-prices.json` is a snapshot of its model prices, refreshed at run time. | MIT |
+| [CodexBar](https://github.com/steipete/CodexBar) by Peter Steinberger | The usage readers in `Services/Native/` are ports of CodexBar's fetchers and normalizers, the Antigravity conversation readers (`Services/Native/Cost/Antigravity*.cs`) are ports of its local token history reader, and `Services/Native/Cost/Pricing/pricing-overlay.json` is a port of its built-in price tables. The optional WSL route runs the CodexBar CLI itself. | MIT |
+| [models.dev](https://models.dev) | `Services/Native/Cost/Pricing/models-dev-prices.json` is a snapshot of its model prices (Anthropic, OpenAI and Google), refreshed at run time. | MIT |
 | [CodexBarWin](https://github.com/nek0der/CodexBarWin) by nek0der | This project started as a fork of it. | MIT |
 
 ## NuGet packages shipped with the app
@@ -31,3 +31,5 @@ authoritative text.
 | MinVer | Apache-2.0 |
 | Microsoft.Windows.SDK.BuildTools | Microsoft Windows SDK license |
 | MSTest, Moq, AwesomeAssertions (tests) | MIT, BSD-3-Clause, Apache-2.0 |
+| Microsoft.Data.Sqlite, Microsoft.Data.Sqlite.Core (tests: builds synthetic Antigravity databases) | MIT |
+| SQLitePCLRaw.bundle_e_sqlite3, SQLitePCLRaw.core, SQLitePCLRaw.lib.e_sqlite3, SQLitePCLRaw.provider.e_sqlite3 (tests, with Microsoft.Data.Sqlite) | Apache-2.0 |

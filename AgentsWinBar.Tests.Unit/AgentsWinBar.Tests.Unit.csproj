@@ -23,6 +23,9 @@
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.*" />
     <PackageReference Include="Microsoft.Win32.SystemEvents" Version="10.0.0" />
     <PackageReference Include="ZstdSharp.Port" Version="0.8.6" />
+    <!-- Tests only: writes the synthetic Antigravity conversation databases with an independent SQLite build, the way
+         agy writes them. The app reads them through Windows' own SQLite library and ships no SQLite package. -->
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.*" />
   </ItemGroup>
 
   <!-- Link source files from main project (no Windows App SDK dependency) -->
