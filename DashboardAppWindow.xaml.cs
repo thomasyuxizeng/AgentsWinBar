@@ -367,7 +367,12 @@ public sealed partial class DashboardAppWindow : Window
         _viewModel.PropertyChanged -= OnViewModelPropertyChanged;
         _viewModel.ApiCreditsRefreshed -= OnApiCreditsRefreshed;
         try { _page?.Cleanup(); }
-        catch (Exception ex) { _logger.LogError(ex, "Dashboard page cleanup failed"); }
+        catch (Exception ex)
+        {
+            // app.log keeps only the exception type; the crash log keeps its stack frames, which name the failing step
+            _logger.LogError(ex, "Dashboard page cleanup failed");
+            App.LogHandled("Dashboard page cleanup", ex);
+        }
         _page = null;
         try { PageHost.Content = null; }
         catch (Exception ex) { _logger.LogError(ex, "Dashboard page host detach failed"); }

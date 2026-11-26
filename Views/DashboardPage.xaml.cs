@@ -89,8 +89,9 @@ public sealed partial class DashboardPage : Page
         AttentionRepeater.ElementPrepared -= OnAttentionElementPrepared;
         AttentionRepeater.ElementClearing -= OnAttentionElementClearing;
         DetachAttentionClicks(AttentionRepeater);
+        // Clearing ItemsSource releases the items. Never set ItemTemplate to null: ItemsRepeater rejects it
+        // (E_INVALIDARG), and the throw skipped the rest of this cleanup.
         AttentionRepeater.ItemsSource = null;
-        AttentionRepeater.ItemTemplate = null;
         AttentionPanel.Children.Clear();
         SummaryGrid.Children.Clear();
         SummaryCard.Child = null;
