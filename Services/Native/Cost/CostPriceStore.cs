@@ -96,8 +96,8 @@ public sealed class CostPriceStore
                 var temporary = CatalogPath + ".tmp";
                 await File.WriteAllBytesAsync(temporary, merged.Serialize(), cancellationToken).ConfigureAwait(false);
                 File.Move(temporary, CatalogPath, overwrite: true);
-                _logger.LogInformation("Prices refreshed from models.dev ({Anthropic} Anthropic and {OpenAI} OpenAI models)",
-                    merged.Count(CostPriceCatalog.Anthropic), merged.Count(CostPriceCatalog.OpenAI));
+                _logger.LogInformation("Prices refreshed from models.dev ({Anthropic} Anthropic, {OpenAI} OpenAI and {Google} Google models)",
+                    merged.Count(CostPriceCatalog.Anthropic), merged.Count(CostPriceCatalog.OpenAI), merged.Count(CostPriceCatalog.Google));
                 return true;
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }

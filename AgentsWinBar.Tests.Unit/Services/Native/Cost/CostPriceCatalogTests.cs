@@ -156,6 +156,41 @@ public sealed class CostPriceCatalogTests
     }
 
     [TestMethod]
+    public async Task ParseLiveAsync_WhenCatalogListsGoogle_KeepsItsModelsForAntigravity()
+    {
+        var json = "{\"anthropic\":{\"models\":{" + Model("claude-test-1", Flat) + "}}," +
+                   "\"google\":{\"models\":{" + Model("gemini-test", "\"input\":3,\"output\":15,\"cache_read\":0.15") + "}}," +
+                   "\"google-vertex\":{\"models\":{" + Model("gemini-test", "\"input\":99,\"output\":99") + "}}," +
+                   "\"openai\":{\"models\":{" + Model("gpt-test", Flat) + "}}}";
+        using var stream = new MemoryStream(Encoding.UTF8.GetBytes(json));
+
+        var catalog = await CostPriceCatalog.ParseLiveAsync(stream, DateTimeOffset.UnixEpoch, CancellationToken.None);
+
+        catalog!.Find(CostPriceCatalog.Google, "gemini-test").Should().Be(new ModelPrice(3, 15, .15m, null));
+        catalog.Find("google-vertex", "gemini-test").Should().BeNull();
+    }
+
+    [TestMethod]
+    public void Parse_WhenSnapshotListsGoogle_KeepsItAndSerializesItBack()
+    {
+        var catalog = Catalog(CatalogJson(Model("claude-test-1", Flat), Model("gpt-test", Flat),
+            googleModels: Model("gemini-test", "\"input\":3,\"output\":15")));
+
+        var copy = CostPriceCatalog.Parse(catalog.Serialize())!;
+
+        copy.Count(CostPriceCatalog.Google).Should().Be(1);
+        copy.Find(CostPriceCatalog.Google, "gemini-test")!.Output.Should().Be(15);
+    }
+
+    [TestMethod]
+    public void Bundled_WhenLoadedFromTheAssembly_HasGooglePricesAndTheGeminiOverlay()
+    {
+        CostPriceCatalog.Bundled.Find(CostPriceCatalog.Google, "gemini-4-neon").Should().NotBeNull();
+        CostPriceCatalog.Bundled.Find(CostPriceCatalog.Google, "gemini-3.1-pro-preview").Should().NotBeNull();
+        CostPriceOverlay.Bundled.Gemini.Should().ContainKey("gpt-oss-120b-medium");
+    }
+
+    [TestMethod]
     public async Task ParseLiveAsync_WhenBodyIsNotJson_ReturnsNull()
     {
         using var stream = new MemoryStream(Encoding.UTF8.GetBytes("<html>offline</html>"));

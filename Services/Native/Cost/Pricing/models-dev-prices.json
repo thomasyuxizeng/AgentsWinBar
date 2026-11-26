@@ -786,6 +786,366 @@
           }
         }
       }
+    },
+    "google": {
+      "id": "google",
+      "models": {
+        "deep-research-max-preview-04-2026": {
+          "id": "deep-research-max-preview-04-2026",
+          "cost": {
+            "input": 2,
+            "output": 12,
+            "cache_read": 0.2,
+            "context_over_200k": {
+              "input": 4,
+              "output": 18,
+              "cache_read": 0.4
+            },
+            "tiers": [
+              {
+                "input": 4,
+                "output": 18,
+                "cache_read": 0.4,
+                "tier": {
+                  "type": "context",
+                  "size": 200000
+                }
+              }
+            ]
+          }
+        },
+        "deep-research-preview-04-2026": {
+          "id": "deep-research-preview-04-2026",
+          "cost": {
+            "input": 2,
+            "output": 12,
+            "cache_read": 0.2,
+            "context_over_200k": {
+              "input": 4,
+              "output": 18,
+              "cache_read": 0.4
+            },
+            "tiers": [
+              {
+                "input": 4,
+                "output": 18,
+                "cache_read": 0.4,
+                "tier": {
+                  "type": "context",
+                  "size": 200000
+                }
+              }
+            ]
+          }
+        },
+        "gemini-2.5-flash": {
+          "id": "gemini-2.5-flash",
+          "cost": {
+            "input": 0.3,
+            "output": 2.5,
+            "cache_read": 0.03
+          }
+        },
+        "gemini-2.5-flash-image": {
+          "id": "gemini-2.5-flash-image",
+          "cost": {
+            "input": 0.3,
+            "output": 2.5
+          }
+        },
+        "gemini-2.5-flash-lite": {
+          "id": "gemini-2.5-flash-lite",
+          "cost": {
+            "input": 0.1,
+            "output": 0.4,
+            "cache_read": 0.01
+          }
+        },
+        "gemini-2.5-flash-preview-tts": {
+          "id": "gemini-2.5-flash-preview-tts",
+          "cost": {
+            "input": 0.5,
+            "output": 10
+          }
+        },
+        "gemini-2.5-pro": {
+          "id": "gemini-2.5-pro",
+          "cost": {
+            "input": 1.25,
+            "output": 10,
+            "cache_read": 0.125,
+            "context_over_200k": {
+              "input": 2.5,
+              "output": 15,
+              "cache_read": 0.25
+            },
+            "tiers": [
+              {
+                "input": 2.5,
+                "output": 15,
+                "cache_read": 0.25,
+                "tier": {
+                  "type": "context",
+                  "size": 200000
+                }
+              }
+            ]
+          }
+        },
+        "gemini-2.5-pro-preview-tts": {
+          "id": "gemini-2.5-pro-preview-tts",
+          "cost": {
+            "input": 1,
+            "output": 20
+          }
+        },
+        "gemini-3-flash-preview": {
+          "id": "gemini-3-flash-preview",
+          "cost": {
+            "input": 0.5,
+            "output": 3,
+            "cache_read": 0.05
+          }
+        },
+        "gemini-3-pro-image": {
+          "id": "gemini-3-pro-image",
+          "cost": {
+            "input": 2,
+            "output": 12
+          }
+        },
+        "gemini-3.1-flash-image": {
+          "id": "gemini-3.1-flash-image",
+          "cost": {
+            "input": 0.5,
+            "output": 3
+          }
+        },
+        "gemini-3.1-flash-lite": {
+          "id": "gemini-3.1-flash-lite",
+          "cost": {
+            "input": 0.25,
+            "output": 1.5,
+            "cache_read": 0.025
+          }
+        },
+        "gemini-3.1-flash-lite-image": {
+          "id": "gemini-3.1-flash-lite-image",
+          "cost": {
+            "input": 0.25,
+            "output": 1.5
+          }
+        },
+        "gemini-3.1-flash-live-preview": {
+          "id": "gemini-3.1-flash-live-preview",
+          "cost": {
+            "input": 0.75,
+            "output": 4.5
+          }
+        },
+        "gemini-3.1-flash-tts-preview": {
+          "id": "gemini-3.1-flash-tts-preview",
+          "cost": {
+            "input": 1,
+            "output": 20
+          }
+        },
+        "gemini-3.1-pro-preview": {
+          "id": "gemini-3.1-pro-preview",
+          "cost": {
+            "input": 2,
+            "output": 12,
+            "cache_read": 0.2,
+            "context_over_200k": {
+              "input": 4,
+              "output": 18,
+              "cache_read": 0.4
+            },
+            "tiers": [
+              {
+                "input": 4,
+                "output": 18,
+                "cache_read": 0.4,
+                "tier": {
+                  "type": "context",
+                  "size": 200000
+                }
+              }
+            ]
+          }
+        },
+        "gemini-3.1-pro-preview-customtools": {
+          "id": "gemini-3.1-pro-preview-customtools",
+          "cost": {
+            "input": 2,
+            "output": 12,
+            "cache_read": 0.2,
+            "context_over_200k": {
+              "input": 4,
+              "output": 18,
+              "cache_read": 0.4
+            },
+            "tiers": [
+              {
+                "input": 4,
+                "output": 18,
+                "cache_read": 0.4,
+                "tier": {
+                  "type": "context",
+                  "size": 200000
+                }
+              }
+            ]
+          }
+        },
+        "gemini-3.5-flash": {
+          "id": "gemini-3.5-flash",
+          "cost": {
+            "input": 1.5,
+            "output": 9,
+            "cache_read": 0.15
+          }
+        },
+        "gemini-3.5-flash-lite": {
+          "id": "gemini-3.5-flash-lite",
+          "cost": {
+            "input": 0.3,
+            "output": 2.5,
+            "cache_read": 0.03
+          }
+        },
+        "gemini-3.5-live-translate-preview": {
+          "id": "gemini-3.5-live-translate-preview",
+          "cost": {
+            "input": 3.5,
+            "output": 21
+          }
+        },
+        "gemini-3.6-flash": {
+          "id": "gemini-3.6-flash",
+          "cost": {
+            "input": 0.75,
+            "output": 3.75,
+            "cache_read": 0.075
+          }
+        },
+        "gemini-3.7-flash": {
+          "id": "gemini-3.7-flash",
+          "cost": {
+            "input": 0.75,
+            "output": 3.75,
+            "cache_read": 0.075
+          }
+        },
+        "gemini-3.8-flash": {
+          "id": "gemini-3.8-flash",
+          "cost": {
+            "input": 0.75,
+            "output": 3.75,
+            "cache_read": 0.075
+          }
+        },
+        "gemini-4-argon": {
+          "id": "gemini-4-argon",
+          "cost": {
+            "input": 2,
+            "output": 10,
+            "cache_read": 0.1
+          }
+        },
+        "gemini-4-carbon": {
+          "id": "gemini-4-carbon",
+          "cost": {
+            "input": 2,
+            "output": 10,
+            "cache_read": 0.1
+          }
+        },
+        "gemini-4-hydrogen": {
+          "id": "gemini-4-hydrogen",
+          "cost": {
+            "input": 1.5,
+            "output": 7.5,
+            "cache_read": 0.075
+          }
+        },
+        "gemini-4-neon": {
+          "id": "gemini-4-neon",
+          "cost": {
+            "input": 3,
+            "output": 15,
+            "cache_read": 0.15
+          }
+        },
+        "gemini-embedding-001": {
+          "id": "gemini-embedding-001",
+          "cost": {
+            "input": 0.15,
+            "output": 0
+          }
+        },
+        "gemini-embedding-2": {
+          "id": "gemini-embedding-2",
+          "cost": {
+            "input": 0.2,
+            "output": 0
+          }
+        },
+        "gemini-flash-latest": {
+          "id": "gemini-flash-latest",
+          "cost": {
+            "input": 0.75,
+            "output": 3.75,
+            "cache_read": 0.075
+          }
+        },
+        "gemini-flash-lite-latest": {
+          "id": "gemini-flash-lite-latest",
+          "cost": {
+            "input": 0.3,
+            "output": 2.5,
+            "cache_read": 0.03
+          }
+        },
+        "gemini-pro-latest": {
+          "id": "gemini-pro-latest",
+          "cost": {
+            "input": 2,
+            "output": 12,
+            "cache_read": 0.2,
+            "context_over_200k": {
+              "input": 4,
+              "output": 18,
+              "cache_read": 0.4
+            },
+            "tiers": [
+              {
+                "input": 4,
+                "output": 18,
+                "cache_read": 0.4,
+                "tier": {
+                  "type": "context",
+                  "size": 200000
+                }
+              }
+            ]
+          }
+        },
+        "gemma-4-26b-a4b-it": {
+          "id": "gemma-4-26b-a4b-it",
+          "cost": {
+            "input": 0,
+            "output": 0
+          }
+        },
+        "gemma-4-31b-it": {
+          "id": "gemma-4-31b-it",
+          "cost": {
+            "input": 0,
+            "output": 0
+          }
+        }
+      }
     }
   }
 }

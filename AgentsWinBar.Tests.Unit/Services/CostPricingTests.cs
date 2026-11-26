@@ -12,8 +12,11 @@ public sealed class CostPricingTests
     private const string LongLane = "\"context_over_200k\":{\"input\":8,\"output\":30,\"cache_read\":0.4,\"cache_write\":10}";
     private const string Tier272 = "\"tiers\":[{\"input\":8,\"output\":30,\"cache_read\":0.4,\"cache_write\":10,\"tier\":{\"type\":\"context\",\"size\":272000}}]";
 
-    private static CostPricing Pricing(string anthropic = "", string openAi = "", string overlay = "{}", string custom = "{}") =>
-        new(Catalog(CatalogJson(anthropic, openAi)), Overlay(overlay), Custom(custom));
+    private static CostPricing Pricing(string anthropic = "", string openAi = "", string overlay = "{}", string custom = "{}",
+        string? google = null) =>
+        new(Catalog(CatalogJson(anthropic, openAi, googleModels: google)), Overlay(overlay), Custom(custom));
+
+    private const string GeminiFlat = "\"input\":3,\"output\":15,\"cache_read\":0.15";
 
     [TestMethod]
     [DataRow("claude-opus-5-5")]
@@ -312,6 +315,99 @@ public sealed class CostPricingTests
 
         rate.Should().Be(new CostRates(4, 20, .2m, 5, 8));
     }
+
+    [TestMethod]
+    [DataRow("gemini-4-neon")]
+    [DataRow("gemini-4-carbon")]
+    [DataRow("gemini-4-hydrogen")]
+    [DataRow("gemini-3.7-flash")]
+    [DataRow("claude-sonnet-5-5")]
+    [DataRow("gpt-oss-120b-medium")]
+    public void GetRates_WhenAntigravityModelUsesTheBundledData_IsPriced(string model)
+    {
+        var rate = new CostPricing().GetRates(CostProvider.Gemini, model, false, false, false, 0);
+
+        rate.Should().NotBeNull();
+        rate!.Value.Input.Should().BePositive();
+    }
+
+    [TestMethod]
+    public void GetRates_WhenGeminiModelIsInTheGoogleCatalog_ChargesMissingCacheRatesAtTheInputRate()
+    {
+        var rate = Pricing(google: Model("gemini-test", GeminiFlat)).GetRates(CostProvider.Gemini, "gemini-test", false, false, false, 0);
+
+        rate.Should().Be(new CostRates(3, 15, .15m, 3, 6));
+    }
+
+    [TestMethod]
+    public void GetRates_WhenAntigravityRecordsAClaudeModel_UsesTheAnthropicCatalog()
+    {
+        var pricing = Pricing(Model("claude-test-1", Flat), google: Model("claude-test-1", GeminiFlat));
+
+        pricing.GetRates(CostProvider.Gemini, "claude-test-1", false, false, false, 0).Should().Be(new CostRates(4, 20, .2m, 5, 8));
+    }
+
+    [TestMethod]
+    [DataRow("gemini-test-low")]
+    [DataRow("gemini-test-thinking")]
+    [DataRow("gemini-test-tiered")]
+    public void GetRates_WhenGeminiModelIsARoutingVariant_UsesTheBaseModel(string model)
+    {
+        var rate = Pricing(google: Model("gemini-test", GeminiFlat)).GetRates(CostProvider.Gemini, model, false, false, false, 0);
+
+        rate.Should().Be(new CostRates(3, 15, .15m, 3, 6));
+    }
+
+    [TestMethod]
+    [DataRow("gemini-pro-default")]
+    [DataRow("gemini-3.1-pro-high")]
+    [DataRow("gemini-3.1-pro-low")]
+    public void GetRates_WhenGeminiModelIsAProductAlias_UsesTheCataloguedModel(string model)
+    {
+        var rate = Pricing(google: Model("gemini-3.1-pro-preview", "\"input\":2,\"output\":12")).GetRates(
+            CostProvider.Gemini, model, false, false, false, 0);
+
+        rate.Should().Be(new CostRates(2, 12, 2, 2, 4));
+    }
+
+    [TestMethod]
+    public void GetRates_WhenAnUnprefixedIdIsListedByOneVendorOnly_UsesThatVendor()
+    {
+        var single = Pricing(google: Model("mystery-test", GeminiFlat));
+        var both = Pricing(Model("mystery-test", Flat), google: Model("mystery-test", GeminiFlat));
+
+        single.GetRates(CostProvider.Gemini, "mystery-test", false, false, false, 0).Should().NotBeNull();
+        both.GetRates(CostProvider.Gemini, "mystery-test", false, false, false, 0).Should().BeNull("two vendors list it");
+    }
+
+    [TestMethod]
+    public void GetRates_WhenOnlyTheGeminiOverlayListsTheModel_UsesItsEntry()
+    {
+        var pricing = Pricing(overlay: "{\"gemini\":{\"oss-test-medium\":{\"input\":0.1,\"output\":0.4}}}");
+
+        pricing.GetRates(CostProvider.Gemini, "oss-test-medium", false, false, false, 0).Should().Be(new CostRates(.1m, .4m, .1m, .1m));
+        pricing.GetRates(CostProvider.Gemini, "oss-test-high", false, false, false, 0).Should().BeNull("other effort tiers stay unpriced");
+    }
+
+    [TestMethod]
+    [DataRow(CostPricing.UnattributedModel)]
+    [DataRow("mystery-model-9")]
+    [DataRow("gemini-not-released")]
+    public void GetRates_WhenAntigravityModelHasNoRateAnywhere_LeavesItUnpriced(string model)
+    {
+        var pricing = Pricing(google: Model("gemini-test", GeminiFlat));
+
+        pricing.GetRates(CostProvider.Gemini, model, false, false, false, 0).Should().BeNull();
+        pricing.PriceTokens(CostProvider.Gemini, model, false, false, false, 0, new(10, 10, 0)).Should().BeNull();
+    }
+
+    [TestMethod]
+    [DataRow(" gemini-4-neon ", "gemini-4-neon")]
+    [DataRow("gemini-3.1-pro-2026-01-01", "gemini-3.1-pro-2026-01-01")]
+    [DataRow("openai/gpt-oss-120b", "openai/gpt-oss-120b")]
+    [DataRow("a model", CostPricing.UnattributedModel)]
+    public void Normalize_WhenAntigravityRecordsAModel_KeepsTheIdAsRecorded(string raw, string expected) =>
+        CostPricing.Normalize(raw, CostProvider.Gemini).Should().Be(expected);
 
     // Review finding 20.5: only a real date suffix is stripped from a Codex model id.
     [TestMethod]

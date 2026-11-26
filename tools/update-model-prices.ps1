@@ -3,7 +3,7 @@
     Regenerates the bundled price snapshot (Services/Native/Cost/Pricing/models-dev-prices.json) from models.dev.
 
 .DESCRIPTION
-    Keeps only what the native cost scanner prices: the "anthropic" and "openai" providers, and per model the id and
+    Keeps only what the native cost scanner prices: the "anthropic", "openai" and "google" providers, and per model the id and
     the cost block (input, output, cache_read, cache_write, context_over_200k, tiers). Rates are USD per million
     tokens, exactly as models.dev publishes them. Keys are sorted so the diff of a regeneration is readable.
 
@@ -21,7 +21,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $source = 'https://models.dev/api.json'
-$providers = @('anthropic', 'openai')
+$providers = @('anthropic', 'openai', 'google')
 $rateFields = @('input', 'output', 'cache_read', 'cache_write')
 
 if ($InputPath) {
@@ -73,4 +73,5 @@ $json = $result | ConvertTo-Json -Depth 12
 $target = [IO.Path]::GetFullPath($OutputPath)
 [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($target)) | Out-Null
 [IO.File]::WriteAllText($target, $json.Replace("`r`n", "`n") + "`n", [Text.UTF8Encoding]::new($false))
-Write-Host ("Wrote {0} anthropic and {1} openai models to {2}" -f $result.providers.anthropic.models.Count, $result.providers.openai.models.Count, $target)
+Write-Host ("Wrote {0} anthropic, {1} openai and {2} google models to {3}" -f $result.providers.anthropic.models.Count,
+    $result.providers.openai.models.Count, $result.providers.google.models.Count, $target)

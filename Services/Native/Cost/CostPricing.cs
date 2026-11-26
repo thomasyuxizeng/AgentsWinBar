@@ -1,6 +1,7 @@
 namespace AgentsWinBar.Services.Native.Cost;
 
-public enum CostProvider { Claude, Codex }
+/// <summary>The local history a cost row came from. The values are stored in the index, so never reorder them.</summary>
+public enum CostProvider { Claude, Codex, Gemini }
 
 public readonly record struct CostRates(decimal Input, decimal Output, decimal? CacheRead,
     decimal? CacheWrite = 0, decimal CacheWriteOneHour = 0)
@@ -47,7 +48,8 @@ internal readonly record struct CostTokens(long Input, long Output, long Read, l
 /// are data: the user's custom-pricing.json first, then rates from before a published price change, then the
 /// models.dev catalog, then upstream's built-in tables (Pricing/pricing-overlay.json). The rules stay in code:
 /// model aliases, long-context tiers, Claude cache-write TTLs and the Codex Fast multipliers. A bucket that uses a
-/// token class with no known rate stays unpriced so the report can count its tokens.
+/// token class with no known rate stays unpriced so the report can count its tokens. Gemini (Antigravity) usage is
+/// priced as upstream's AntigravityLocalReader prices it; see <see cref="GeminiRates"/>.
 /// </summary>
 public class CostPricing
 {
@@ -84,7 +86,7 @@ public class CostPricing
             if (model.Length > 9 && model[^9] == '-' && AllDigits(model.AsSpan(model.Length - 8)))
                 model = model[..^9];
         }
-        else
+        else if (provider == CostProvider.Codex)
         {
             if (model.StartsWith("openai/", StringComparison.Ordinal)) model = model[7..];
             model = model switch
@@ -102,6 +104,7 @@ public class CostPricing
         }
         // Retain bounded model identifiers for repricing, including unpriced future models and other vendors'
         // models used through these tools (the report names them, and custom-pricing.json can price them).
+        // Antigravity's ids stay as recorded (upstream only trims them); its aliases apply when pricing.
         return model.Length is > 0 and <= 80 && char.IsAsciiLetterOrDigit(model[0]) &&
                model.All(c => char.IsAsciiLetterOrDigit(c) || c is '.' or '-' or '_' or '/' or ':' or '@')
             ? model : UnattributedModel;
@@ -144,10 +147,14 @@ public class CostPricing
             return provider == CostProvider.Codex ? flat.Multiply(ServiceTierMultiplier(model, above272K, historical, tier)) : flat;
         }
 
-        return provider == CostProvider.Claude
-            ? ClaudeRates(model, above200K, above272K, historical)
-            : CodexRates(model, above200K, above272K, historical)?
-                .Multiply(ServiceTierMultiplier(model, above272K, historical, tier));
+        return provider switch
+        {
+            CostProvider.Claude => ClaudeRates(model, above200K, above272K, historical),
+            CostProvider.Codex => CodexRates(model, above200K, above272K, historical)?
+                .Multiply(ServiceTierMultiplier(model, above272K, historical, tier)),
+            CostProvider.Gemini => GeminiRates(model, above200K, above272K, historical),
+            _ => null
+        };
     }
 
     /// <summary>The cost of one index bucket in USD, or null when any of its tokens has no price.</summary>
@@ -176,7 +183,12 @@ public class CostPricing
 
     private CostCustomPricing.Rates? FindCustom(CostProvider provider, string model) =>
         _custom.IsEmpty ? null
-            : _custom.Find(provider == CostProvider.Claude ? CostPriceCatalog.Anthropic : CostPriceCatalog.OpenAI, model);
+            : _custom.Find(provider switch
+            {
+                CostProvider.Claude => CostPriceCatalog.Anthropic,
+                CostProvider.Gemini => CostPriceCatalog.Google,
+                _ => CostPriceCatalog.OpenAI
+            }, model);
 
     private static bool UsesLongContext(int? threshold, bool above200K, bool above272K) =>
         // The index keeps two bands per request; a tier of 272K or more reads the upper one.
@@ -270,6 +282,105 @@ public class CostPricing
             return new(input, output, read ?? input, write ?? input);
         var inputRate = longInput ?? input;
         return new(inputRate, longOutput ?? output, longRead ?? read ?? inputRate, longWrite ?? write ?? inputRate);
+    }
+
+    /// <summary>
+    /// Antigravity's usage, priced like upstream's AntigravityLocalReader.costUSD: the recorded id through its
+    /// first-party vendor catalog, then the base model of a routing variant or product alias, then an explicit entry
+    /// (Pricing/pricing-overlay.json, "gemini") for a model that no vendor prices. Antigravity records no cache writes,
+    /// and a catalog row without cache rates charges cached input at the input rate, as upstream's resolver does.
+    /// </summary>
+    private CostRates? GeminiRates(string model, bool above200K, bool above272K, bool historical)
+    {
+        if (model == UnattributedModel) return null;
+        if (VendorRates(model, above200K, above272K, historical) is { } exact) return exact;
+        if (GeminiBaseModel(model) is { } baseModel && VendorRates(baseModel, above200K, above272K, historical) is { } routed)
+            return routed;
+        return _overlay.Gemini.TryGetValue(model.ToLowerInvariant(), out var entry)
+            ? new CostRates(entry.Input, entry.Output, entry.CacheRead ?? entry.Input, entry.CacheWrite ?? entry.Input)
+            : null;
+    }
+
+    /// <summary>
+    /// Upstream's first-party routing for ids recorded outside their vendor's own tool: recognizable families stay with
+    /// their vendor's catalog, and any other id is priced only when exactly one vendor catalog lists it.
+    /// </summary>
+    private CostRates? VendorRates(string model, bool above200K, bool above272K, bool historical)
+    {
+        var lowered = model.ToLowerInvariant();
+        if (lowered.StartsWith("claude-", StringComparison.Ordinal) || lowered.StartsWith("gpt-", StringComparison.Ordinal))
+        {
+            // The resolver that prices these ids in Claude Code's logs, with upstream's cache-rate fallback.
+            return ClaudeRates(Normalize(model, CostProvider.Claude), above200K, above272K, historical) is { } rates
+                ? rates with { CacheRead = rates.CacheRead ?? rates.Input, CacheWrite = rates.CacheWrite ?? rates.Input }
+                : null;
+        }
+        if (lowered is "o1" or "o3" or "o4" || lowered.StartsWith("o1-", StringComparison.Ordinal) ||
+            lowered.StartsWith("o3-", StringComparison.Ordinal) || lowered.StartsWith("o4-", StringComparison.Ordinal) ||
+            lowered.StartsWith("chatgpt-", StringComparison.Ordinal) ||
+            lowered.StartsWith("text-embedding-", StringComparison.Ordinal))
+            return CatalogRates(CostPriceCatalog.OpenAI, model, above200K, above272K);
+        if (lowered.StartsWith("gemini-", StringComparison.Ordinal) || lowered.StartsWith("gemma-", StringComparison.Ordinal) ||
+            lowered.StartsWith("deep-research-", StringComparison.Ordinal) || lowered.StartsWith("veo-", StringComparison.Ordinal) ||
+            lowered.StartsWith("lyria-", StringComparison.Ordinal))
+            return CatalogRates(CostPriceCatalog.Google, model, above200K, above272K);
+
+        CostRates? match = null;
+        var vendors = 0;
+        foreach (var vendor in (ReadOnlySpan<string>)[CostPriceCatalog.Anthropic, CostPriceCatalog.OpenAI, CostPriceCatalog.Google])
+        {
+            if (CatalogRates(vendor, model, above200K, above272K) is not { } rates) continue;
+            match = rates;
+            vendors++;
+        }
+        return vendors == 1 ? match : null;
+    }
+
+    /// <summary>
+    /// One models.dev row at upstream's Claude-resolver rules: the long-context lane above its context tier (200K when
+    /// the catalog names none), and the input rate for a cache class without its own rate.
+    /// </summary>
+    private CostRates? CatalogRates(string vendor, string model, bool above200K, bool above272K)
+    {
+        if (_catalog.Find(vendor, model) is not { } price) return null;
+        int? threshold = price.Long is { } lane ? lane.TierSize ?? 200_000 : null;
+        var longContext = UsesLongContext(threshold, above200K, above272K) ? price.Long : null;
+        var input = longContext?.Input ?? price.Input;
+        return new(input, longContext?.Output ?? price.Output,
+            longContext?.CacheRead ?? price.CacheRead ?? price.Input,
+            longContext?.CacheWrite ?? price.CacheWrite ?? price.Input, input * 2);
+    }
+
+    /// <summary>Routing variants that bill at the base model's price (upstream's routingVariantSuffixes).</summary>
+    private static readonly string[] GeminiRoutingSuffixes = ["-tiered", "-low", "-thinking"];
+
+    /// <summary>
+    /// Product aliases that name no catalogued model (upstream's pricingModelAliases): Gemini 3.1 Pro is catalogued only
+    /// as its preview row, and safety-routed Gemini 3.7 Flash turns carry the ordinary Flash model id.
+    /// </summary>
+    private static readonly Dictionary<string, string> GeminiAliases = new(StringComparer.Ordinal)
+    {
+        ["gemini-pro-default"] = "gemini-3.1-pro-preview",
+        ["gemini-pro-agent"] = "gemini-3.1-pro-preview",
+        ["gemini-3.1-pro"] = "gemini-3.1-pro-preview",
+        ["gemini-3.1-pro-high"] = "gemini-3.1-pro-preview",
+        ["gemini-3.1-pro-low"] = "gemini-3.1-pro-preview",
+        ["gemini-3.7-flash-safety-le"] = "gemini-3.7-flash"
+    };
+
+    /// <summary>The id an Antigravity routing variant or product alias is priced as, or null when there is none.</summary>
+    internal static string? GeminiBaseModel(string model)
+    {
+        var lowered = model.ToLowerInvariant();
+        if (GeminiAliases.TryGetValue(lowered, out var alias)) return alias;
+        foreach (var suffix in GeminiRoutingSuffixes)
+        {
+            if (!lowered.EndsWith(suffix, StringComparison.Ordinal)) continue;
+            var baseModel = model[..^suffix.Length];
+            return baseModel.Length == 0 ? null
+                : GeminiAliases.TryGetValue(baseModel.ToLowerInvariant(), out var routed) ? routed : baseModel;
+        }
+        return null;
     }
 
     /// <summary>

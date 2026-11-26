@@ -14,10 +14,12 @@ internal static class CostTestSupport
     internal static CostCustomPricing Custom(string json) => CostCustomPricing.Parse(Encoding.UTF8.GetBytes(json));
 
     /// <summary>A catalog in the snapshot shape with the given model blocks per provider.</summary>
-    internal static string CatalogJson(string anthropicModels, string openAiModels, string stamp = "2030-01-01T00:00:00Z") =>
+    internal static string CatalogJson(string anthropicModels, string openAiModels, string stamp = "2030-01-01T00:00:00Z",
+        string? googleModels = null) =>
         "{\"fetchedAt\":\"" + stamp + "\",\"providers\":{" +
         "\"anthropic\":{\"id\":\"anthropic\",\"models\":{" + anthropicModels + "}}," +
-        "\"openai\":{\"id\":\"openai\",\"models\":{" + openAiModels + "}}}}";
+        "\"openai\":{\"id\":\"openai\",\"models\":{" + openAiModels + "}}" +
+        (googleModels is null ? "" : ",\"google\":{\"id\":\"google\",\"models\":{" + googleModels + "}}") + "}}";
 
     internal static string Model(string id, string cost) =>
         "\"" + id + "\":{\"id\":\"" + id + "\",\"cost\":{" + cost + "}}";

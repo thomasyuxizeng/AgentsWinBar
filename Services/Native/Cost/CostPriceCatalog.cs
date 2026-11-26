@@ -17,13 +17,14 @@ internal sealed record LongContextPrice(int? TierSize, decimal? Input, decimal? 
 
 /// <summary>
 /// Model rates in the models.dev shape: either the full catalog (provider id at the top level) or a snapshot with a
-/// "providers" object. Only the providers the cost scanner prices are kept.
+/// "providers" object. Only the providers the cost scanner prices are kept (Google for Antigravity's Gemini models).
 /// </summary>
 internal sealed class CostPriceCatalog
 {
     internal const string Anthropic = "anthropic";
     internal const string OpenAI = "openai";
-    private static readonly string[] KeptProviders = [Anthropic, OpenAI];
+    internal const string Google = "google";
+    private static readonly string[] KeptProviders = [Anthropic, OpenAI, Google];
     private static readonly Lazy<CostPriceCatalog> BundledCatalog = new(LoadBundled);
 
     private readonly Dictionary<string, Dictionary<string, ModelPrice>> _providers;
@@ -143,7 +144,7 @@ internal sealed class CostPriceCatalog
                 CostPriceJsonContext.Default.LiveCatalog, token).ConfigureAwait(false);
             if (live is null) return null;
             var providers = new Dictionary<string, Dictionary<string, ModelPrice>>(StringComparer.Ordinal);
-            foreach (var (id, provider) in new[] { (Anthropic, live.Anthropic), (OpenAI, live.OpenAI) })
+            foreach (var (id, provider) in new[] { (Anthropic, live.Anthropic), (OpenAI, live.OpenAI), (Google, live.Google) })
             {
                 if (provider.ValueKind != JsonValueKind.Object || !provider.TryGetProperty("models", out var models) ||
                     models.ValueKind != JsonValueKind.Object) continue;
@@ -285,6 +286,12 @@ internal sealed class CostPriceOverlay
     internal Dictionary<string, ModelPrice> Codex { get; init; } = [];
     internal Dictionary<string, ModelPrice> CodexHistorical { get; init; } = [];
 
+    /// <summary>
+    /// Rates for exact ids Antigravity records that no first-party catalog prices (upstream's explicitCatalogEntries),
+    /// keyed by the lowercase recorded id.
+    /// </summary>
+    internal Dictionary<string, ModelPrice> Gemini { get; init; } = [];
+
     private static CostPriceOverlay LoadBundled() => Parse(PricingResources.Read("pricing-overlay.json")) ?? Empty;
 
     /// <summary>Per Codex model: replaces the context tier size as the long-context threshold.</summary>
@@ -303,6 +310,7 @@ internal sealed class CostPriceOverlay
             {
                 Claude = Table(root, "claude"), ClaudeHistorical = Table(root, "claudeHistorical"),
                 Codex = Table(root, "codex"), CodexHistorical = Table(root, "codexHistorical"),
+                Gemini = Table(root, "gemini"),
                 CodexLongContextThresholds = Thresholds(root, "codexLongContextThresholds")
             };
         }
@@ -397,8 +405,8 @@ internal static class PricingResources
 }
 
 /// <summary>
-/// The two providers the scanner prices, read from the full models.dev catalog. Every other provider is skipped
-/// by the reader without being kept, whatever its shape.
+/// The providers the scanner prices, read from the full models.dev catalog. Every other provider is skipped by the
+/// reader without being kept, whatever its shape.
 /// </summary>
 internal sealed class LiveCatalog
 {
@@ -407,6 +415,9 @@ internal sealed class LiveCatalog
 
     [JsonPropertyName(CostPriceCatalog.OpenAI)]
     public JsonElement OpenAI { get; set; }
+
+    [JsonPropertyName(CostPriceCatalog.Google)]
+    public JsonElement Google { get; set; }
 }
 
 [JsonSourceGenerationOptions(PropertyNameCaseInsensitive = true)]
