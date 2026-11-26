@@ -34,6 +34,21 @@ public class NativeRateLimitHoldTests
     }
 
     [TestMethod]
+    public void Until_ClockSetBackThenAskedRepeatedly_EndDoesNotSlideForward()
+    {
+        var hold = new NativeRateLimitHold();
+        hold.Remember(RateLimited(), null, Now, FirstCredential);
+        var back = Now.AddMinutes(1).AddHours(-2);
+
+        var first = hold.Until(back);
+        var later = hold.Until(back.AddMinutes(10).AddSeconds(-1));
+
+        first.Should().Be(back.AddMinutes(10));
+        later.Should().Be(first, "the shift is stored, so a later wake-up sees the same end");
+        hold.Until(back.AddMinutes(10)).Should().BeNull();
+    }
+
+    [TestMethod]
     public void Get_WhenSameCredentialIsHeld_ReturnsTheHeldFailure()
     {
         var hold = new NativeRateLimitHold();

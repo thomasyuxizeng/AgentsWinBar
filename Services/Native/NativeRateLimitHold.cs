@@ -28,8 +28,14 @@ internal sealed class NativeRateLimitHold
         lock (_gate)
         {
             if (_failure?.RetryAfter is not { } until) return null;
-            // The clock was set back since the hold began: keep its length, as Get does.
-            if (now < _started) until = now + (until - _started);
+            // The clock was set back since the hold began: keep its length and store the shift, as Get does, so asking
+            // again later cannot push the end forward again.
+            if (now < _started)
+            {
+                until = now + (until - _started);
+                _started = now;
+                _failure = _failure with { RetryAfter = until };
+            }
             return now < until ? until : null;
         }
     }

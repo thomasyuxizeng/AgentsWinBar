@@ -188,6 +188,25 @@ public class ClaudeNativeClientTests
     }
 
     [TestMethod]
+    public async Task RateLimitedUntil_ClockSetBackThenAskedRepeatedly_EndDoesNotSlideForward()
+    {
+        var (client, handler, clock) = Create(_ => new HttpResponseMessage(HttpStatusCode.TooManyRequests));
+        await client.FetchAsync();
+        var back = Now.AddMinutes(1).AddHours(-2);
+        clock.Now = back;
+
+        var first = client.RateLimitedUntil;
+        clock.Now = back.AddMinutes(10).AddSeconds(-1);
+        var later = client.RateLimitedUntil;
+
+        first.Should().Be(back.AddMinutes(10));
+        later.Should().Be(first, "the shift is stored, so a later wake-up sees the same end");
+        clock.Now = back.AddMinutes(10);
+        client.RateLimitedUntil.Should().BeNull();
+        handler.Requests.Should().ContainSingle();
+    }
+
+    [TestMethod]
     public async Task FetchAsync_CacheLifetimeSource_IsAskedOnEveryRead()
     {
         var lifetime = TimeSpan.FromSeconds(90);

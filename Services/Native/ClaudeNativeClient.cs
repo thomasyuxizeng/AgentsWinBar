@@ -124,11 +124,13 @@ public sealed class ClaudeNativeClient : INativeUsageClient, IRateLimitedUsageCl
             lock (_gate)
             {
                 if (_blockedUntil <= now) return null;
-                // The clock stepped back since the cooldown began: keep its length, as a read would.
+                // The clock stepped back since the cooldown began: keep its length, and store the shift as a read
+                // does, so asking again later (each schedule wake-up) cannot push the end forward again.
                 if (now < _blockedSince)
                 {
                     var length = _blockedUntil - _blockedSince;
-                    return now + (length > MaxPersistedCooldown ? MaxPersistedCooldown : length);
+                    _blockedUntil = now + (length > MaxPersistedCooldown ? MaxPersistedCooldown : length);
+                    _blockedSince = now;
                 }
                 return _blockedUntil;
             }
