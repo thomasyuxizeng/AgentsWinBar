@@ -162,6 +162,19 @@ public class DashboardSnapshotBuilderTests
     }
 
     [TestMethod]
+    public void Build_RefreshCadence_IsCarriedIntoTheSummary()
+    {
+        var snapshot = DashboardSnapshotBuilder.Build(Inputs(Provider()) with
+        {
+            RefreshCadence = new RefreshCadence(["claude", "codex"], true)
+        });
+
+        snapshot.Summary.FasterWhileInUse.Should().Equal("claude", "codex");
+        snapshot.Summary.FasterNearLimit.Should().BeTrue();
+        DashboardSnapshotBuilder.Build(Inputs(Provider())).Summary.FasterWhileInUse.Should().BeEmpty();
+    }
+
+    [TestMethod]
     public void Build_FreshFetchOfOldCachedReading_MarksProviderStaleWithReadingTime()
     {
         var reading = Now.AddHours(-12);

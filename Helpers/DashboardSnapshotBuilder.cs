@@ -16,6 +16,8 @@ public sealed record DashboardInputs
     public DateTime? LastRefreshUtc { get; init; }
     public DateTime? NextRefreshUtc { get; init; }
     public TimeSpan? EffectiveRefreshInterval { get; init; }
+    /// <summary>Which providers refresh faster right now (the per-provider schedule).</summary>
+    public RefreshCadence RefreshCadence { get; init; } = RefreshCadence.None;
     public string? CliVersion { get; init; }
     public bool? CliAvailable { get; init; }
     public string? WslDistro { get; init; }
@@ -200,6 +202,7 @@ public static class DashboardSnapshotBuilder
                 LastRefreshUtc = lastRefresh, NextRefreshUtc = Utc(inputs.NextRefreshUtc),
                 RefreshIntervalSeconds = settings.RefreshIntervalSeconds,
                 EffectiveRefreshIntervalSeconds = effectiveIntervalSeconds, ProviderCount = providers.Length,
+                FasterWhileInUse = inputs.RefreshCadence.ActiveProviders, FasterNearLimit = inputs.RefreshCadence.NearLimit,
                 HealthyProviderCount = providers.Count(p => !p.AuthRequired && string.IsNullOrEmpty(p.Error) && !p.IsStale),
                 ErrorProviderCount = providers.Count(p => !p.AuthRequired && !string.IsNullOrEmpty(p.Error)),
                 StaleProviderCount = providers.Count(p => !p.AuthRequired && p.IsStale),

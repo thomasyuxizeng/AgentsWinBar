@@ -237,7 +237,7 @@ public sealed partial class DashboardAppWindow : Window
             var timing = _logger.IsEnabled(LogLevel.Debug);
             var start = timing ? Stopwatch.GetTimestamp() : 0;
             var snapshot = _dashboardService.GetSnapshot(_viewModel.Providers.ToList(), lastRefreshUtc,
-                _viewModel.NextRefreshUtc, _viewModel.EffectiveRefreshInterval);
+                _viewModel.NextRefreshUtc, _viewModel.EffectiveRefreshInterval, _viewModel.RefreshCadence);
             var snapshotEnd = timing ? Stopwatch.GetTimestamp() : 0;
             _page.SetHiddenGraphs(GraphVisibility.HiddenIds(_settings.Settings.Providers));
             _page.Update(snapshot);
@@ -264,7 +264,8 @@ public sealed partial class DashboardAppWindow : Window
     private void OnViewModelPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
         if (e.PropertyName is not (nameof(MainViewModel.IsLoading) or nameof(MainViewModel.LastUpdated)
-            or nameof(MainViewModel.NextRefreshUtc) or nameof(MainViewModel.EffectiveRefreshInterval))) return;
+            or nameof(MainViewModel.NextRefreshUtc) or nameof(MainViewModel.EffectiveRefreshInterval)
+            or nameof(MainViewModel.RefreshCadence))) return;
         Post(() =>
         {
             _page?.SetBusy(_viewModel.IsLoading);

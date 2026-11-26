@@ -26,6 +26,10 @@ public sealed record DashboardSummary
     public DateTime? NextRefreshUtc { get; init; }
     public int RefreshIntervalSeconds { get; init; }
     public int EffectiveRefreshIntervalSeconds { get; init; }
+    /// <summary>Providers read faster because their tool is in use (ids, in display order).</summary>
+    public IReadOnlyList<string> FasterWhileInUse { get; init; } = [];
+    /// <summary>An idle provider is read faster because a window is near its limit.</summary>
+    public bool FasterNearLimit { get; init; }
 
     public int ProviderCount { get; init; }
 
