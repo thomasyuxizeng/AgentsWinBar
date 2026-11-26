@@ -18,6 +18,9 @@ public interface IClaudeSignInRenewer
     /// <summary>The Claude Code executable, or null when it is not installed.</summary>
     string? FindClaudeExecutable();
 
+    /// <summary>Whether only an npm command shim is available for Claude Code.</summary>
+    bool HasNpmShimOnly();
+
     /// <summary>
     /// Runs <c>&lt;executable&gt; auth status --json</c> hidden with its output discarded. Kills the process tree after
     /// <paramref name="timeout"/> or on cancellation. Never throws for a process that runs and fails.
@@ -52,13 +55,25 @@ public sealed class ClaudeAuthStatusRunner : IClaudeSignInRenewer
     /// </summary>
     public string? FindClaudeExecutable()
     {
+        var executable = FindOnPath(ExecutableName);
+        if (executable != null) return executable;
+        var profile = _userProfile();
+        if (string.IsNullOrEmpty(profile) || !Path.IsPathFullyQualified(profile)) return null;
+        var native = Path.Combine(profile, ".local", "bin", ExecutableName);
+        return File.Exists(native) ? native : null;
+    }
+
+    public bool HasNpmShimOnly() => FindOnPath("claude.cmd") != null && FindClaudeExecutable() == null;
+
+    private string? FindOnPath(string fileName)
+    {
         foreach (var entry in (_readPath() ?? string.Empty).Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
         {
             try
             {
                 var folder = entry.Trim('"');
                 if (!Path.IsPathFullyQualified(folder)) continue;
-                var candidate = Path.Combine(folder, ExecutableName);
+                var candidate = Path.Combine(folder, fileName);
                 if (File.Exists(candidate)) return candidate;
             }
             catch (ArgumentException)
@@ -66,10 +81,7 @@ public sealed class ClaudeAuthStatusRunner : IClaudeSignInRenewer
                 // A malformed PATH entry is skipped.
             }
         }
-        var profile = _userProfile();
-        if (string.IsNullOrEmpty(profile)) return null;
-        var native = Path.Combine(profile, ".local", "bin", ExecutableName);
-        return File.Exists(native) ? native : null;
+        return null;
     }
 
     public async Task<ClaudeAuthStatusRun> RunAuthStatusAsync(string executable, TimeSpan timeout, CancellationToken ct)
@@ -86,7 +98,8 @@ public sealed class ClaudeAuthStatusRunner : IClaudeSignInRenewer
         foreach (var argument in _arguments) info.ArgumentList.Add(argument);
 
         var started = Stopwatch.GetTimestamp();
-        using var process = Process.Start(info) ?? throw new InvalidOperationException("Claude Code did not start.");
+        using var process = new Process { StartInfo = info };
+        using var stopOnShutdown = RenewalProcess.Start(process, ct);
         // Nothing is typed into it, and everything it prints (the account email among it) is thrown away unread.
         process.StandardInput.Close();
         var drainOutput = process.StandardOutput.BaseStream.CopyToAsync(Stream.Null, CancellationToken.None);
@@ -99,11 +112,7 @@ public sealed class ClaudeAuthStatusRunner : IClaudeSignInRenewer
         }
         catch (OperationCanceledException)
         {
-            try { process.Kill(entireProcessTree: true); }
-            catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception or NotSupportedException)
-            {
-                // It exited on its own in the meantime, or cannot be killed; either way nothing more can be done.
-            }
+            RenewalProcess.KillTree(process);
             await DrainQuietlyAsync(drainOutput, drainError).ConfigureAwait(false);
             ct.ThrowIfCancellationRequested();
             return new(null, Stopwatch.GetElapsedTime(started), TimedOut: true);

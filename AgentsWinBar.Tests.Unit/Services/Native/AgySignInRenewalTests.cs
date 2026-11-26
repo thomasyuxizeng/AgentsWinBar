@@ -39,19 +39,42 @@ public class AgySignInRenewalTests
     };
 
     private static (AntigravityNativeClient Client, RecordingHandler Handler, TestClock Clock, ListLogger<AntigravityNativeClient> Logger) Create(
-        MutableCredentialSource source, FakeRenewer renewer, bool enabled = true)
+        MutableCredentialSource source, FakeRenewer renewer, bool enabled = true, CancellationToken shutdown = default)
     {
         var handler = new RecordingHandler(Respond);
         var clock = new TestClock(Now);
         var logger = new ListLogger<AntigravityNativeClient>();
         var client = new AntigravityNativeClient(handler.Client(), logger, source,
-            new AntigravityNativeOptions { RenewExpiredSignIn = () => enabled }, clock, renewer);
+            new AntigravityNativeOptions { RenewExpiredSignIn = () => enabled, ShutdownToken = shutdown }, clock, renewer);
         return (client, handler, clock, logger);
     }
 
     private static MutableCredentialSource ExpiredSource() => new(Blob(ExpiredToken, Now.AddMinutes(-30)));
 
     private static Action RenewedBy(MutableCredentialSource source) => () => source.Json = Blob(RenewedToken, Now.AddHours(1));
+
+    [TestMethod]
+    public async Task FetchAsync_WhenEarlyRenewalDoesNotExtendExpiry_UsesValidTokenAndRetriesAtExpiry()
+    {
+        var expiry = Now.AddSeconds(30);
+        var source = new MutableCredentialSource(Blob(ExpiredToken, expiry));
+        var canRenew = false;
+        var renewer = new FakeRenewer(() =>
+        {
+            if (canRenew) RenewedBy(source)();
+        });
+        var (client, handler, clock, _) = Create(source, renewer);
+
+        (await client.FetchAsync()).Status.Should().Be(NativeUsageStatus.Ok);
+        renewer.Runs.Should().Be(1);
+        handler.Requests.Should().OnlyContain(r => r.Headers.Authorization!.Parameter == ExpiredToken);
+
+        clock.Now = expiry;
+        canRenew = true;
+        (await client.FetchAsync()).Status.Should().Be(NativeUsageStatus.Ok);
+        renewer.Runs.Should().Be(2);
+        handler.Requests.Last().Headers.Authorization!.Parameter.Should().Be(RenewedToken);
+    }
 
     [TestMethod]
     public async Task FetchAsync_WhenSignInExpiredAndRenewalSucceeds_ContinuesWithTheRenewedToken()
@@ -140,6 +163,30 @@ public class AgySignInRenewalTests
     }
 
     [TestMethod]
+    public async Task FetchAsync_WhenApplicationShutsDown_CancelsInFlightRenewal()
+    {
+        using var shutdown = new CancellationTokenSource();
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var renewer = new FakeRenewer(gate: release.Task);
+        var (client, handler, _, _) = Create(ExpiredSource(), renewer, shutdown: shutdown.Token);
+
+        var fetch = client.FetchAsync();
+        try
+        {
+            await renewer.Started.WaitAsync(TimeSpan.FromSeconds(5));
+            shutdown.Cancel();
+            var result = await fetch.WaitAsync(TimeSpan.FromSeconds(2));
+            result.Status.Should().Be(NativeUsageStatus.SignInExpired);
+            handler.Requests.Should().BeEmpty();
+        }
+        finally
+        {
+            release.TrySetResult();
+            await fetch.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+    }
+
+    [TestMethod]
     public async Task FetchAsync_WhenRenewalTimesOut_ReturnsSignInExpired()
     {
         var source = ExpiredSource();
@@ -153,6 +200,46 @@ public class AgySignInRenewalTests
         renewer.Timeouts.Should().Equal(TimeSpan.FromSeconds(30));
         handler.Requests.Should().BeEmpty();
         logger.Messages.Should().Contain(m => m.Contains("timed out"));
+    }
+
+    [TestMethod]
+    public async Task FetchAsync_WhenRenewalsKeepFailing_BacksOffAndCapsAtSixHours()
+    {
+        var source = ExpiredSource();
+        var renewer = new FakeRenewer();
+        var (client, _, clock, _) = Create(source, renewer);
+
+        await client.FetchAsync();
+        var attempts = 1;
+        foreach (var delay in new[] { TimeSpan.FromMinutes(30), TimeSpan.FromHours(2), TimeSpan.FromHours(6), TimeSpan.FromHours(6) })
+        {
+            var next = clock.Now + delay;
+            clock.Now = next.AddSeconds(-1);
+            await client.FetchAsync();
+            renewer.Runs.Should().Be(attempts);
+            clock.Now = next;
+            await client.FetchAsync();
+            renewer.Runs.Should().Be(++attempts);
+        }
+    }
+
+    [TestMethod]
+    public async Task FetchAsync_WhenStoredExpiryChanges_ResetsRenewalBackoff()
+    {
+        var source = ExpiredSource();
+        var renewer = new FakeRenewer();
+        var (client, _, clock, _) = Create(source, renewer);
+
+        await client.FetchAsync();
+        clock.Now = Now.AddMinutes(30);
+        await client.FetchAsync();
+        source.Json = Blob(RenewedToken, Now.AddMinutes(-5));
+
+        await client.FetchAsync();
+        renewer.Runs.Should().Be(3);
+        clock.Now = Now.AddMinutes(60);
+        await client.FetchAsync();
+        renewer.Runs.Should().Be(4);
     }
 
     [TestMethod]
@@ -325,7 +412,7 @@ public class AgySignInRenewalTests
             Interlocked.Increment(ref _runs);
             lock (Timeouts) Timeouts.Add(timeout);
             _started.TrySetResult();
-            if (gate != null) await gate;
+            if (gate != null) await gate.WaitAsync(ct);
             onRun?.Invoke();
             return new AgyModelsRun(timedOut ? null : exitCode, TimeSpan.FromSeconds(1.5), timedOut);
         }

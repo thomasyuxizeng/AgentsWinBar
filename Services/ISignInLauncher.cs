@@ -42,8 +42,6 @@ public interface ISignInSystem
     bool FileExists(string path);
     /// <summary>%LOCALAPPDATA%.</summary>
     string LocalAppData { get; }
-    /// <summary>%USERPROFILE%, the terminal's working folder.</summary>
-    string UserProfile { get; }
     /// <summary>C:\Windows\System32.</summary>
     string SystemDirectory { get; }
     /// <summary>Starts <paramref name="process"/> through the shell. Throws when it cannot be started.</summary>

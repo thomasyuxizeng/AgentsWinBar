@@ -104,8 +104,9 @@ public static class AntigravityCredentialParser
         if (!reader.Read() || reader.TokenType != JsonTokenType.StartObject) return null;
         var fields = new Fields();
         ReadObject(ref reader, ref fields, nested: false);
-        var access = fields.Access?.Trim();
+        var access = fields.Access;
         if (string.IsNullOrEmpty(access)) return null;
+        NativeHttp.ValidateBearerToken(access);
         return new AntigravityCredentials
         {
             AccessToken = access,

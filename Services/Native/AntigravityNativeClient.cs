@@ -12,7 +12,7 @@ public sealed record AntigravityNativeOptions
     public TimeSpan RequestTimeout { get; init; } = TimeSpan.FromSeconds(10);
     /// <summary>Upstream allows the quota summary 2 s; a cold TLS handshake can take longer, so 5 s here.</summary>
     public TimeSpan QuotaSummaryTimeout { get; init; } = TimeSpan.FromSeconds(5);
-    /// <summary>Treat a token this close to expiry as expired (upstream's refresh safety window).</summary>
+    /// <summary>Try renewing a token this close to expiry (upstream's refresh safety window).</summary>
     public TimeSpan ExpirySafetyWindow { get; init; } = TimeSpan.FromSeconds(60);
     /// <summary>
     /// Cloud Code serves quota only to the Antigravity "hub" client family. Upstream pins this identity; the
@@ -28,10 +28,12 @@ public sealed record AntigravityNativeOptions
     /// (the app's RenewGeminiSignIn setting). Null never renews.
     /// </summary>
     public Func<bool>? RenewExpiredSignIn { get; init; }
-    /// <summary>At most one renewal attempt this often.</summary>
+    /// <summary>Delay after the first failed renewal of an expired sign-in.</summary>
     public TimeSpan RenewalInterval { get; init; } = TimeSpan.FromMinutes(30);
     /// <summary>A renewal that has not finished by then is stopped (its whole process tree).</summary>
     public TimeSpan RenewalTimeout { get; init; } = TimeSpan.FromSeconds(30);
+    /// <summary>Stops in-flight renewals when the app shuts down.</summary>
+    public CancellationToken ShutdownToken { get; init; }
 }
 
 /// <summary>
@@ -62,10 +64,9 @@ public sealed class AntigravityNativeClient : INativeUsageClient
     private readonly AntigravityNativeOptions _options;
     private readonly TimeProvider _clock;
     private readonly NativeLastGoodStore _lastGood = new();
+    private readonly NativeRateLimitHold _rateLimit = new();
     private readonly IAgySignInRenewer? _renewer;
-    private readonly object _renewalGate = new();
-    private Task<AgyModelsRun?>? _renewal;
-    private DateTimeOffset? _lastRenewalStart;
+    private readonly SignInRenewal<AntigravityCredentials> _renewal;
 
     public AntigravityNativeClient(
         HttpClient http,
@@ -81,6 +82,7 @@ public sealed class AntigravityNativeClient : INativeUsageClient
         _options = options ?? new AntigravityNativeOptions();
         _clock = clock ?? TimeProvider.System;
         _renewer = renewer;
+        _renewal = new(_clock, _options.RenewalInterval, credential => credential.Expiry);
         ProviderId = ProviderConstants.ValidateAndNormalize("gemini");
     }
 
@@ -96,36 +98,19 @@ public sealed class AntigravityNativeClient : INativeUsageClient
         return blob == null ? null : AntigravityCredentialParser.Parse(blob.Span);
     }
 
-    /// <summary>
-    /// When renewal is on and allowed now (at most one attempt per <see cref="AntigravityNativeOptions.RenewalInterval"/>,
-    /// never two at once), has agy renew its sign-in, then reads the credential once more. Returns the renewed sign-in
-    /// when its expiry moved past <paramref name="expiredAt"/> and now; otherwise null.
-    /// </summary>
-    private async Task<AntigravityCredentials?> TryRenewSignInAsync(DateTimeOffset expiredAt, CancellationToken ct)
-    {
-        if (_renewer == null || _options.RenewExpiredSignIn?.Invoke() != true) return null;
-        Task<AgyModelsRun?> renewal;
-        lock (_renewalGate)
-        {
-            var now = _clock.GetUtcNow();
-            if (_renewal is { IsCompleted: false } running) renewal = running; // join the attempt in flight
-            else if (_lastRenewalStart is { } last && now >= last && now - last < _options.RenewalInterval) return null;
-            else
-            {
-                _lastRenewalStart = now;
-                // Not tied to this caller's deadline: an attempt that outlives it still finishes (or is stopped at its
-                // own timeout), and the next read finds the renewed sign-in.
-                renewal = _renewal = Task.Run(RenewAsync, CancellationToken.None);
-            }
-        }
+    private Task<AntigravityCredentials?> TryRenewSignInAsync(DateTimeOffset expiry, CancellationToken ct) =>
+        _renewer != null && !_options.ShutdownToken.IsCancellationRequested && _options.RenewExpiredSignIn?.Invoke() == true
+            ? _renewal.TryRenewAsync(expiry, RenewAndReadAsync, ct)
+            : Task.FromResult<AntigravityCredentials?>(null);
 
-        if (await renewal.WaitAsync(ct).ConfigureAwait(false) is null) return null;
+    private async Task<AntigravityCredentials?> RenewAndReadAsync()
+    {
+        if (await RenewAsync().ConfigureAwait(false) is null) return null;
         try
         {
-            var renewed = ReadCredentials();
-            return renewed?.Expiry is { } expires && expires > expiredAt && expires > _clock.GetUtcNow() ? renewed : null;
+            return ReadCredentials();
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or JsonException)
         {
             _logger.LogWarning("Antigravity sign-in could not be read after renewal ({Type})", ex.GetType().Name);
             return null;
@@ -142,13 +127,14 @@ public sealed class AntigravityNativeClient : INativeUsageClient
                 _logger.LogInformation("agy was not found; the expired Antigravity sign-in was not renewed");
                 return null;
             }
-            var run = await _renewer.RunModelsAsync(executable, _options.RenewalTimeout, CancellationToken.None).ConfigureAwait(false);
+            var run = await _renewer.RunModelsAsync(executable, _options.RenewalTimeout, _options.ShutdownToken).ConfigureAwait(false);
             if (run.TimedOut)
                 _logger.LogWarning("Antigravity sign-in renewal timed out after {Seconds:0.0} s and was stopped", run.Duration.TotalSeconds);
             else
                 _logger.LogInformation("Antigravity sign-in renewal finished with exit code {ExitCode} in {Seconds:0.0} s", run.ExitCode, run.Duration.TotalSeconds);
             return run;
         }
+        catch (OperationCanceledException) when (_options.ShutdownToken.IsCancellationRequested) { return null; }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             _logger.LogWarning("Antigravity sign-in renewal could not run ({Type})", ex.GetType().Name);
@@ -158,18 +144,21 @@ public sealed class AntigravityNativeClient : INativeUsageClient
 
     private async Task<NativeUsageResult> FetchCoreAsync(CancellationToken ct)
     {
+        ct.ThrowIfCancellationRequested();
         var now = _clock.GetUtcNow();
+        if (_rateLimit.Get(now) is { } held) return held;
         AntigravityCredentials? credentials;
         try
         {
             credentials = ReadCredentials();
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or JsonException)
         {
             // A corrupt credential is a read failure (last good reading kept), not a sign-out.
             _logger.LogWarning("Antigravity credential could not be read ({Type})", ex.GetType().Name);
             return Fail(NativeUsageStatus.Failed, null, "The Antigravity sign-in could not be read.");
         }
+        _renewal.ObserveExpiry(credentials?.Expiry);
         if (credentials == null)
             return Fail(NativeUsageStatus.SignInMissing, null, "Not signed in to Antigravity on Windows. Sign in with agy on Windows.");
 
@@ -183,11 +172,13 @@ public sealed class AntigravityNativeClient : INativeUsageClient
             }
             else
             {
-                var ago = now - expiry;
-                _logger.LogInformation("Antigravity access token expired {Ago} ago; not renewed", NativeParse.Ago(ago));
-                return Fail(NativeUsageStatus.SignInExpired, null, ago > TimeSpan.Zero
-                    ? $"Antigravity sign-in expired {NativeParse.Ago(ago)} ago. Run agy on Windows to renew it."
-                    : "Antigravity sign-in expires in under a minute. Run agy on Windows to renew it.") with { ExpiredFor = ago };
+                var ago = _clock.GetUtcNow() - expiry;
+                if (ago >= TimeSpan.Zero)
+                {
+                    _logger.LogInformation("Antigravity access token expired {Ago} ago; not renewed", NativeParse.Ago(ago));
+                    return Fail(NativeUsageStatus.SignInExpired, null,
+                        $"Antigravity sign-in expired {NativeParse.Ago(ago)} ago. Run agy on Windows to renew it.") with { ExpiredFor = ago };
+                }
             }
         }
         var accessToken = credentials.AccessToken;
@@ -196,9 +187,9 @@ public sealed class AntigravityNativeClient : INativeUsageClient
         {
             // 1. loadCodeAssist: plan and Cloud Code project.
             calls++;
-            var (codeStatus, codeAssist) = await PostAsync(_options.LoadCodeAssistUri, accessToken, LoadCodeAssistBody,
+            var (codeStatus, codeAssist, codeRetryAfter) = await PostAsync(_options.LoadCodeAssistUri, accessToken, LoadCodeAssistBody,
                 _options.RequestTimeout, NativeJsonContext.Default.CodeAssistResponse, ct).ConfigureAwait(false);
-            if (codeStatus != HttpStatusCode.OK || codeAssist == null) return HttpFailure(codeStatus, calls, "loadCodeAssist");
+            if (codeStatus != HttpStatusCode.OK || codeAssist == null) return HttpFailure(codeStatus, calls, "loadCodeAssist", codeRetryAfter);
             var projectId = credentials.ProjectId ?? codeAssist.ProjectId;
             if (projectId == null && codeAssist.RejectsClientForConsumerTier)
                 return Fail(NativeUsageStatus.Unauthorized, 403,
@@ -213,9 +204,10 @@ public sealed class AntigravityNativeClient : INativeUsageClient
             try
             {
                 calls++;
-                var (summaryStatus, summary) = await PostAsync(_options.QuotaSummaryUri, accessToken, body,
+                var (summaryStatus, summary, summaryRetryAfter) = await PostAsync(_options.QuotaSummaryUri, accessToken, body,
                     _options.QuotaSummaryTimeout, NativeJsonContext.Default.QuotaSummaryResponse, ct).ConfigureAwait(false);
-                if (summaryStatus == HttpStatusCode.Unauthorized) return HttpFailure(summaryStatus, calls, "retrieveUserQuotaSummary");
+                if (summaryStatus is HttpStatusCode.Unauthorized or HttpStatusCode.TooManyRequests)
+                    return HttpFailure(summaryStatus, calls, "retrieveUserQuotaSummary", summaryRetryAfter);
                 if (summaryStatus == HttpStatusCode.OK && summary is { CodeIsError: false } &&
                     MapQuotaSummary(summary, plan, _clock.GetUtcNow()) is { } mapped)
                     return mapped with { NetworkCalls = calls };
@@ -228,10 +220,11 @@ public sealed class AntigravityNativeClient : INativeUsageClient
 
             // 3. Fallback: per-model quotas.
             calls++;
-            var (modelsStatus, models) = await PostAsync(_options.AvailableModelsUri, accessToken, body,
+            var (modelsStatus, models, modelsRetryAfter) = await PostAsync(_options.AvailableModelsUri, accessToken, body,
                 _options.RequestTimeout, NativeJsonContext.Default.AvailableModelsResponse, ct).ConfigureAwait(false);
-            if (modelsStatus != HttpStatusCode.OK || models == null) return HttpFailure(modelsStatus, calls, "fetchAvailableModels");
-            return (MapAvailableModels(models, plan, _clock.GetUtcNow())
+            if (modelsStatus != HttpStatusCode.OK || models == null) return HttpFailure(modelsStatus, calls, "fetchAvailableModels", modelsRetryAfter);
+            var onboarded = codeAssist.ProjectId != null || NativeParse.NonEmpty(codeAssist.CurrentTier?.Id) != null;
+            return (MapAvailableModels(models, plan, _clock.GetUtcNow(), onboarded)
                     ?? Fail(NativeUsageStatus.Failed, 200, "Antigravity reported no usable quota.")) with { NetworkCalls = calls };
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
@@ -239,14 +232,15 @@ public sealed class AntigravityNativeClient : INativeUsageClient
             _logger.LogWarning("Antigravity request timed out");
             return Fail(NativeUsageStatus.Failed, null, "Antigravity usage request timed out.") with { NetworkCalls = calls };
         }
-        catch (Exception ex) when (ex is HttpRequestException or JsonException or IOException)
+        catch (Exception ex) when (ex is HttpRequestException or JsonException or IOException
+            or FormatException or ArgumentException or InvalidOperationException or NotSupportedException)
         {
             _logger.LogWarning("Antigravity request failed ({Type})", ex.GetType().Name);
             return Fail(NativeUsageStatus.Failed, null, "Antigravity usage request failed (network or response error).") with { NetworkCalls = calls };
         }
     }
 
-    private async Task<(HttpStatusCode Status, T? Body)> PostAsync<T>(Uri uri, string token, byte[] body, TimeSpan timeout,
+    private async Task<(HttpStatusCode Status, T? Body, DateTimeOffset? RetryAfter)> PostAsync<T>(Uri uri, string token, byte[] body, TimeSpan timeout,
         JsonTypeInfo<T> type, CancellationToken ct) where T : class
     {
         using var request = new HttpRequestMessage(HttpMethod.Post, uri) { Content = new ByteArrayContent(body) };
@@ -255,19 +249,24 @@ public sealed class AntigravityNativeClient : INativeUsageClient
         NativeHttp.SetUserAgent(request, _options.UserAgent);
         using var deadline = NativeHttp.Deadline(ct, timeout);
         using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, deadline.Token).ConfigureAwait(false);
-        if (response.StatusCode != HttpStatusCode.OK) return (response.StatusCode, null);
-        return (response.StatusCode, await NativeHttp.ReadJsonAsync(response, type, deadline.Token).ConfigureAwait(false));
+        if (response.StatusCode != HttpStatusCode.OK)
+            return (response.StatusCode, null, response.StatusCode == HttpStatusCode.TooManyRequests
+                ? NativeHttp.RetryAfter(response, _clock.GetUtcNow()) : null);
+        return (response.StatusCode, await NativeHttp.ReadJsonAsync(response, type, deadline.Token).ConfigureAwait(false), null);
     }
 
-    private NativeUsageResult HttpFailure(HttpStatusCode status, int calls, string step)
+    private NativeUsageResult HttpFailure(HttpStatusCode status, int calls, string step, DateTimeOffset? retryAfter)
     {
         var code = (int)status;
         _logger.LogWarning("Antigravity {Step} answered {Status}", step, code);
+        if (status == HttpStatusCode.TooManyRequests)
+            return _rateLimit.Remember(
+                Fail(NativeUsageStatus.RateLimited, code, "Antigravity quota is rate limited right now.") with { NetworkCalls = calls },
+                retryAfter, _clock.GetUtcNow());
         return (status switch
         {
             HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden => Fail(NativeUsageStatus.Unauthorized, code,
                 $"Antigravity rejected the Windows sign-in (HTTP {code}). Sign in with agy on Windows again."),
-            HttpStatusCode.TooManyRequests => Fail(NativeUsageStatus.RateLimited, code, "Antigravity quota is rate limited right now."),
             _ => Fail(NativeUsageStatus.Failed, code, $"Antigravity {step} failed (HTTP {code}).")
         }) with { NetworkCalls = calls };
     }
@@ -323,14 +322,14 @@ public sealed class AntigravityNativeClient : INativeUsageClient
         foreach (var n in named) byId[n.Id] = n;
 
         // Upstream's representatives, then the shim's override with Gemini's own 5-hour and weekly windows.
-        var primary = byId.GetValueOrDefault(GeminiFiveHourId)?.Window ?? Representative(known, "gemini");
-        var secondary = byId.GetValueOrDefault(GeminiWeeklyId)?.Window ?? Representative(known, "claude-gpt");
-        primary = WithResetsIn(primary, now);
-        secondary = WithResetsIn(secondary, now);
+        var primary = byId.GetValueOrDefault(GeminiFiveHourId)?.Window ?? Representative(known, "gemini")?.Window;
+        var secondary = byId.GetValueOrDefault(GeminiWeeklyId);
+        if (secondary?.Window == null) secondary = Representative(known, "claude-gpt");
 
         var extraIds = new HashSet<string>(StringComparer.Ordinal);
         var extras = known
-            .Where(n => !n.Id.StartsWith(WindowIdPrefix + "gemini", StringComparison.Ordinal) && extraIds.Add(n.Id))
+            .Where(n => n.Id != secondary?.Id &&
+                !n.Id.StartsWith(WindowIdPrefix + "gemini", StringComparison.Ordinal) && extraIds.Add(n.Id))
             .Select(n => new NativeExtraWindow(n.Id, n.Id switch
             {
                 WindowIdPrefix + "3p-5h" => "Claude and GPT 5-hour",
@@ -347,8 +346,8 @@ public sealed class AntigravityNativeClient : INativeUsageClient
             Source = "remote",
             Status = NativeUsageStatus.Ok,
             LoginMethod = plan,
-            Primary = primary,
-            Secondary = secondary,
+            Primary = WithResetsIn(primary, now),
+            Secondary = WithResetsIn(secondary?.Window, now),
             ExtraWindows = extras,
             UpdatedAt = now
         };
@@ -358,7 +357,8 @@ public sealed class AntigravityNativeClient : INativeUsageClient
     /// Simplified fallback when the quota summary is unavailable: the most used Gemini model as primary and the most
     /// used Claude/GPT model as secondary. Upstream's model normalization is richer; see the spike report.
     /// </summary>
-    public static NativeUsageResult? MapAvailableModels(AvailableModelsResponse response, string? plan, DateTimeOffset now)
+    public static NativeUsageResult? MapAvailableModels(AvailableModelsResponse response, string? plan, DateTimeOffset now,
+        bool onboarded = false)
     {
         var quotas = (response.Models ?? [])
             .Where(m => m.Value?.QuotaInfo?.RemainingFraction is { } f && double.IsFinite(f))
@@ -366,8 +366,8 @@ public sealed class AntigravityNativeClient : INativeUsageClient
                         !m.Key.Contains("autocomplete", StringComparison.OrdinalIgnoreCase) && !m.Key.Contains("tab_", StringComparison.OrdinalIgnoreCase))
             .Select(m => (Id: m.Key, Fraction: m.Value!.QuotaInfo!.RemainingFraction!.Value, Reset: ParseResetTime(m.Value.QuotaInfo.ResetTime)))
             .ToList();
-        // All models at 100% is the placeholder answer for unonboarded clients; upstream verifies it, we refuse it.
-        if (quotas.Count == 0 || quotas.All(q => q.Fraction >= 0.999)) return null;
+        // An unonboarded client can receive placeholder quotas at 100% remaining.
+        if (quotas.Count == 0 || (!onboarded && quotas.All(q => q.Fraction >= 0.999))) return null;
         NativeUsageWindow? Pick(Func<string, bool> family) => quotas.Where(q => family(q.Id.ToLowerInvariant()))
             .OrderBy(q => q.Fraction).Select(q => new NativeUsageWindow(100 - Math.Clamp(q.Fraction * 100, 0, 100), 0, q.Reset, null))
             .FirstOrDefault();
@@ -384,10 +384,13 @@ public sealed class AntigravityNativeClient : INativeUsageClient
     private static NativeUsageWindow? WithResetsIn(NativeUsageWindow? window, DateTimeOffset now) =>
         window?.ResetsAt is { } reset ? window with { ResetDescription = NativeParse.ResetsInDescription(reset, now) } : window;
 
-    private static NativeUsageWindow? Representative(List<NamedWindow> known, string family)
+    private static NamedWindow? Representative(List<NamedWindow> known, string family)
     {
         var members = known.Where(n => Family(n) == family).ToList();
-        var ordinaryIds = SessionAliases.Append("weekly").Select(a => WindowIdPrefix + "gemini-" + a).ToHashSet(StringComparer.Ordinal);
+        // Prefer the family's standard session and weekly buckets over specialized quotas.
+        string[] prefixes = family == "gemini" ? ["gemini-"] : ["3p-", "third-party-"];
+        var ordinaryIds = prefixes.SelectMany(prefix => SessionAliases.Append("weekly")
+            .Select(alias => WindowIdPrefix + prefix + alias)).ToHashSet(StringComparer.Ordinal);
         var ordinary = members.Where(n =>
         {
             var id = n.Id.ToLowerInvariant().Replace('_', '-');
@@ -397,7 +400,7 @@ public sealed class AntigravityNativeClient : INativeUsageClient
         return (ordinary.Count > 0 ? ordinary : members)
             .OrderByDescending(n => n.Window!.UsedPercent)
             .ThenBy(n => n.Title, StringComparer.OrdinalIgnoreCase)
-            .FirstOrDefault()?.Window;
+            .FirstOrDefault();
     }
 
     private static string? Family(NamedWindow window)

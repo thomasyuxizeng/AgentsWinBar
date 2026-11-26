@@ -23,6 +23,7 @@ public partial class App : Application
     private const string MutexName = "AgentsWinBar_SingleInstance";
 #endif
 
+    private readonly CancellationTokenSource _shutdown = new();
     private MainWindow? _mainWindow;
     private Window? _setupWindow;
 
@@ -56,7 +57,7 @@ public partial class App : Application
     /// </summary>
     private void RegisterCrashLogging()
     {
-        UnhandledException += (_, e) => LogCrash($"Xaml.UnhandledException: {e.Message}", e.Exception);
+        UnhandledException += (_, e) => LogCrash("Xaml.UnhandledException", e.Exception);
         AppDomain.CurrentDomain.UnhandledException += (_, e) => LogCrash("AppDomain.UnhandledException", e.ExceptionObject as Exception);
         TaskScheduler.UnobservedTaskException += (_, e) => LogCrash("UnobservedTaskException", e.Exception);
     }
@@ -69,10 +70,8 @@ public partial class App : Application
         try
         {
             var folder = NativeTestOverrides.Current?.AppDataDirectory ?? AppPaths.DataDirectory;
-            Directory.CreateDirectory(folder);
-            File.AppendAllText(
-                Path.Combine(folder, "crash.log"),
-                $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {source}{Environment.NewLine}{ex}{Environment.NewLine}{Environment.NewLine}");
+            var exceptionType = ex == null ? string.Empty : $" ({ex.GetType().Name})";
+            RollingLogFile.Append(Path.Combine(folder, "crash.log"), $"{DateTimeOffset.UtcNow:O} {source}{exceptionType}");
         }
         catch
         {
@@ -93,7 +92,7 @@ public partial class App : Application
             if (!createdNew)
             {
                 // Another instance is already running
-                Exit();
+                ExitApplication();
                 return;
             }
 
@@ -151,7 +150,7 @@ public partial class App : Application
             LogCrash("Application launch failed", ex);
             Services.GetRequiredService<ILogger<App>>().LogError(ex, "Application launch failed");
             ReleaseMutex();
-            Exit();
+            ExitApplication();
         }
     }
 
@@ -164,6 +163,7 @@ public partial class App : Application
             Windows.Add(_mainWindow);
             _mainWindow.Closed += (s, e) =>
             {
+                _shutdown.Cancel();
                 Windows.Remove(_mainWindow);
                 ReleaseMutex();
             };
@@ -198,7 +198,11 @@ public partial class App : Application
     {
         _setupWindow = new SetupWindow();
         Windows.Add(_setupWindow);
-        _setupWindow.Closed += (s, e) => Windows.Remove(_setupWindow!);
+        _setupWindow.Closed += (s, e) =>
+        {
+            Windows.Remove(_setupWindow!);
+            if (_mainWindow is null) _shutdown.Cancel();
+        };
         _setupWindow.Activate();
 
         // Apply theme
@@ -278,7 +282,13 @@ public partial class App : Application
         }
     }
 
-    private static IServiceProvider ConfigureServices()
+    internal void ExitApplication()
+    {
+        _shutdown.Cancel();
+        Exit();
+    }
+
+    private IServiceProvider ConfigureServices()
     {
         var services = new ServiceCollection();
 
@@ -289,7 +299,8 @@ public partial class App : Application
             builder.AddDebug();  // Output to VS Debug window
             builder.SetMinimumLevel(LogLevel.Debug);
 #else
-            builder.SetMinimumLevel(LogLevel.Information);
+            builder.AddProvider(new FileLoggerProvider(AppPaths.DataDirectory));
+            builder.SetMinimumLevel(LogLevel.Warning);
 #endif
         });
 
@@ -314,7 +325,7 @@ public partial class App : Application
         services.AddSingleton<Services.Native.INativeUsageService>(sp =>
             new Services.Native.NativeUsageService(sp.GetRequiredService<ILoggerFactory>(),
                 () => sp.GetRequiredService<ISettingsService>().Settings.RenewClaudeSignIn, testOverrides,
-                () => sp.GetRequiredService<ISettingsService>().Settings.RenewGeminiSignIn));
+                () => sp.GetRequiredService<ISettingsService>().Settings.RenewGeminiSignIn, _shutdown.Token));
         // Native cost scanner: index and refreshed prices live beside settings.json. CodexBarService uses it while
         // the cost source is "native"; nothing is scanned or watched before the first cost request.
         services.AddSingleton<Services.Native.INativeCostService>(sp =>

@@ -146,6 +146,40 @@ public class CodexNativeClientTests
     }
 
     [TestMethod]
+    [DataRow(null, 600)]
+    [DataRow("90", 90)]
+    [DataRow("999999", 86400)]
+    public async Task FetchAsync_WhenRateLimited_HoldsRequestsUntilRetryAfter(string? header, int seconds)
+    {
+        var clock = new TestClock(Now);
+        var limited = false;
+        var (client, handler) = Create(_ =>
+        {
+            if (!limited) return Json("""{"rate_limit":{"secondary_window":{"used_percent":61,"limit_window_seconds":604800}}}""");
+            var response = new HttpResponseMessage(HttpStatusCode.TooManyRequests);
+            if (header != null) response.Headers.TryAddWithoutValidation("Retry-After", header);
+            return response;
+        }, clock);
+        var good = await client.FetchAsync();
+        limited = true;
+        var rateLimited = await client.FetchAsync();
+
+        clock.Now = Now.AddSeconds(seconds - 1);
+        limited = false;
+        var held = await client.FetchAsync();
+
+        held.NetworkCalls.Should().Be(0);
+        handler.Requests.Should().HaveCount(2);
+        held.Cached.Should().BeTrue();
+        held.Secondary!.UsedPercent.Should().Be(good.Secondary!.UsedPercent);
+        held.RetryAfter.Should().Be(Now.AddSeconds(seconds));
+        rateLimited.RetryAfter.Should().Be(held.RetryAfter);
+        clock.Now = Now.AddSeconds(seconds);
+        (await client.FetchAsync()).Status.Should().Be(NativeUsageStatus.Ok);
+        handler.Requests.Should().HaveCount(3);
+    }
+
+    [TestMethod]
     public async Task FetchAsync_WhenNetworkErrorAfterGoodReading_ServesLastGoodReadingAsCached()
     {
         var failing = false;

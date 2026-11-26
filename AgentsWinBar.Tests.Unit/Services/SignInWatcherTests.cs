@@ -37,6 +37,8 @@ public class SignInWatcherTests
         public Dictionary<string, DateTime?> Files { get; } = new(StringComparer.OrdinalIgnoreCase);
         public DateTime? Credential { get; set; }
         public string? CredentialTargetRead { get; private set; }
+        public Exception? WatchError { get; set; }
+        public Exception? TimerError { get; set; }
         public bool FoldersExist { get; set; } = true;
         public List<FakeTimer> Timers { get; } = [];
         public List<FakeWatch> Watches { get; } = [];
@@ -46,6 +48,7 @@ public class SignInWatcherTests
 
         public IDisposable? WatchFile(string path, Action changed)
         {
+            if (WatchError is { } error) throw error;
             if (!FoldersExist) return null;
             var watch = new FakeWatch(path, changed);
             Watches.Add(watch);
@@ -54,6 +57,7 @@ public class SignInWatcherTests
 
         public IDisposable StartTimer(TimeSpan dueTime, TimeSpan period, Action tick)
         {
+            if (TimerError is { } error) throw error;
             var timer = new FakeTimer(dueTime, period, tick);
             Timers.Add(timer);
             return timer;
@@ -99,11 +103,42 @@ public class SignInWatcherTests
     }
 
     [TestMethod]
-    public void Begin_WhenCredentialFileChanges_RequestsOneRefreshAfterSettleDelayAndStops()
+    public void Begin_WhenWatchSetupThrows_ClearsOnlyTheFailedProvider()
+    {
+        _watcher.Begin("gemini");
+        _signals.WatchError = new InvalidOperationException("Synthetic watcher failure.");
+
+        var begin = () => _watcher.Begin("claude");
+        begin.Should().Throw<InvalidOperationException>();
+
+        _watcher.IsPending("claude").Should().BeFalse();
+        _watcher.IsPending("gemini").Should().BeTrue();
+        _signals.Poll.Disposed.Should().BeFalse();
+    }
+
+    [TestMethod]
+    public void Begin_WhenPollSetupThrows_DisposesTheWatchAndAllowsRetry()
+    {
+        _signals.TimerError = new InvalidOperationException("Synthetic timer failure.");
+
+        var begin = () => _watcher.Begin("claude");
+        begin.Should().Throw<InvalidOperationException>();
+
+        _watcher.IsPending("claude").Should().BeFalse();
+        _signals.AnyLive.Should().BeFalse();
+        _signals.TimerError = null;
+        _watcher.Begin("claude");
+        _watcher.IsPending("claude").Should().BeTrue();
+        _signals.Poll.Disposed.Should().BeFalse();
+    }
+
+    [TestMethod]
+    public void Begin_WhenCredentialFileChangesAgain_RefreshesAfterEachSettleUntilCanceled()
     {
         _watcher.Begin("claude");
         var watch = _signals.Watches.Single();
 
+        _signals.Files[ClaudeFile] = _signals.UtcNow;
         watch.Change();
         watch.Change();   // a tool's write raises several events
         _requests.Should().BeEmpty("the refresh waits for the tool to finish writing");
@@ -112,6 +147,18 @@ public class SignInWatcherTests
         settle.Tick();
 
         _requests.Should().Equal(new SignInRefreshRequest("claude", true));
+        settle.Disposed.Should().BeTrue();
+        _watcher.IsPending("claude").Should().BeTrue();
+        _signals.Poll.Tick();
+        _requests.Should().ContainSingle("polling should remember the stamp already handled by the file watcher");
+
+        _signals.UtcNow += TimeSpan.FromSeconds(5);
+        _signals.Files[ClaudeFile] = _signals.UtcNow;
+        watch.Change();
+        _signals.Live.Single(t => t.Due == SignInWatcher.SettleDelay).Tick();
+        _requests.Should().HaveCount(2).And.AllBeEquivalentTo(new SignInRefreshRequest("claude", true));
+
+        _watcher.Cancel("claude");
         watch.Disposed.Should().BeTrue();
         _signals.Live.Should().BeEmpty("nothing keeps running once no sign-in is pending");
         _watcher.IsPending("claude").Should().BeFalse();
@@ -130,6 +177,15 @@ public class SignInWatcherTests
         _signals.Poll.Tick();
 
         _requests.Should().Equal(new SignInRefreshRequest("codex", true));
+        _signals.Poll.Tick();
+        _requests.Should().ContainSingle();
+
+        _signals.UtcNow += SignInWatcher.PollInterval;
+        _signals.Files[CodexFile] = _signals.UtcNow;
+        _signals.Poll.Tick();
+        _requests.Should().HaveCount(2).And.AllBeEquivalentTo(new SignInRefreshRequest("codex", true));
+        _signals.UtcNow += SignInWatcher.FileWindow;
+        _signals.Poll.Tick();
         _signals.Live.Should().BeEmpty();
     }
 
@@ -170,7 +226,7 @@ public class SignInWatcherTests
     }
 
     [TestMethod]
-    public void Poll_WhenGeminiCredentialRewritten_RequestsRefreshAndStops()
+    public void Poll_WhenGeminiCredentialIsRewrittenTwice_RefreshesForEachStamp()
     {
         _signals.Credential = _signals.UtcNow.AddDays(-1);
         _watcher.Begin("gemini");
@@ -180,6 +236,14 @@ public class SignInWatcherTests
         _signals.Poll.Tick();
 
         _requests.Should().Equal(new SignInRefreshRequest("gemini", true));
+        _signals.Poll.Tick();
+        _requests.Should().ContainSingle();
+
+        _signals.UtcNow += SignInWatcher.PollInterval;
+        _signals.Credential = _signals.UtcNow;
+        _signals.Poll.Tick();
+        _requests.Should().HaveCount(2).And.AllBeEquivalentTo(new SignInRefreshRequest("gemini", true));
+        _watcher.Cancel("gemini");
         _signals.Live.Should().BeEmpty();
     }
 

@@ -1,4 +1,6 @@
 using AwesomeAssertions;
+using AgentsWinBar.Helpers;
+using AgentsWinBar.Tests.Unit.Services.Native;
 using AgentsWinBar.Models;
 using AgentsWinBar.Services;
 using AgentsWinBar.Tests.Unit.Mocks;
@@ -148,6 +150,34 @@ public class CodexBarServiceEarlyResetTests
         alert.ProviderId.Should().Be("codex");
         alert.Title.Should().Contain("Codex Session was reset early");
         alert.Message.Should().Contain("Usage dropped from 79% to 3%");
+    }
+
+    [TestMethod]
+    public async Task GetUsageAsync_WhenEarlyResetFlushFails_ReturnsUsageAndAllowsTheNextNotification()
+    {
+        var now = _now.UtcDateTime;
+        var first = new EarlyReset("codex", "session", "Session", 79, 3, now.AddHours(2), now.AddHours(5), now);
+        var second = first with { PreviousPercent = 97, CurrentPercent = 1 };
+        var store = new Mock<IEarlyResetStore>();
+        store.SetupSequence(s => s.Observe(It.IsAny<UsageData>(), It.IsAny<DateTime>()))
+            .Returns(new[] { first }).Returns(new[] { second });
+        store.Setup(s => s.Record(It.IsAny<EarlyReset>())).Returns(true);
+        store.SetupSequence(s => s.FlushAsync(It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new IOException("Synthetic save failure")).Returns(Task.CompletedTask);
+        var logger = new ListLogger<CodexBarService>();
+        var service = new CodexBarService(_wsl, _cacheService, _settings, _sampleLoader, logger,
+            timeProvider: _clock, earlyResetStore: store.Object, toastNotifier: _mockToastNotifier.Object);
+        _wsl.SetCommandResult("codexbar --provider codex --format json --source cli --status",
+            new WslResult { Success = true, Output = BuildUsageJson("codex", 3, now.AddHours(5).ToString("O")) });
+
+        var firstReading = await service.GetUsageAsync("codex");
+        var secondReading = await service.GetUsageAsync("codex");
+
+        firstReading!.Session!.Percent.Should().Be(3);
+        secondReading!.Session!.Percent.Should().Be(3);
+        logger.Messages.Should().ContainSingle(message => message.Contains("Failed to save early reset"));
+        _mockToastNotifier.Verify(t => t.Show(It.IsAny<string>(), It.Is<string>(body => body.Contains("97%"))), Times.Once);
+        _mockToastNotifier.Verify(t => t.Show(It.IsAny<string>(), It.IsAny<string>()), Times.Once);
     }
 
     [TestMethod]
