@@ -749,6 +749,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
         List<string>? costProviders = null;
         List<string>? attempted = null;
+        // Providers in a 429 cooldown when the read began, with its end: their client answers from its hold
+        Dictionary<string, DateTime>? held = null;
         var stamped = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var refreshStarted = Stopwatch.GetTimestamp();
 
@@ -783,6 +785,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             attempted = partial ?? enabledIds;
             // Every provider that was due has been disabled meanwhile
             if (attempted.Count == 0) return;
+            if (ActivityRefreshOn) held = CooldownsAt(attempted, DateTime.UtcNow);
 
             // The providers being read are loading again (existing data stays visible while it refreshes)
             for (int i = 0; i < Providers.Count; i++)
@@ -839,7 +842,14 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     };
                     TrackResetStamps(Providers[index]);
                 }
-                if (ProviderConstants.IsValidProvider(data.Provider))
+                if (ProviderConstants.IsValidProvider(data.Provider) &&
+                    AnsweredFromHold(held, ProviderConstants.ValidateAndNormalize(data.Provider), resultAtUtc) is { } heldKey)
+                {
+                    // No call was made: not a fetch, so the real attempt still comes when the cooldown ends
+                    stamped.Add(heldKey);
+                    _logger.LogDebug("Usage of {Provider} was answered from its rate limit hold", heldKey);
+                }
+                else if (ProviderConstants.IsValidProvider(data.Provider))
                 {
                     // Each provider's own fetch time and unchanged streak drive the per-provider schedule
                     var key = ProviderConstants.ValidateAndNormalize(data.Provider);
@@ -912,7 +922,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
             {
                 var triedAt = DateTime.UtcNow;
                 foreach (var provider in attempted)
-                    if (!stamped.Contains(provider)) _lastFetchUtc[provider] = triedAt;
+                {
+                    // A provider whose cooldown lasted throughout was never called
+                    if (stamped.Contains(provider) || held?.TryGetValue(provider, out var until) == true && until > triedAt) continue;
+                    _lastFetchUtc[provider] = triedAt;
+                }
             }
             if (!_disposed)
             {
@@ -1097,7 +1111,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
             }
             // Re-plan at the time of the wake-up: activity, settings or a lock may have changed while waiting.
             var now = DateTime.UtcNow;
-            var dueNow = ProviderRefreshPlanner.SelectDue(BuildPlan(now), now + DueTolerance, IsSessionLocked).ToList();
+            var plan = BuildPlan(now);
+            var dueNow = ProviderRefreshPlanner.SelectDue(plan, now, IsSessionLocked, DueTolerance).ToList();
             if (targets != null)
             {
                 foreach (var provider in targets.Select(t => t.Provider).Where(ProviderConstants.IsValidProvider)
@@ -1105,6 +1120,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 {
                     var index = dueNow.FindIndex(d => d.Provider == provider);
                     if (index >= 0) dueNow[index] = dueNow[index] with { Reason = RefreshReason.Reset };
+                    // A reset never ends a 429 cooldown early: the provider is read when its cooldown ends
+                    else if (plan.Any(p => p.Provider == provider && ProviderRefreshPlanner.InCooldown(p, now))) continue;
                     else dueNow.Add(new ProviderRefreshDue(provider, now, TimeSpan.Zero, RefreshReason.Reset));
                 }
             }
@@ -1296,11 +1313,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 if (shown.Provider.Equals(provider, StringComparison.OrdinalIgnoreCase)) { data = shown; break; }
             }
             var (percent, pace) = ProviderRefreshPlanner.Pressure(data, nowUtc);
-            DateTime? limitedUntil = null;
-            try { limitedUntil = _codexBarService.GetRateLimitedUntil(provider); }
-            catch (Exception ex) { _logger.LogDebug("Rate limit state unavailable ({Type})", ex.GetType().Name); }
             inputs.Add(new(provider, _toolActivity?.LastActivityUtc(provider), lastFetch, percent, pace,
-                legacy ? _unchangedRefreshes : _providerStreaks.GetValueOrDefault(provider), limitedUntil));
+                legacy ? _unchangedRefreshes : _providerStreaks.GetValueOrDefault(provider), RateLimitedUntil(provider)));
         }
         return ProviderRefreshPlanner.Plan(inputs, new RefreshPlanOptions
         {
@@ -1312,6 +1326,38 @@ public partial class MainViewModel : ObservableObject, IDisposable
             LockedInterval = TimeSpan.FromMinutes(settings.LockedRefreshIntervalMinutes)
         }, nowUtc);
     }
+
+    /// <summary>When the provider's 429 cooldown ends (UTC), or null when none lasts or it cannot be told.</summary>
+    private DateTime? RateLimitedUntil(string provider)
+    {
+        try { return _codexBarService.GetRateLimitedUntil(provider); }
+        catch (Exception ex)
+        {
+            _logger.LogDebug("Rate limit state unavailable ({Type})", ex.GetType().Name);
+            return null;
+        }
+    }
+
+    /// <summary>The providers among <paramref name="providers"/> whose 429 cooldown lasts past <paramref name="nowUtc"/>, with its end.</summary>
+    private Dictionary<string, DateTime>? CooldownsAt(IEnumerable<string> providers, DateTime nowUtc)
+    {
+        Dictionary<string, DateTime>? held = null;
+        foreach (var provider in providers)
+        {
+            if (RateLimitedUntil(provider) is { } until && until > nowUtc)
+                (held ??= new(StringComparer.OrdinalIgnoreCase))[provider] = until;
+        }
+        return held;
+    }
+
+    /// <summary>
+    /// <paramref name="provider"/> when its answer at <paramref name="resultAtUtc"/> came from its client's 429 hold
+    /// without a call: the cooldown that lasted when the read began still lasts, unchanged (a new 429 or a new sign-in
+    /// would have changed it). Null otherwise.
+    /// </summary>
+    private string? AnsweredFromHold(Dictionary<string, DateTime>? held, string provider, DateTime resultAtUtc) =>
+        held != null && held.TryGetValue(provider, out var until) && until > resultAtUtc && RateLimitedUntil(provider) == until
+            ? provider : null;
 
     private void LogRefreshForAll(string trigger, RefreshReason reason)
     {

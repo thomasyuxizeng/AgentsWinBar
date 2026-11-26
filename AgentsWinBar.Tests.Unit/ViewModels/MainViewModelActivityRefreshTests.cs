@@ -87,9 +87,9 @@ public class MainViewModelActivityRefreshTests
         Stamps("_lastResultUtc")[provider] = DateTime.UtcNow - ago;
     }
 
-    private Task TimerFiresAsync() => (Task)typeof(MainViewModel)
+    private Task TimerFiresAsync(ResetRefreshSchedule? schedule = null) => (Task)typeof(MainViewModel)
         .GetMethod("RunPeriodicRefreshAsync", BindingFlags.Instance | BindingFlags.NonPublic)!
-        .Invoke(_viewModel, [new ResetRefreshSchedule(TimeSpan.Zero), CancellationToken.None])!;
+        .Invoke(_viewModel, [schedule ?? new ResetRefreshSchedule(TimeSpan.Zero), CancellationToken.None])!;
 
     private void Replan() => typeof(MainViewModel).GetMethod("RecreateTimer", BindingFlags.Instance | BindingFlags.NonPublic)!
         .Invoke(_viewModel, [null]);
@@ -261,6 +261,86 @@ public class MainViewModelActivityRefreshTests
             "Codex is due at its idle time before Claude's cooldown ends");
         await TimerFiresAsync();
         _subsetReads.Should().BeEmpty();
+    }
+
+    [TestMethod]
+    public async Task TimerFires_CooldownEndsWithinTheTimerTolerance_WaitsForItsRealEnd()
+    {
+        // Asked at any time, the cooldown ends half a second later: inside the 1 s timer tolerance, never over
+        _usage.Setup(s => s.GetRateLimitedUntil("claude")).Returns(() => DateTime.UtcNow.AddMilliseconds(500));
+        _activity.Touch("claude");
+        await _viewModel.StartAsync();
+        FetchedAgo("claude", TimeSpan.FromMinutes(3));
+
+        await TimerFiresAsync();
+
+        _subsetReads.Should().BeEmpty();
+        Stamps("_lastFetchUtc")["claude"].Should().BeCloseTo(DateTime.UtcNow.AddMinutes(-3), TimeSpan.FromSeconds(5));
+    }
+
+    [TestMethod]
+    public async Task TimerFires_WindowResetDuringCooldown_DoesNotReadThatProvider()
+    {
+        await _viewModel.StartAsync();
+        var reset = DateTime.UtcNow.AddSeconds(-3);
+        _viewModel.Providers[0] = Shown("claude") with
+        {
+            Session = new UsageWindow { ReportedPercent = 50, WindowMinutes = 300, ResetAt = reset }
+        };
+        _usage.Setup(s => s.GetRateLimitedUntil("claude")).Returns(DateTime.UtcNow.AddMinutes(9));
+
+        await TimerFiresAsync(new ResetRefreshSchedule(TimeSpan.Zero, reset));
+
+        _subsetReads.Should().BeEmpty();
+        _allReads.Should().Be(1);
+        _scheduleLog.Messages.Should().NotContain(m => m.StartsWith("Scheduled refresh of claude"));
+    }
+
+    [TestMethod]
+    public async Task TimerFires_WindowResetWithoutCooldown_ReadsThatProvider()
+    {
+        await _viewModel.StartAsync();
+        var reset = DateTime.UtcNow.AddSeconds(-3);
+        _viewModel.Providers[0] = Shown("claude") with
+        {
+            Session = new UsageWindow { ReportedPercent = 50, WindowMinutes = 300, ResetAt = reset }
+        };
+
+        await TimerFiresAsync(new ResetRefreshSchedule(TimeSpan.Zero, reset));
+
+        _subsetReads.Should().ContainSingle().Which.Should().Equal("claude");
+        _scheduleLog.Messages.Should().Contain(m => m.StartsWith("Scheduled refresh of claude: Reset"));
+    }
+
+    [TestMethod]
+    public async Task RefreshCommand_ProviderInCooldown_DoesNotCountItsHeldAnswerAsAFetch()
+    {
+        await _viewModel.StartAsync();
+        FetchedAgo("claude", TimeSpan.FromMinutes(1));
+        _usage.Setup(s => s.GetRateLimitedUntil("claude")).Returns(DateTime.UtcNow.AddMinutes(5));
+
+        await _viewModel.RefreshCommand.ExecuteAsync(null);
+
+        _allReads.Should().Be(2);
+        Stamps("_lastFetchUtc")["claude"].Should().BeCloseTo(DateTime.UtcNow.AddMinutes(-1), TimeSpan.FromSeconds(5),
+            "the answer came from the hold, so the attempt after the cooldown is not pushed back");
+        Stamps("_lastFetchUtc")["codex"].Should().BeCloseTo(DateTime.UtcNow, TimeSpan.FromSeconds(5));
+    }
+
+    [TestMethod]
+    public async Task RefreshCommand_CooldownChangedDuringTheRead_CountsAsAFetch()
+    {
+        // A new 429 (or a new sign-in) changes the cooldown: a call was made
+        await _viewModel.StartAsync();
+        FetchedAgo("claude", TimeSpan.FromMinutes(1));
+        var until = DateTime.UtcNow.AddMinutes(5);
+        _usage.Setup(s => s.GetRateLimitedUntil("claude")).Returns(() => until);
+        _usage.Setup(s => s.GetAllUsageStreamAsync(It.IsAny<CancellationToken>()))
+            .Returns((CancellationToken ct) => { _allReads++; until = until.AddMinutes(10); return Read(["claude", "codex"], ct); });
+
+        await _viewModel.RefreshCommand.ExecuteAsync(null);
+
+        Stamps("_lastFetchUtc")["claude"].Should().BeCloseTo(DateTime.UtcNow, TimeSpan.FromSeconds(5));
     }
 
     [TestMethod]
