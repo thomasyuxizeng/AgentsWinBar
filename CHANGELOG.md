@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.1] - 2026-11-26
+
+### Fixed
+- Opening and closing the dashboard no longer leaks Windows drawing (GDI) objects. Each open leaked about 30, so after a few hundred opens without a restart the app would have stopped drawing. The dashboard window is now kept after its first open and hidden when closed; the next open starts with fresh content in a normal window (not full screen or always on top).
+- Closing the dashboard no longer fails partway through its cleanup and logs "Dashboard page cleanup failed" each time (new in 1.6.0).
+
 ## [1.6.0] - 2026-11-26
 
 The first release as AgentsWinBar, and the first that reads everything natively on Windows.
@@ -357,7 +363,8 @@ Early-reset detection cannot tell an account switch from a reset; if saving earl
 - Window slide-in animation from system tray
 - Setup wizard for first-time configuration
 
-[Unreleased]: https://github.com/thomasyuxizeng/AgentsWinBar/compare/v1.6.0...HEAD
+[Unreleased]: https://github.com/thomasyuxizeng/AgentsWinBar/compare/v1.6.1...HEAD
+[1.6.1]: https://github.com/thomasyuxizeng/AgentsWinBar/compare/v1.6.0...v1.6.1
 [1.6.0]: https://github.com/thomasyuxizeng/AgentsWinBar/compare/v1.5.4...v1.6.0
 [1.5.4]: https://github.com/thomasyuxizeng/AgentsWinBar/compare/v1.5.3...v1.5.4
 [1.5.3]: https://github.com/thomasyuxizeng/AgentsWinBar/compare/v1.5.2...v1.5.3
