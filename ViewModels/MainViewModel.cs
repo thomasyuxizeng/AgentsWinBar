@@ -308,7 +308,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         var baseInterval = TimeSpan.FromSeconds(_settingsService.Settings.RefreshIntervalSeconds);
         if (maxAge < baseInterval) maxAge = baseInterval;
-        if (ActivityRefreshOn && LastUpdated != default) return RefreshStaleProvidersAsync(maxAge);
+        // Per provider, its own stamps decide even before any refresh has finished (a first refresh that failed)
+        if (ActivityRefreshOn) return RefreshStaleProvidersAsync(maxAge);
         var age = DateTime.Now - LastUpdated;
         if (_disposed || _stopped || _exiting ||
             (LastUpdated != default && age >= TimeSpan.Zero && age <= maxAge)) return Task.CompletedTask;

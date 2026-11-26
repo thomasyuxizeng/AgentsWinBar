@@ -322,6 +322,30 @@ public class MainViewModelActivityRefreshTests
     }
 
     [TestMethod]
+    public async Task RefreshIfStaleAsync_FirstRefreshFailed_StillHoldsClaudeToItsFloor()
+    {
+        _usage.Setup(s => s.GetAllUsageStreamAsync(It.IsAny<CancellationToken>()))
+            .Returns((CancellationToken ct) => { _allReads++; return Throwing(ct); });
+        await _viewModel.StartAsync();
+        _viewModel.LastUpdated.Should().Be(default, "no refresh has finished");
+
+        await _viewModel.RefreshIfStaleAsync(TimeSpan.FromMinutes(2));
+
+        _allReads.Should().Be(1);
+        _subsetReads.Should().ContainSingle().Which.Should().Equal("codex");
+
+        static async IAsyncEnumerable<UsageData> Throwing([EnumeratorCancellation] CancellationToken ct = default)
+        {
+            await Task.Yield();
+            ct.ThrowIfCancellationRequested();
+            throw new HttpRequestException("synthetic failure");
+#pragma warning disable CS0162 // An iterator needs a yield
+            yield break;
+#pragma warning restore CS0162
+        }
+    }
+
+    [TestMethod]
     public async Task RefreshIfStaleAsync_LastReadFailed_TriesItAgain()
     {
         _failing.Add("codex");
