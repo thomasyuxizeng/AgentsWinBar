@@ -318,6 +318,8 @@ function Test-WindowsSignIn([string] $Provider) {
         }
         default { return 'missing' }
     }
+    # Presence only, by design: the installer never opens a credential file. A signed-out file still reads as present
+    # here; the app then shows its Signed out banner with a Sign in button.
     if ((Test-Path -LiteralPath $path -PathType Leaf -ErrorAction SilentlyContinue) -and
         (Get-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue).Length -gt 0) { return 'present' }
     return 'missing'
@@ -415,6 +417,7 @@ function Read-Package([string] $Path) {
     try {
         $entry = $zip.GetEntry('AppxManifest.xml')
         if (-not $entry) { throw 'MSIX has no AppxManifest.xml.' }
+        if ($entry.Length -gt 1MB) { throw 'MSIX AppxManifest.xml is unexpectedly large.' }
         # The manifest is read before the signature is checked: refuse DTDs and external entities.
         $xmlSettings = New-Object Xml.XmlReaderSettings
         $xmlSettings.DtdProcessing = [Xml.DtdProcessing]::Prohibit
@@ -980,7 +983,13 @@ chmod 600 "$t"; mv "$t" "$p"
                         New-Item -ItemType Directory -Path $settingsDirectory -Force | Out-Null
                         $settingsProviders = @(); $order = 0
                         foreach ($id in @('claude', 'codex', 'gemini')) { $display = $id.Substring(0, 1).ToUpperInvariant() + $id.Substring(1); $settingsProviders += @{ id = $id; displayName = $display; isEnabled = ($Providers -contains $id); order = $order }; $order++ }
-                        $settingsJson = @{ version = 1; providers = $settingsProviders; startMinimized = $true } | ConvertTo-Json -Depth 6
+                        $settings = [ordered]@{ version = 1; providers = $settingsProviders; startMinimized = $true }
+                        if ($WithWsl) {
+                            # -WithWsl asks for the WSL route: point the selected providers and costs at it.
+                            $sources = [ordered]@{}; foreach ($id in $Providers) { $sources[$id] = 'wsl' }
+                            $settings.usageSources = $sources; $settings.costSource = 'wsl'
+                        }
+                        $settingsJson = $settings | ConvertTo-Json -Depth 6
                         # CreateNew prevents overwriting a file the app creates concurrently.
                         $stream = New-Object IO.FileStream($settingsPath, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
                         try { $bytes = [Text.Encoding]::UTF8.GetBytes($settingsJson); $stream.Write($bytes, 0, $bytes.Length) } finally { $stream.Dispose() }
