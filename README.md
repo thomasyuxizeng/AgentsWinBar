@@ -66,7 +66,7 @@ AgentsWinBar reads the sign-ins that each provider's own Windows tool already ma
 |---|---|---|---|
 | **Claude** | Sign in with Claude Code (`claude` or `claude auth login`) | 5-hour session, 7-day weekly, model-scoped weekly limits (such as Sonnet or Opus), Daily Routines | Yes (`%USERPROFILE%\.claude\projects`) |
 | **Codex** | Sign in with the Windows Codex app or `codex login` (ChatGPT account; API-key-only sign-ins have no plan limits) | 5-hour session, 7-day weekly, extra limits including Codex Spark 5-hour and Weekly | Yes (`%USERPROFILE%\.codex\sessions` and `archived_sessions`, including `.jsonl.zst`) |
-| **Gemini** | Sign in to Antigravity on Windows (desktop app or `agy`) | Gemini 5-hour, Gemini weekly, plus shared Claude and GPT 5-hour and weekly windows | No (no local logs) |
+| **Gemini** | Sign in to Antigravity on Windows (desktop app or `agy`) | Gemini 5-hour, Gemini weekly, plus shared Claude and GPT 5-hour and weekly windows | Yes (Antigravity SQLite databases under `%USERPROFILE%\.gemini`) |
 
 ## Desktop surfaces
 
@@ -103,9 +103,9 @@ AgentsWinBar gives you four views of the same live data:
 
 ## Local cost tracking and optional API panels
 
-### Local log cost estimates (Claude and Codex)
+### Local log cost estimates (Claude, Codex, and Gemini)
 
-When **Show cost and token totals** is enabled in Settings, AgentsWinBar scans your local Windows Claude Code and Codex JSONL session logs (including Zstandard-compressed `.jsonl.zst` Codex archives) and prices tokens at list rates. These totals are **list-price estimates from local logs, not your provider bill**.
+When **Show cost and token totals** is enabled in Settings, AgentsWinBar scans your local Windows Claude Code and Codex JSONL session logs (including Zstandard-compressed `.jsonl.zst` Codex archives) and Antigravity's per-conversation SQLite databases (for Google's `agy` CLI and the Antigravity desktop app), and prices tokens at list rates. Antigravity databases are opened read-only through Windows' built-in SQLite library without writing to them, checkpointing them, or blocking `agy`'s writes; AgentsWinBar reads only the model name, token counts (input, cached input, and output including thinking), and the time for each call, never prompts, replies, or any other text. These totals are **list-price estimates from local logs, not your provider bill** (`agy` use under a Google AI Pro plan is not charged per token), and Gemini local estimates stay separate from the dashboard's "Gemini API · this month" spend log of paid Gemini API calls.
 
 - **Demand-driven scanning:** Cost scans run only while the flyout or dashboard is open (not minimized) or when you click **Refresh**, at most once every 30 minutes per provider, and never while the PC is locked.
 - **Private local index:** Incremental scan state is stored in `cost-index\index.sqlite` inside the app data folder. It stores only hashed file paths, file offsets, model names, dates, token counts, and hash keys: no prompts, no raw file paths, and no message text.
@@ -211,7 +211,7 @@ Options available only in `settings.json` (no Settings UI toggle): `renewClaudeS
 - **Stale numbers / "Expired, waiting for ... to renew it":** For Claude and Gemini, automatic renewal runs at most every 30 minutes as long as `claude.exe` (on `PATH` or `%USERPROFILE%\.local\bin`) or `agy.exe` (on `PATH` or WinGet links) is installed. For Codex, open Codex on Windows. Opening any provider's own app renews its sign-in immediately.
 - **Claude says rate limited:** Anthropic rate-limits the OAuth usage endpoint. AgentsWinBar keeps showing your last good numbers and backs off for at least 10 minutes (persisted across restarts in `claude-cooldown.json`).
 - **Data is not refreshing:** Confirm **Developer mode** is turned off in Settings (it shows sample data and stops all fetches). Check your network, **Settings > Sign-ins**, and the dashboard's **Diagnostics** panel. Remember that adaptive backoff (up to 15 min) and battery saver (up to 30 min) space out idle refreshes.
-- **No cost totals shown:** Confirm **Show cost and token totals** is enabled in Settings, open the flyout or dashboard to trigger a scan, and check that Windows logs exist in `%USERPROFILE%\.claude\projects` or `%USERPROFILE%\.codex\sessions`. Gemini has no local logs.
+- **No cost totals shown:** Confirm **Show cost and token totals** is enabled in Settings, open the flyout or dashboard to trigger a scan, and check that local Windows logs exist in `%USERPROFILE%\.claude\projects` (Claude Code), `%USERPROFILE%\.codex\sessions` (Codex), `%USERPROFILE%\.gemini\antigravity-cli\conversations` (Google's `agy` CLI), or `%USERPROFILE%\.gemini\antigravity` and its `conversations` folder (the Antigravity desktop app; `GEMINI_CLI_HOME` replaces `%USERPROFILE%\.gemini` when set to an absolute path). If there is no Antigravity history at all, the Gemini cost lines are hidden instead of showing $0.00, and any database `agy` is actively writing is skipped until a later scan.
 - **Install fails with `0x800B0109` or "The app package must be signed":** The release certificate (`CN=CodexBarWin OSS`) is not trusted in `LocalMachine\TrustedPeople`. Run `install.ps1` or import the release `.cer` from an administrator PowerShell.
 - **"Part of this app has been blocked" on a local build:** Windows App Control policies (such as Smart App Control) can block an unsigned `AgentsWinBar.exe` run from `bin\`. Install a signed MSIX package instead.
 - **Launching the app again does nothing:** AgentsWinBar runs as a single instance; check the system tray (including the `^` overflow menu). If it exited silently on startup, check `crash.log` in the data folder.

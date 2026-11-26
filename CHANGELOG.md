@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Gemini now shows today and last-30-days token totals and list-price cost estimates, matching Claude and Codex. They appear on the Gemini card in the tray flyout ("Today" and "30 days" lines) and in the dashboard's Gemini panel ("Estimated cost · local logs", with per-model details and a 30-day daily cost chart). Ported from CodexBar's Antigravity local token history (MIT, Peter Steinberger), like the existing Claude and Codex readers.
+- Local cost scanning for Gemini reads Antigravity's per-conversation SQLite databases from `%USERPROFILE%\.gemini\antigravity-cli\conversations` (Google's `agy` CLI) and `%USERPROFILE%\.gemini\antigravity` and its `conversations` folder (the Antigravity desktop app). Setting `GEMINI_CLI_HOME` to an absolute path replaces `%USERPROFILE%\.gemini`. For each model call, AgentsWinBar reads only the model name, token counts (input, cached input, and output including thinking), and the time (never prompts, replies, or any other text). Databases are opened read-only through Windows' built-in SQLite library (nothing new is installed) and are never written or checkpointed and never block `agy`'s writes, even while `agy` is using them; a database `agy` is in the middle of writing is skipped and read on a later scan. Scans follow the existing rule (only while the flyout or dashboard is open, or after Refresh): on the maintainer's laptop, the first scan of about 430 conversation databases (1.3 GB) took about 3.7 CPU seconds and about 25 MB of extra memory, and later scans skip unchanged databases (about 0.05 CPU seconds).
+- Tokens from Antigravity logs are priced at public API list rates from the models.dev catalog: Gemini 4 Neon, Hydrogen, Carbon, and Argon, Gemini 3.8 Flash, and Claude models run through `agy` (at Anthropic's list rates). Any model with no known price stays unpriced instead of counting as $0, and the `gemini-3.8-flash-n` model name recorded by `agy` is priced at Gemini 3.8 Flash rates as an estimate because what the `-n` variant means is not documented. These figures are list-price estimates, not a bill (`agy` use under a Google AI Pro plan is not charged per token), and remain separate from the dashboard's "Gemini API · this month" section, which reads a local spend log of paid Gemini API calls that does not include `agy` use.
+
+### Changed
+- In the tray flyout, the two cost lines under the usage bars on each provider card (Claude, Codex, Gemini) now use 12-pixel text matching the "Resets in" lines (up from 10 pixels) and start with "Today" and "30 days" instead of "Est. today" and "Est. 30 days" while still fitting on one line each. Hovering over the lines still shows a tooltip noting that the figures are list-price estimates, not billing; the dashboard is unchanged.
+
+### Fixed
+- The Gemini card in the tray flyout and the dashboard's "Estimated cost · local logs" section no longer show placeholder "Today $0.00 · 0 tokens" and "30 days $0.00 · 0 tokens" lines. Previously those lines appeared because AgentsWinBar had no Gemini data source; that $0 was a placeholder, not real usage. With no Antigravity history at all, the Gemini cost lines are now hidden instead of showing $0.00.
+
 ## [1.6.1] - 2026-11-26
 
 Both fixes apply only if you open the dashboard. Install 1.6.1 over 1.6.0; settings and history are kept.
