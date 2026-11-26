@@ -30,7 +30,9 @@ public static class BurndownBuilder
         nowUtc = Utc(nowUtc);
         if (nowUtc < start) return new() { Message = "Window has not started" };
         if (nowUtc >= end) return new() { Message = "Waiting for window reset" };
-        var current = samples.Where(s => s.ResetsAt.HasValue && Utc(s.ResetsAt.Value) == end &&
+        // Same window = reset time within a minute: providers can report it with sub-second jitter, and samples
+        // saved before the reader rounded it keep that jitter.
+        var current = samples.Where(s => s.ResetsAt.HasValue && SameReset(Utc(s.ResetsAt.Value), end) &&
                 Utc(s.Timestamp) >= start && Utc(s.Timestamp) <= nowUtc &&
                 double.IsFinite(s.UsedPercent) && s.UsedPercent >= 0)
             .OrderBy(s => Utc(s.Timestamp)).GroupBy(s => Utc(s.Timestamp)).Select(g => g.Last()).ToList();
@@ -46,6 +48,11 @@ public static class BurndownBuilder
         var projected = last.UsedPercent + rate * (1 - last.ElapsedFraction);
         return series with { Projection = [last, new(1, projected)], ProjectedAtReset = projected, Message = string.Empty };
     }
+
+    /// <summary>How far apart two reported reset times may be and still mean the same window.</summary>
+    public static readonly TimeSpan ResetTolerance = TimeSpan.FromMinutes(1);
+
+    private static bool SameReset(DateTime a, DateTime b) => (a > b ? a - b : b - a) <= ResetTolerance;
 
     private static DateTime Utc(DateTime value) => value.Kind == DateTimeKind.Unspecified
         ? DateTime.SpecifyKind(value, DateTimeKind.Utc) : value.ToUniversalTime();

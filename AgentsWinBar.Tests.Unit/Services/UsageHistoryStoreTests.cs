@@ -151,4 +151,15 @@ public class UsageHistoryStoreTests
         store.Add(Sample(30, 5), earlier).Should().BeTrue();
         store.Get("claude", "session").Select(s => s.UsedPercent).Should().Equal(10, 30);
     }
+
+    [TestMethod]
+    public void Add_WhenResetJittersBySubSeconds_DedupesAsTheSameWindow()
+    {
+        var store = new UsageHistoryStore();
+        var reset = Now.AddHours(4);
+        store.Add(Sample() with { ResetsAt = reset.AddMilliseconds(-112) }, Now).Should().BeTrue();
+        store.Add(Sample(10.2, 1) with { ResetsAt = reset.AddMilliseconds(422) }, Now.AddMinutes(1)).Should().BeFalse();
+        store.Add(Sample(10.2, 2) with { ResetsAt = reset.AddMinutes(5) }, Now.AddMinutes(2)).Should().BeTrue();
+        store.Samples.Should().HaveCount(2);
+    }
 }

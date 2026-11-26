@@ -232,4 +232,16 @@ public class NativeUsageDtoMapperTests
         window.Used.Should().BeGreaterThanOrEqualTo(0);
         window.Percent.Should().Be(1e20);
     }
+
+    [TestMethod]
+    public void ToDto_WhenResetHasSubSecondJitter_RoundsToTheNearestSecond()
+    {
+        var reset = Now.AddHours(3);
+        var early = Gemini() with { Primary = new(80, 300, reset.AddMilliseconds(-112), null) };
+        var late = Gemini() with { Primary = new(80, 300, reset.AddMilliseconds(422), null) };
+
+        NativeUsageDtoMapper.ToDto(early).Usage!.Primary!.ResetsAt.Should().Be(reset.UtcDateTime);
+        NativeUsageDtoMapper.ToDto(late).Usage!.Primary!.ResetsAt.Should().Be(reset.UtcDateTime);
+        NativeUsageDtoMapper.ToDto(Gemini()).Usage!.Secondary!.ResetsAt.Should().Be(Now.AddDays(4).UtcDateTime);
+    }
 }

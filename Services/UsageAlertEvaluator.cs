@@ -204,7 +204,14 @@ public class UsageAlertEvaluator
     /// Buckets the reset time to 30 minutes so small jitter between fetches doesn't look like a new window.
     /// </summary>
     private static long WindowKey(DateTime? resetAt) =>
-        resetAt is { } value ? value.ToUniversalTime().Ticks / BucketTicks : 0;
+        resetAt is { } value ? RoundToMinuteTicks(value.ToUniversalTime().Ticks) / BucketTicks : 0;
+
+    /// <summary>
+    /// Rounds to the nearest minute before bucketing: a reset reported as 11:59:59.9 on one fetch and 12:00:00.4 on the
+    /// next sits exactly on a bucket edge and would otherwise produce two keys (and a repeated alert).
+    /// </summary>
+    private static long RoundToMinuteTicks(long ticks) =>
+        (ticks + TimeSpan.TicksPerMinute / 2) / TimeSpan.TicksPerMinute * TimeSpan.TicksPerMinute;
 
     private static string Capitalize(string text) =>
         text.Length == 0 ? "?" : char.ToUpperInvariant(text[0]) + text[1..];

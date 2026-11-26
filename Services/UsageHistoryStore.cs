@@ -192,7 +192,8 @@ public sealed class UsageHistoryStore
         if (_lastByKey.TryGetValue(lookupKey, out var last))
         {
             if (tsTicks <= last.TimestampTicks) return false;
-            if (resetsAtTicks == last.ResetsAtTicks &&
+            // Reset times a few seconds apart are the same window (some providers report sub-second jitter)
+            if (SameResetTicks(resetsAtTicks, last.ResetsAtTicks) &&
                 Math.Abs(usedPercent - last.UsedPercent) < UsageChangeTracker.ChangeThresholdPoints &&
                 tsTicks - last.TimestampTicks < TenMinutesTicks)
             {
@@ -266,6 +267,13 @@ public sealed class UsageHistoryStore
         "gemini" => "gemini",
         _ => normalized
     };
+
+    /// <summary>Both missing, or both present and within <see cref="Helpers.BurndownBuilder.ResetTolerance"/>.</summary>
+    private static bool SameResetTicks(long a, long b)
+    {
+        if (a < 0 || b < 0) return a < 0 && b < 0;
+        return Math.Abs(a - b) <= Helpers.BurndownBuilder.ResetTolerance.Ticks;
+    }
 
     private static DateTime Utc(DateTime value) => Helpers.DashboardValues.Utc(value);
 }

@@ -120,4 +120,23 @@ public class BurndownBuilderTests
         series.Usage.Should().BeInAscendingOrder(p => p.ElapsedFraction);
         double.IsFinite(series.ProjectedAtReset!.Value).Should().BeTrue();
     }
+
+    [TestMethod]
+    public void Build_WhenSampleResetsJitterBySubSeconds_KeepsThemInTheCurrentWindow()
+    {
+        // Claude reports the same reset as 11:59:59.888 on one fetch and 12:00:00.422 on the next
+        var reset = Window.ResetAt!.Value;
+        var samples = new[]
+        {
+            Sample(60, 20) with { ResetsAt = reset.AddMilliseconds(-112) },
+            Sample(90, 30) with { ResetsAt = reset.AddMilliseconds(422) },
+            Sample(120, 50) with { ResetsAt = reset.AddMilliseconds(186) },
+            Sample(125, 99) with { ResetsAt = reset.AddMinutes(-5) }
+        };
+
+        var series = BurndownBuilder.Build(samples, Window with { ResetAt = reset.AddMilliseconds(337) }, Start.AddMinutes(130));
+
+        series.Usage.Select(p => p.UsedPercent).Should().Equal(20, 30, 50);
+        series.IsReady.Should().BeTrue();
+    }
 }

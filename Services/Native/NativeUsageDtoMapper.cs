@@ -54,9 +54,21 @@ public static class NativeUsageDtoMapper
     {
         UsedPercent = window.UsedPercent,
         WindowMinutes = window.WindowMinutes,
-        ResetsAt = window.ResetsAt?.UtcDateTime,
+        ResetsAt = RoundToSecond(window.ResetsAt?.UtcDateTime),
         ResetDescription = window.ResetDescription
     };
+
+    /// <summary>
+    /// Claude's usage endpoint reports reset times with sub-second jitter (11:59:59.888 on one call, 12:00:00.422 on the
+    /// next), which made every reading look like a new window to the history graph, the history de-duplication and the
+    /// alert memory. Rounding to the nearest second gives one stable value; whole-second providers are unchanged.
+    /// </summary>
+    internal static DateTime? RoundToSecond(DateTime? value)
+    {
+        if (value is not { } time) return null;
+        var ticks = (time.Ticks + TimeSpan.TicksPerSecond / 2) / TimeSpan.TicksPerSecond * TimeSpan.TicksPerSecond;
+        return ticks <= DateTime.MaxValue.Ticks ? new DateTime(ticks, time.Kind) : time;
+    }
 
     /// <summary>{"kind": ..., "code": ..., "message": ...} like the CLI's error object.</summary>
     private static JsonElement ErrorElement(NativeUsageResult result, bool authFailure)

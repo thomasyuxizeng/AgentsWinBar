@@ -339,4 +339,19 @@ public class UsageAlertEvaluatorTests
         freshAlerts.Should().ContainSingle();
         freshAlerts[0].Title.Should().Be("Claude session limit reached");
     }
+
+    [TestMethod]
+    public void Evaluate_WhenResetJittersAcrossABucketEdge_WarnsOnce()
+    {
+        // 03:30 is a 30-minute bucket edge; Claude reports it as 03:29:59.888 and then 03:30:00.422
+        var evaluator = new UsageAlertEvaluator();
+        var data = Provider("claude", 60, 210);
+        var reset = data.Session!.ResetAt!.Value;
+
+        var first = evaluator.Evaluate([data with { Session = data.Session with { ResetAt = reset.AddMilliseconds(-112) } }], Now);
+        var second = evaluator.Evaluate([data with { Session = data.Session with { ResetAt = reset.AddMilliseconds(422) } }], Now.AddMinutes(1));
+
+        first.Should().ContainSingle();
+        second.Should().BeEmpty("a sub-second difference in the reported reset is the same window");
+    }
 }
