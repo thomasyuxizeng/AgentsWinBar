@@ -2,7 +2,7 @@
 
 If you were asked to install the app (not develop it), follow INSTALL.md instead.
 
-Windows 11 WinUI 3 app for AI coding tool usage monitoring. Frontend for [CodexBar CLI](https://github.com/steipete/CodexBar).
+Windows 11 WinUI 3 tray app for AI coding tool usage monitoring (Claude, Codex, Gemini). Reads each provider's Windows sign-in read-only and calls its usage endpoint natively (Services/Native/); the older WSL + [CodexBar CLI](https://github.com/steipete/CodexBar) route remains as an opt-in per provider.
 
 ## Stack
 
