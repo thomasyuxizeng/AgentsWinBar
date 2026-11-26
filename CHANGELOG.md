@@ -31,6 +31,8 @@ The first release as AgentsWinBar, and the first that reads everything natively 
 - A malformed token in a provider's sign-in is treated as unreadable instead of reaching an HTTP header.
 
 ### Fixed
+- Windows notifications now appear: usage alerts, early-reset alerts and the Settings test notification were refused by Windows, because the package did not declare the notification handler a packaged app needs. The test button now says whether the notification was sent, is turned off in Windows Settings, or was refused.
+- Usage alerts are remembered across restarts (`alerts-sent.json`), so each fires once per usage window instead of again every time the app starts.
 - A click on a flyout button no longer leaves the app drawing frames in the background (15-30 ms of CPU every second until it restarted).
 - Gemini renewal no longer runs up to a minute early and then waits 30 minutes; a token that has not expired yet is still used.
 - Codex and Gemini respect HTTP 429 and its Retry-After, as Claude already did.

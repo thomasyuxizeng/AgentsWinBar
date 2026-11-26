@@ -50,6 +50,8 @@ namespace AgentsWinBar.Models;
 [JsonSerializable(typeof(EarlyResetEntry))]
 [JsonSerializable(typeof(List<EarlyResetEntry>))]
 [JsonSerializable(typeof(AgentsWinBar.Helpers.EarlyReset))]
+[JsonSerializable(typeof(AgentsWinBar.Services.AlertsSentFile))]
+[JsonSerializable(typeof(AgentsWinBar.Services.AlertSentEntry))]
 public partial class AppJsonSerializerContext : JsonSerializerContext
 {
 }

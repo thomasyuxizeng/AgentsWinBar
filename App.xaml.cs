@@ -346,7 +346,9 @@ public partial class App : Application
         services.AddSingleton<IBatterySaverStatusSource, WindowsBatterySaverStatusSource>();
         services.AddSingleton<IBatterySaverMonitor, BatterySaverMonitor>();
         services.AddSingleton<ISampleDataLoader, SampleDataLoader>();
-        services.AddSingleton<UsageAlertEvaluator>();
+        services.AddSingleton<UsageAlertEvaluator>(sp => UsageAlertEvaluator.CreatePersistent(
+            sp.GetRequiredService<ISettingsService>().SettingsFilePath,
+            sp.GetRequiredService<ILogger<UsageAlertEvaluator>>()));
         services.AddSingleton<UsageHistoryStore>();
         services.AddSingleton<UsageHistoryPersistence>();
         services.AddSingleton<IActivityLog, ActivityLog>();
