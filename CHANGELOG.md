@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-11-26
+
 The first release as AgentsWinBar, and the first that reads everything natively on Windows.
 
 ### Changed
@@ -14,14 +16,17 @@ The first release as AgentsWinBar, and the first that reads everything natively 
 - Usage is read natively on Windows by default, with no WSL virtual machine during a refresh: Claude from Claude Code's sign-in, Codex from the Codex CLI or app sign-in, and Gemini from the Antigravity (agy) sign-in in Windows Credential Manager. Every sign-in is only read, never written. The WSL route stays available as an opt-in.
 - Costs come from Claude Code and Codex session logs on Windows, including compressed `.jsonl.zst` Codex archives, priced per model (bundled prices, refreshed from models.dev at most once a day, overridable with `custom-pricing.json`). A local index makes later scans incremental, and scans run only while the flyout or a dashboard is open or after Refresh.
 - Setup installs without WSL by default; `-WithWsl` keeps the old route.
-- Much lighter: about 25 MB private working set at idle (was about 94 MB, plus a 1.3-1.7 GB WSL virtual machine during every refresh), and under 0.1 CPU seconds per refresh (was about 10 across Windows and the virtual machine).
+- Much lighter: a median working set of about 37 MB at idle (1.5.4: 133 to 157 MB, plus a 1.3 to 1.7 GB WSL virtual machine during every refresh), about 17 MB in Task Manager's Memory column, and about 0.2 CPU seconds per refresh (was about 10 across Windows and the virtual machine). [PERFORMANCE.md](PERFORMANCE.md) says how this was measured.
+- The dashboard's graph switches are check boxes.
 
 ### Added
 - A Sign in button for a signed-out provider, on the dashboard, on the provider page and in Settings > Sign-ins, opening that provider's official sign-in.
 - An expired sign-in is renewed by the provider's own tool: `claude auth status --json` for Claude Code and `agy models` for Antigravity, hidden, with its output discarded, at most every 30 minutes and backing off to every 2 and then 6 hours while renewal keeps failing. `RenewClaudeSignIn` and `RenewGeminiSignIn` in settings.json turn them off.
-- Release builds keep two small local logs in the data folder: `app.log` for warnings and `crash.log` for unexpected errors, each capped at 1 MB with one older copy. They record exception types and stack frames, never exception messages.
+- Release builds keep two small local logs in the data folder: `app.log` for warnings and `crash.log` for unexpected errors, each capped at 1 MB with one older copy. They record exception types and stack frames, never exception messages, file paths or process output.
 - The Gemini provider card on the dashboard shows this month's Gemini API spend, estimated at list prices from token counts in a local spend log, with cached input at the cache rate when the log records it (hidden when no log exists). The spend log path can be overridden through the `CODEXBAR_GEMINI_SPEND_LOG` environment variable.
+- **Settings > Anthropic API credits** sets up the dashboard's API credits panel without editing environment variables by hand: a link to create an Admin key, a box to paste it, and **Save key**, which checks the key with one read-only request and saves it to the `ANTHROPIC_ADMIN_KEY` user environment variable, in use at once with no restart. It shows whether the key works (with only its last 4 characters) and can replace or remove it. The dashboard's Claude panel links to it with **Open Settings**.
 - The taskbar strip supports UI Automation's Invoke pattern, so assistive tools can open the flyout.
+- The taskbar strip no longer covers Start and search: when Start is at the taskbar's left end (Windows 10, or a left-aligned Windows 11 taskbar) it sits just left of the system tray and follows the tray as it grows or shrinks. **Settings > Taskbar display > Position** chooses Automatic, Left end, or Right end.
 
 ### Security
 - Setup trusts and installs only packages signed by the release certificate (thumbprint `4E280F44AE28900533BBC497F28F62505990F3BD`) and stops when no certificate is pinned; before, any certificate named `CN=CodexBarWin OSS` was accepted.
@@ -35,7 +40,7 @@ The first release as AgentsWinBar, and the first that reads everything natively 
 - Usage alerts are remembered across restarts (`alerts-sent.json`), so each fires once per usage window instead of again every time the app starts.
 - A click on a flyout button no longer leaves the app drawing frames in the background (15-30 ms of CPU every second until it restarted).
 - Gemini renewal no longer runs up to a minute early and then waits 30 minutes; a token that has not expired yet is still used.
-- Codex and Gemini respect HTTP 429 and its Retry-After, as Claude already did.
+- Codex and Gemini respect HTTP 429 and its Retry-After, as Claude already did; signing in again is checked right away instead of waiting out the old limit.
 - A fresh, unused Gemini account shows its limits instead of an error.
 - Cost totals: a damaged or outdated cost index is rebuilt from every log (it could be refilled only from changed files and show totals far too low), one log line with invalid UTF-8 no longer stops cost scans, and the full index check runs once per start instead of on every update. Daily totals follow a change of Windows time zone after a restart, and a Claude model the price catalog lists without cache rates uses the bundled cache rates (or stays unpriced) instead of the full input rate.
 - The log folder watchers stop 15 minutes after the last cost view closes.
@@ -47,6 +52,9 @@ The first release as AgentsWinBar, and the first that reads everything natively 
 - The app starts even when the Windows taskbar is not ready yet.
 - An expired sign-in shows the last reading as stale instead of signed out.
 - Failures in the strip's and overlay's background checks are recorded in crash.log instead of being ignored.
+- The tray flyout grows to show every provider card when the screen has room, instead of one and a half cards, and every card's bars end at the same place.
+- Usage graphs: a projection above 100% stops on the limit line with a dot instead of running off the chart, lines at 0% and 100% are drawn whole, and the chart legend is readable in both themes.
+- Plan names reported in lowercase (Codex "team") show as "Team", and the dashboard header wraps in a narrow window instead of being cut off.
 
 ## [1.5.4] - 2026-11-03
 
@@ -348,7 +356,13 @@ Early-reset detection cannot tell an account switch from a reset; if saving earl
 - Window slide-in animation from system tray
 - Setup wizard for first-time configuration
 
-[Unreleased]: https://github.com/thomasyuxizeng/AgentsWinBar/compare/v1.4.0...HEAD
+[Unreleased]: https://github.com/thomasyuxizeng/AgentsWinBar/compare/v1.6.0...HEAD
+[1.6.0]: https://github.com/thomasyuxizeng/AgentsWinBar/compare/v1.5.4...v1.6.0
+[1.5.4]: https://github.com/thomasyuxizeng/AgentsWinBar/compare/v1.5.3...v1.5.4
+[1.5.3]: https://github.com/thomasyuxizeng/AgentsWinBar/compare/v1.5.2...v1.5.3
+[1.5.2]: https://github.com/thomasyuxizeng/AgentsWinBar/compare/v1.5.1...v1.5.2
+[1.5.1]: https://github.com/thomasyuxizeng/AgentsWinBar/compare/v1.5.0...v1.5.1
+[1.5.0]: https://github.com/thomasyuxizeng/AgentsWinBar/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/thomasyuxizeng/AgentsWinBar/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/thomasyuxizeng/AgentsWinBar/compare/v1.2.1...v1.3.0
 [1.2.1]: https://github.com/thomasyuxizeng/AgentsWinBar/compare/v1.2.0...v1.2.1

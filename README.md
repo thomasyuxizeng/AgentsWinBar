@@ -1,403 +1,225 @@
 # AgentsWinBar
 
-**See how much of your Claude, Codex and Gemini limits you have left, without opening anything.**
+**Watch your Claude, Codex, and Gemini usage limits from the Windows 11 desktop, without opening a browser.**
 
-A Windows 11 app that puts your AI coding usage on the desktop: a tray flyout, an always-on floating readout, a strip that sits on the taskbar, and a full dashboard that shows every limit at once. It reads the numbers from the [CodexBar CLI](https://github.com/steipete/CodexBar) running in WSL.
+AgentsWinBar is a free, open-source Windows 11 tray app for people who work with AI coding agents. It puts your remaining quota windows, reset times, service status, and local token cost estimates right where you work: a tray flyout, a taskbar strip, a floating overlay, and a full dashboard window.
 
-This is the Wave-OCE fork of [nek0der/CodexBarWin](https://github.com/nek0der/CodexBarWin), which is the Windows front end for [steipete/CodexBar](https://github.com/steipete/CodexBar). What changed in the fork is [listed below](#what-this-fork-adds).
-
-## Install
-
-Tell your AI coding agent: `Install AgentsWinBar from https://github.com/thomasyuxizeng/AgentsWinBar — follow INSTALL.md`. Or run `powershell -ExecutionPolicy Bypass -File install.ps1` from a clone. See [INSTALL.md](INSTALL.md) for commands and exit codes.
+Starting with **v1.6.0**, AgentsWinBar reads usage and local costs natively on Windows. No WSL virtual machine is needed: it sits around **17 MB** of private memory at idle (Task Manager's Memory column) and uses about **0.2 CPU seconds** per refresh (down from a 1.3 to 1.7 GB WSL VM and about 10 CPU seconds per refresh). [How this was measured](PERFORMANCE.md).
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE.txt)
 [![.NET](https://img.shields.io/badge/.NET-10.0-512BD4)](https://dotnet.microsoft.com/)
 [![WinUI](https://img.shields.io/badge/WinUI-3-blue)](https://microsoft.github.io/microsoft-ui-xaml/)
-![Windows 11](https://img.shields.io/badge/Windows-11-0078D4)
+![Windows 11 x64 and ARM64](https://img.shields.io/badge/Windows%2011-x64%20%7C%20ARM64-0078D4)
 
-![Flyout, detail page and taskbar strip](docs/images/overview.png)
+![AgentsWinBar tray flyout, provider detail page with usage history charts, and taskbar strip side by side](docs/images/overview.png)
 
-*Left: the tray flyout. Right: a provider's detail page (Gemini, with a usage history chart for each window). Bottom: the taskbar strip.*
+*Left: the tray flyout. Right: a provider detail page with usage history charts. Bottom: the taskbar strip. All screenshots and animations in this README use the app's built-in sample data.*
 
-![The dashboard with a limit reached, an outage, a service incident and API credits running low](docs/images/dashboard.png)
+## Quick install
 
-*The dashboard, described under [The dashboard](#the-dashboard): a needs-attention summary, one panel per provider and a graphs section. This one sample shows most of what the app can say at once: Claude's session is at its limit during a major outage, Codex's session is at 93% and running ahead of pace during a minor incident, Gemini's external 7-day window is near its limit, the other bars are comfortably behind pace, and the API credits are running low. Every screenshot and animation in this README uses the app's developer-mode sample data, not real usage.*
+**Requirements:** Windows 11 (build 22000+, x64 or ARM64) and a Windows sign-in for whichever providers you use (**Claude Code**, **Codex CLI or Windows app**, or **Antigravity** for Gemini). The .NET 10 runtime is bundled; WSL is not required.
 
-When a limit resets, its bar plays a short animation (see [Reset animation](#reset-animation)). Here it is on the floating overlay:
-
-![A reset animation on the floating overlay](docs/images/reset-overlay.gif)
-
-## Contents
-
-- [What you get](#what-you-get)
-- [Quick start](#quick-start)
-- [Reading the bars](#reading-the-bars)
-- [The dashboard](#the-dashboard)
-- [What this fork adds](#what-this-fork-adds)
-- [How it works](#how-it-works)
-- [Troubleshooting](#troubleshooting)
-- [Configuration](#configuration)
-- [Development](#development)
-
-## What you get
-
-| | |
-|---|---|
-| **Flyout** | Click the tray icon (or the strip, or the overlay) for a card per provider: session, weekly and extra windows, with exact reset times. Click a card for its detail page. |
-| **Dashboard** | A full, resizable window (full screen with F11, optional keep-on-top) opened from the button in the flyout footer. See [The dashboard](#the-dashboard). |
-| **Taskbar strip** | A compact, borderless strip flush with the left end of the taskbar: provider logo plus two bars each. Always visible, never takes focus. |
-| **Floating overlay** | The same readout as a small draggable window that stays above your apps. Position is remembered. |
-| **Usage alerts** | Windows notifications when you're burning through a limit too fast, nearly out, or out. |
-| **Pace awareness** | Every bar also shows how much of the window's time has passed, so you can tell "50% used" at the start of a window from "50% used" near the end. |
-| **Provider status** | Service health on each card, incident details with a status-page link, and a small incident dot on compact displays. Grey means no status is available (including Gemini through Antigravity). |
-| **Cost and tokens** | Today's and last-30-days totals from local logs, each on its own wrapping card line. Detail pages show daily costs and top models. Amounts are list-price estimates, not bills. |
-| **Usage history** | Detail pages plot each limit window's usage against an even-use guide readable in light and dark themes, with a projection from the observed rate and local capture times. History builds as the app runs and is kept for 14 days. The dashboard's [GRAPHS](#the-dashboard) section shows compact versions of these charts. |
-| **API credits** | The dashboard's Claude panel can show your Anthropic organization's API spend against a monthly budget. Needs an Anthropic Admin key. See [API credits](#api-credits). |
-| **Gemini API spend** | The dashboard's Gemini panel can show this month's Gemini API spend from a local spend log, by route and by model. See [Gemini API spend](#gemini-api-spend). |
-
-Supported providers: **Claude**, **Codex** (OpenAI) and **Gemini** (read through Google's Antigravity).
-
-The two compact displays, which you can run together or separately:
-
-| Floating overlay | Taskbar strip |
-|:---:|:---:|
-| ![Floating overlay](docs/images/overlay.png) | ![Taskbar strip](docs/images/taskbar-strip.png) |
-| Rows are Claude, Codex and Gemini; each row shows two bars. | The same readout laid out along the taskbar. |
-
-## Quick start
-
-`install.ps1` automates steps 1–4 below; see [INSTALL.md](INSTALL.md).
-
-You need about 15 minutes the first time. The app runs on Windows; the usage data comes from a small tool inside WSL, so there are three parts: WSL, sign-ins, then the app.
-
-### 1. Prerequisites
-
-- **Windows 11.** The app is built and tested on it; the taskbar strip and Mica backdrop are designed for it.
-- **WSL 2 with Ubuntu.** From an administrator PowerShell: `wsl --install -d Ubuntu-24.04`, then restart. If that fails, see [WSL won't install](#wsl-wont-install).
-- To build the app yourself you also need the **.NET 10 SDK**. If you install a prebuilt package you don't.
-
-### 2. Set up the CLI inside WSL
-
-Clone this repo, then from PowerShell in `tools\wsl`:
+### Recommended: run the installer script
 
 ```powershell
 git clone https://github.com/thomasyuxizeng/AgentsWinBar.git
-cd AgentsWinBar\tools\wsl
-.\install-wsl-shim.ps1 -Distro Ubuntu-24.04
+cd AgentsWinBar
+powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1
 ```
 
-This downloads the CodexBar CLI (checksum verified), installs it in `/opt/codexbar`, and installs a small wrapper (the "shim") that makes Claude and Gemini work reliably. Details in [tools/wsl/README.md](tools/wsl/README.md).
+Pass `-DryRun` first if you want to preview the steps without changing anything, or point your AI coding agent at [INSTALL.md](INSTALL.md) (which documents all flags, exit codes, and update steps).
 
-### 3. Sign in to each provider (once, inside WSL)
+What `install.ps1` does:
 
-Open a WSL shell (`wsl -d Ubuntu-24.04`) and sign in to the providers you use:
+1. Downloads the latest signed MSIX package and checksum file for your architecture (x64 or ARM64) and verifies the SHA256 hash and signature.
+2. Installs Microsoft's **Windows App Runtime 1.8** if missing (Microsoft-signed, unelevated first).
+3. Trusts the app's self-signed release certificate in `LocalMachine\TrustedPeople` (batched into at most one UAC prompt with the runtime if needed).
+4. Installs and launches AgentsWinBar, then checks that your selected providers have Windows sign-ins present and reports initial usage status.
 
-| Provider | Steps |
-|----------|-------|
-| **Claude** | Run `claude` and log in with your Claude account. |
-| **Codex** | `npm install -g @openai/codex`, then `codex login` (use `codex login --device-auth` if the browser redirect doesn't reach WSL). It needs its own Linux copy; a Windows `codex` can't run in WSL. |
-| **Gemini** | `curl -fsSL https://antigravity.google/cli/install.sh \| bash`, run `agy` once and sign in with Google, then exit straight away (it is an agent and will act on anything you type). |
+During install, Windows shows the certificate publisher **`CN=CodexBarWin OSS`** (kept from the app's earlier name so existing installations upgrade cleanly).
 
-Check that it works: `wsl -d Ubuntu-24.04 codexbar usage --provider claude --format json` should print JSON.
+### Manual install from GitHub Releases
 
-### 4. Install the app
-
-The app is a signed MSIX package. The signature is self-signed, so Windows needs to trust the certificate once.
-
-**From a release** (when one is published):
+Download the MSIX for your architecture (`AgentsWinBar-<tag>-x64.msix` or `AgentsWinBar-<tag>-ARM64.msix`), the matching certificate (`AgentsWinBar-<tag>-Certificate.cer`), and optionally `AgentsWinBar-<tag>-checksums.sha256` from the [Releases](https://github.com/thomasyuxizeng/AgentsWinBar/releases) page, then run:
 
 ```powershell
-gh release download --repo thomasyuxizeng/AgentsWinBar --pattern "*.msix" --pattern "*.cer"
+# Trust the release certificate (run in an administrator PowerShell)
+Import-Certificate -FilePath .\AgentsWinBar-<tag>-Certificate.cer -CertStoreLocation Cert:\LocalMachine\TrustedPeople
 
-# Trust the certificate (administrator PowerShell)
-Import-Certificate -FilePath .\AgentsWinBar-v*-Certificate.cer -CertStoreLocation Cert:\LocalMachine\TrustedPeople
-
-# Install
-Add-AppxPackage .\AgentsWinBar-v*-x64.msix
+# Install the package (normal user PowerShell; use ARM64 if on ARM64)
+Add-AppxPackage .\AgentsWinBar-<tag>-x64.msix
 ```
 
-Releases no longer include `CodexBarWin.appinstaller`. If you have one from an older release, don't use it: it points at the upstream project's releases and would install (and keep updating to) the upstream app, without the changes listed below.
+### Upgrading from CodexBarWin
 
-**From source:**
+Earlier versions of this app were called **CodexBarWin**. AgentsWinBar installs alongside it and automatically copies your existing settings, caches, usage history, cost ledger, and cost index on first launch (without changing or deleting the old files). Once you see your data in AgentsWinBar, remove the old app:
 
 ```powershell
-# One-time: a signing certificate whose subject matches the manifest publisher
-$cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject "CN=CodexBarWin OSS" `
-  -KeyUsage DigitalSignature -CertStoreLocation Cert:\CurrentUser\My `
-  -TextExtension @("2.5.29.37={text}1.3.6.1.5.5.7.3.3", "2.5.29.19={text}")
-Export-Certificate -Cert $cert -FilePath AgentsWinBar.cer
-Import-Certificate -FilePath AgentsWinBar.cer -CertStoreLocation Cert:\LocalMachine\TrustedPeople   # admin
-
-# Build the package, sign it, install it
-# First set Identity Version in Package.appxmanifest to your chosen version, e.g. 0.9.6.0
-dotnet build AgentsWinBar.csproj -c Release -p:Platform=x64 -p:UapAppxPackageBuildMode=SideloadOnly `
-  -p:AppxBundle=Never -p:AppxPackageDir="AppPackages\" -p:AppxPackageSigningEnabled=false `
-  -p:GenerateAppxPackageOnBuild=true -p:PublishReadyToRun=false
-signtool sign /fd SHA256 /sha1 $cert.Thumbprint (Get-ChildItem AppPackages -Filter *.msix -Recurse).FullName
-Add-AppxPackage (Get-ChildItem AppPackages -Filter *.msix -Recurse).FullName
+Get-AppxPackage -Name CodexBarWin | Remove-AppxPackage
 ```
 
-`signtool` ships with the Windows SDK. Increase the manifest's Identity Version for each build so Windows
-treats it as an update; `AppxVersion` alone did not override the manifest in the tested .NET SDK build.
-Choose the MSIX for that version when signing and installing if `AppPackages` contains older builds.
-The packaged app keeps its settings across updates.
+## Supported providers
 
-> **Running an unsigned build** (`dotnet run`, or the exe from `bin\`) is blocked on machines with Smart App Control or App Control for Business enabled. Install the signed package instead.
+AgentsWinBar reads the sign-ins that each provider's own Windows tool already maintains:
 
-### 5. Use it
+| Provider | How to sign in on Windows | Usage windows shown | Local cost logs |
+|---|---|---|---|
+| **Claude** | Sign in with Claude Code (`claude` or `claude auth login`) | 5-hour session, 7-day weekly, model-scoped weekly limits (such as Sonnet or Opus), Daily Routines | Yes (`%USERPROFILE%\.claude\projects`) |
+| **Codex** | Sign in with the Windows Codex app or `codex login` (ChatGPT account; API-key-only sign-ins have no plan limits) | 5-hour session, 7-day weekly, extra limits including Codex Spark 5-hour and Weekly | Yes (`%USERPROFILE%\.codex\sessions` and `archived_sessions`, including `.jsonl.zst`) |
+| **Gemini** | Sign in to Antigravity on Windows (desktop app or `agy`) | Gemini 5-hour, Gemini weekly, plus shared Claude and GPT 5-hour and weekly windows | No (no local logs) |
 
-1. Launch **AgentsWinBar** from the Start menu. It lives in the system tray (it may be under the `^` overflow).
-2. Click the tray icon for the flyout. Click a provider card for details, the gear for **Settings**, or the dashboard button in the footer for the [full dashboard](#the-dashboard).
-3. In **Settings**, turn on what you want:
+## Desktop surfaces
 
-![Settings](docs/images/settings.png)
+AgentsWinBar gives you four views of the same live data:
 
-*Settings at two scroll positions: Reset animation under Appearance, then Monthly API budget and Credit renewal day.*
+- **Tray flyout and detail pages:** Left-click the tray icon for one card per enabled provider showing session, weekly, and extra windows with reset times and service status. Click any card to open its detail page with 14-day burndown charts, 7/14/30-day cost breakdowns, top models, and an error log. Right-click the tray icon to toggle the overlay, open Settings, or quit.
+- **Taskbar strip and floating overlay:** Compact two-bar-per-provider readouts that stay visible while you work and hide automatically whenever a fullscreen app is active. Both are off by default; turn either or both on in **Settings**. The strip sits at the taskbar's left end, or beside the system tray when Start is at the left end (Windows 10, or a left-aligned Windows 11 taskbar); **Settings > Taskbar display > Position** picks a side yourself. The overlay is borderless and draggable (its position is saved).
+- **Dashboard:** Open it from the flyout footer or the taskbar strip's right-click menu. It is a resizable window with full screen (`F11`) and keep-on-top pinning.
 
-| Setting | What it does |
-|---------|--------------|
-| Providers | Choose which providers show, and their order. Each provider also has a **Show graphs** checkbox (on by default) for the dashboard's GRAPHS section. Changes apply immediately. |
-| Reset animation | Whether a bar plays its [reset animation](#reset-animation): **Always on**, **Always off** or **Off in battery saver** (the default). |
-| Refresh interval | How often usage is fetched (1, 2, 5 or 10 minutes). While your usage isn't changing the app waits longer (up to 3x, capped at 15 minutes) and returns to this interval as soon as something moves, or when you open the flyout or dashboard and the data is older than the refresh interval. Turn this off with `adaptiveRefreshEnabled` ([Configuration](#configuration)). While Windows battery saver is on, the delay is doubled, up to 30 minutes; see [Battery use](#battery-use). |
-| Always-on overlay | The floating readout. Drag to move, right-click for options. |
-| Taskbar display | The strip on the taskbar, bottom-left corner. |
-| Usage alerts | Windows notifications. "Send test notification" checks they reach you. |
-| Show cost and token totals | Local log estimates on cards and detail pages. Scans run while the flyout or dashboard is open (at most every 30 minutes) and when you click Refresh. |
-| Monthly API budget (USD) | The budget the [API credits](#api-credits) tracker measures spend against. Default 200. |
-| Credit renewal day | The day of the month (1 to 28, UTC) your API credits renew; it sets where the tracker's billing cycle starts. Default 1. |
-| Run at startup | Start with Windows. |
-
-Both compact displays hide themselves while a fullscreen game, video or presentation is running.
-
-## Reading the bars
-
-Every bar has up to three layers:
-
-| You see | It means |
-|---------|----------|
-| **Blue** fill | Usage so far in this window. |
-| **Lavender** behind it | How much of the window's time has passed. Lavender sticking out past the blue means you're using the window slowly. |
-| **White marker line** | Only appears when you're *ahead* of schedule (blue has passed the time position): you're using it faster than the window refills. |
-| **Amber** (75%+), **red** (90%+) | Getting close to the limit. These override every other colour. |
-
-Hover any bar for the exact numbers and a projection, for example *"At this pace you'll hit the limit in 1h 20m, 3h 10m before the reset"*.
-
-Extra windows have their own colours so they stand apart from the main session and weekly bars:
-
-| Colour | Window |
-|--------|--------|
-| Anthropic orange | Claude windows, such as Claude's **Fable** limit. |
-| OpenAI green | OpenAI windows. |
-| Orange to green gradient | Antigravity's shared **External** quota (5h and 7d: Claude and GPT models), shown on Gemini's card. |
-
-![The flyout: Claude at its limit with a red outage dot, Codex with an amber incident dot](docs/images/flyout.png)
-
-*The flyout cards. A red bar is at or near its limit (here Claude's session, 100%), the white marker shows it is ahead of schedule, and the dot at the top right is the provider's service status.*
-
-On the floating overlay and the taskbar strip, each provider shows its two most **relevant** bars rather than always session and weekly. In order: the bar that moved most recently (last 30 minutes), then a window running ahead of schedule, then one near its limit (90%+), then one at its limit. Windows at or near a limit rank last on purpose: if you can't use more of it anyway, you'd rather see what you still have.
-
-### Alerts
-
-One notification per usage window (re-armed when the window resets), at three levels: **far ahead of pace** (25+ points ahead and the limit would be hit well before the reset), **nearly out** (90%+), and **at the limit**. They cover the extra windows too.
-
-### Reset animation
-
-When a usage window resets, its bar plays a short green animation: a ring draws around the bar, the previous fill turns green and collapses to the left, and a glow sweeps across. A session reset animates only the session bar and a weekly reset only the weekly bar. It plays wherever the bar is drawn (flyout, detail page, dashboard, overlay and taskbar strip). The app also refreshes about two seconds after each known reset time so the cleared limit appears sooner.
-
-- The **Reset animation** setting is **Always on**, **Always off** or **Off in battery saver** (the default).
-- It is skipped when Windows animations are turned off.
-- A reset detected while the PC is locked plays once, on each bar, after you unlock (or resume from sleep to the desktop), because it would be missed on the lock screen. The taskbar strip and the overlay also hold a reset while the display is off or a fullscreen app hides them, and start it one second after they are back on screen so the beginning is not missed. A reset that happens while they are on screen plays at once.
-
-| Floating overlay | Dashboard card |
+| Floating overlay | Taskbar strip |
 |:---:|:---:|
-| ![A reset animation on the floating overlay](docs/images/reset-overlay.gif) | ![A reset animation on a dashboard card](docs/images/reset-dashboard.gif) |
-| Claude's session limit resets: the ring draws, the full bar turns green and collapses, a glow sweeps across. | The same animation on the dashboard's Claude panel (the "At limit" badge clears as the data refreshes). |
+| ![Floating overlay showing compact usage bars for Claude, Codex, and Gemini](docs/images/overlay.png) | ![Compact usage strip sitting on the Windows 11 taskbar](docs/images/taskbar-strip.png) |
+| Draggable always-on readout; right-click for details or to hide. | Same compact readout along the taskbar; right-click for details, dashboard, or to hide. |
 
-## The dashboard
+### Smart bars, alerts, and reset animations
 
-The flyout is for a quick look; the dashboard is for when you want the whole picture. Click the dashboard button in the flyout footer (or reopen it the same way; a minimized dashboard is restored). It is a normal window: resize it, maximize it, press **F11** for full screen (Esc leaves it), or pin it on top with the pin button. Refresh runs a fetch right away, and the window follows the app's refresh interval otherwise.
+- **Color thresholds:** Usage bars turn **amber** at 75% and **red** at 90%.
+- **Relevance-based compact bars:** On the overlay and taskbar strip, each provider shows its two most relevant windows instead of always repeating the same two: the window that changed in the last 30 minutes comes first, followed by one running 15+ points ahead of schedule, then 90%+, then at the limit (if a longer partner window is already used up, it replaces the shorter one).
+- **Usage alerts:** Windows toast notifications (on by default, with a **Send test notification** button in Settings) fire once per window per situation and re-arm when the window resets: **using it fast** (projected to hit the limit at least 30 minutes before reset and 25+ points ahead of elapsed time), **nearly out** (90%+), and **limit reached** (100%). Extra windows are included, and an early-reset toast and chip appear if usage drops 10+ points before a scheduled reset.
+- **Reset animation:** When a window resets, its bar plays a short ring, collapse, and glow animation, and the app refreshes 2 seconds after each known reset time (with a retry 15 seconds later). Controlled in Settings under **Reset animation** (default: **Off in battery saver**; also skipped when Windows animations are turned off).
 
-From top to bottom:
+![Reset animation playing on the floating overlay when a usage window clears](docs/images/reset-overlay.gif)
 
-| Section | What it shows |
-|---------|---------------|
-| **Summary** | Only what the provider panels don't already say. **NEEDS ATTENTION** lists failed fetches, service incidents, windows at their limit, windows that will run out before they reset, windows near a limit, API credits that are running low or over budget, and providers showing old or last-known data (marked stale). Providers with the same kind of problem share one entry, and clicking an entry jumps to that provider. When nothing is wrong the toolbar says **All clear**. When two or more providers report cost, the summary also shows the estimated spend for all providers. |
-| **Provider panels** | One panel per provider, side by side as far as the window is wide: plan, freshness, service status with incident details, every usage window with its reset time (windows that reset together share one reset line), pace warnings, and cost and tokens for today and the last 30 days. Claude's panel also holds the [API credits](#api-credits) tracker, and Gemini's the [Gemini API spend](#gemini-api-spend) section. **Show details** adds pace and window facts, the 30-day token mix, top models and how many history samples exist. Gemini's External (Claude and GPT) windows sit beside its own models in a wide panel and stack under them in a narrow one. |
-| **GRAPHS** | Below the panels: one card per provider with a compact burndown chart for each usage window (usage against an even-use guide, with a projection) and a 30-day daily cost chart. The toggle buttons in the section header hide or show a provider's charts; the choice is the same **Show graphs** option as in Settings. |
-| **Diagnostics** | A collapsible section at the bottom (collapsed by default, with a one-line summary in its header), also in full screen: CLI and app versions, the effective settings, the history store, cost scans, and this session's refresh log and alerts. |
+### The dashboard
 
-![The GRAPHS section and the collapsed Diagnostics section](docs/images/dashboard-graphs.png)
+![AgentsWinBar dashboard showing the Needs Attention summary, provider panels with a limit reached, service incidents, and API credits running low](docs/images/dashboard.png)
 
-*The GRAPHS section: usage against an even-use guide, with a dashed projection from the observed rate. The Claude and Codex sessions, climbing above the guide to 100% and 93%, are drawn in red; Gemini's External 7d, at 84% and also ahead of the guide, in amber.*
+- **NEEDS ATTENTION:** Surfaces failed fetches, service incidents, limits reached or running ahead of pace, stale data, signed-out providers, and low or over-budget API credits (shows **All clear** in the toolbar when everything is fine).
+- **Provider panels:** Plan name, freshness, live service status with incident text and an **Open status page** link (Claude, OpenAI, and Google Workspace Status for Gemini; grey means the status feed could not be read), all usage windows, pace warnings, and local cost totals. Click **Show details** for 30-day token mix and top models.
+- **GRAPHS:** Compact burndown charts per provider (usage plotted against an even-use guide with a projection; shows "Collecting data" until two samples exist for the current window) plus a 30-day daily cost chart. Toggle any provider's charts from the header or Settings.
+- **Diagnostics:** Collapsible bottom panel with effective settings, history store stats, cost scan status, and this session's refresh log and alerts.
 
-Refreshes only redraw what changed, so scrolling stays smooth while data loads.
+![Dashboard GRAPHS section showing per-provider usage burndown charts against an even-use guide](docs/images/dashboard-graphs.png)
 
-### API credits
+## Local cost tracking and optional API panels
 
-The Claude panel can show your Anthropic organization's API spend for the current billing cycle against a monthly budget. This is separate from the usage limits, which come from the CLI.
+### Local log cost estimates (Claude and Codex)
 
-Setup:
+When **Show cost and token totals** is enabled in Settings, AgentsWinBar scans your local Windows Claude Code and Codex JSONL session logs (including Zstandard-compressed `.jsonl.zst` Codex archives) and prices tokens at list rates. These totals are **list-price estimates from local logs, not your provider bill**.
 
-1. Create an Anthropic Admin key at <https://platform.claude.com/settings/admin-keys>. The panel also has a **Create an Admin key** link.
-2. Save it as the user environment variable `ANTHROPIC_ADMIN_KEY`. A new key is picked up on the next refresh; restart the app after replacing an existing key.
-3. In **Settings**, set **Monthly API budget (USD)** and **Credit renewal day** (UTC).
+- **Demand-driven scanning:** Cost scans run only while the flyout or dashboard is open (not minimized) or when you click **Refresh**, at most once every 30 minutes per provider, and never while the PC is locked.
+- **Private local index:** Incremental scan state is stored in `cost-index\index.sqlite` inside the app data folder. It stores only hashed file paths, file offsets, model names, dates, token counts, and hash keys: no prompts, no raw file paths, and no message text.
+- **Pricing and custom rates:** Prices are resolved in order from your optional `custom-pricing.json` (USD per million tokens, exact model key, `0` for free), historical pre-change rates, the `models.dev` catalog (refreshed at most once every 24 hours via a plain GET with no user data), and built-in tables ported from CodexBar.
+- **Permanent ledger:** Daily cost and token totals persist in `cost-ledger.json` even after old session logs rotate away. Query lifetime or date-range totals anytime with:
+  ```powershell
+  powershell -ExecutionPolicy Bypass -File tools\cost-ledger-report.ps1
+  ```
 
-What it shows: the amount spent so far this cycle and the budget, what is left (or how far over budget you are), a bar with a tick for how far through the cycle you are, the renewal date and days left, and the daily spend that would use up the rest of the budget by then (shown as "to use it all"). When a breakdown is available, a **Used by** list splits the spend by member, you first, with an "Other / not attributable" line for charges that cannot be assigned. The **Billing** link opens the Claude Platform billing page. The tracker also adds an "API credits" entry to NEEDS ATTENTION when usage is at 75% or more of the budget (running low), at 90% or more (nearly used up), or over budget.
+### Optional: Anthropic API credits
 
-In the dashboard screenshot at the top of this page the panel sits at the bottom of Claude's card, in amber because the budget is running low.
+The dashboard's Claude panel can track your Anthropic organization's API spend against a monthly budget:
 
-How it behaves:
+1. Open **Settings > Anthropic API credits** (or **Open Settings** on the dashboard's Claude panel) and click **Create an Admin key**. Only organization admins can create Admin keys.
+2. Paste the key and click **Save key**. The app checks it with one read-only Admin API request, saves it to your user environment variable `ANTHROPIC_ADMIN_KEY`, and uses it right away. **Replace key** and **Remove key** work the same way, with no restart.
+3. Set **Monthly budget (USD)** (default 200) and **Renewal day** (1 to 28, UTC; default 1), then click **Save**.
 
-- The key is read from the environment each time it is used, and neither it nor the spend is written to disk. The spend is held in memory only.
-- It refreshes only while a dashboard window is visible (not minimized), at most every five minutes, or when you click Refresh.
-- No key: nothing shows until you open **Show details** on the Claude panel, which then explains how to add one.
-- Key rejected: "Admin key rejected (HTTP 401)" or "(HTTP 403)", with the link to create a key.
-- Anthropic unreachable: "Anthropic API spend is unavailable right now". If an earlier reading exists it stays on screen, marked stale. Any reading older than 15 minutes is marked stale.
+A key you already set in `ANTHROPIC_ADMIN_KEY` yourself is picked up as before.
 
-### Gemini API spend
+It refreshes at most every 5 minutes only while the dashboard is visible, shows spend, remaining budget, daily pace, and a per-member **Used by** breakdown, and never writes the key or spend figures to disk. Without a key set, the section stays hidden unless you click **Show details** on the Claude panel.
 
-The Gemini panel can show this calendar month's Gemini API spend (local time). Google offers no API that reads billing with a Gemini API key, so the amounts come from a local log that your own scripts write, one JSON object per call:
+### Optional: Gemini API spend
 
-```json
-{"time": "2026-11-20T09:28:36", "model": "gemini-4-neon", "backend": "aistudio", "usd": 0.4583, "usd_cache_aware": 0.2104}
+If you track your own Gemini API calls in a local JSON Lines log pointed to by the `CODEXBAR_GEMINI_SPEND_LOG` environment variable, the dashboard's Gemini panel sums the recorded dollar amounts for the current calendar month (local time), broken down by route and model. Each line is a JSON object with `time` (local timestamp without a timezone), `model`, optional `backend` (`aistudio` or `vertex`), and `usd` or `usd_cache_aware` (which takes precedence); the app reads only the last 8 MiB while the dashboard is visible and only when the file changes, and shows nothing if no log exists.
+
+## Privacy, credentials, and network traffic
+
+AgentsWinBar is built to read your quota cleanly and leave everything else alone.
+
+### What it reads and what it never touches
+
+- **Read-only sign-ins:** AgentsWinBar never creates, edits, or deletes any provider credential file or Windows Credential Manager entry. It reads only the default Windows profile (`CLAUDE_CONFIG_DIR` and `CODEX_HOME` are not used):
+  - **Claude:** `%USERPROFILE%\.claude\.credentials.json`, reading only the `claudeAiOauth` object (all other keys are skipped unread).
+  - **Codex:** `%USERPROFILE%\.codex\auth.json`, reading only the access token and account metadata (the refresh token is skipped unread; `OPENAI_API_KEY` is only checked for presence).
+  - **Gemini:** Windows Credential Manager generic credential `gemini:antigravity` via read-only `CredReadW` (refresh tokens and client secrets are never read).
+- **Memory-only tokens:** Provider access tokens are held only in memory in buffers zeroed after use, and `ANTHROPIC_ADMIN_KEY` is read from the environment on each use without being saved in state; none of them are logged, printed, or written to disk. The only place the app writes the Admin key is that user environment variable, when you save it in Settings.
+- **No telemetry:** There is no analytics, telemetry, or external crash-reporting service. Release builds keep two small local logs, `app.log` (warnings) and `crash.log` (unexpected errors), each capped at 1 MB.
+- **Logs stay local:** Nothing from your session logs, prompts, or cost totals ever leaves your PC.
+
+### Automatic sign-in renewal and signed-out state
+
+When an existing sign-in expires, AgentsWinBar keeps displaying your last good reading (marked stale) rather than flashing an error banner. For **Claude** and **Gemini**, it can ask the provider's own CLI to renew an expired token in the background (hidden, with command output discarded unread; at most once every 30 minutes, backing off to every 2 and then 6 hours while renewal keeps failing):
+
+- **Claude:** runs `claude auth status` (`claude.exe auth status --json`).
+- **Gemini:** runs `agy models` (lists models, uses no quota, about 1.7 CPU seconds).
+- **Codex:** has no automatic renewal; open Codex on Windows to renew an expired sign-in.
+
+You can turn automatic renewal off per provider in `settings.json` (`renewClaudeSignIn` / `renewGeminiSignIn`).
+
+If a provider is **signed out** (missing or rejected with HTTP 401/403), the dashboard panel, detail page, and **Settings > Sign-ins** show a red **Signed out** banner with a **Sign in** button and dim last-known numbers. Clicking **Sign in** opens the provider's official login (`claude auth login`, `codex login`, or Antigravity) and watches for the updated sign-in so your numbers appear right after you finish.
+
+| Dashboard signed-out banner | Settings > Sign-ins |
+|:---:|:---:|
+| ![Dashboard provider panel showing the red Signed out banner and Sign in button](docs/images/signed-out.png) | ![Settings Sign-ins section with one provider signed out and a Sign in button](docs/images/settings-signins.png) |
+
+### Everything that leaves your machine
+
+All outbound requests use HTTPS only, a strict host allow list, no redirects, and no cookies:
+
+| Destination | When | What is sent |
+|---|---|---|
+| `api.anthropic.com/api/oauth/usage` | Claude usage refresh (cached in memory 9.5 min; backs off at least 10 min on HTTP 429) | Claude Bearer token, `anthropic-beta` header, `User-Agent: claude-code/2.1.0` |
+| `chatgpt.com/backend-api/wham/usage` | Codex usage refresh | Codex Bearer token, `ChatGPT-Account-Id` when present, `User-Agent: CodexBar` |
+| `cloudcode-pa.googleapis.com` and `daily-cloudcode-pa.googleapis.com` | Gemini usage refresh (never onboards an account) | Antigravity Bearer token, fixed quota query body, `User-Agent: antigravity/hub/2.9.1 linux/amd64` |
+| `status.claude.com`, `status.openai.com`, `www.google.com/appsstatus` | With refreshes, at most once every 5 min per provider | Plain GET, no credentials |
+| `models.dev/api.json` | At most once every 24 h while cost tracking is enabled | Plain GET, no user data |
+| `api.anthropic.com/v1/organizations/...` | Only if `ANTHROPIC_ADMIN_KEY` is set and the dashboard is visible (at most every 5 min); one key check when you save a key in Settings or open Settings with a key set | `x-api-key` Admin key |
+
+The three usage endpoints identify as each provider's own client family (`claude-code`, `CodexBar`, `antigravity/hub`) because those endpoints only accept requests from those clients.
+
+## Performance and battery
+
+AgentsWinBar is designed to stay out of the way on laptops:
+
+- **Default refresh:** Usage refreshes every **5 minutes** by default (configurable in Settings to 1, 2, 5, or 10 minutes).
+- **Adaptive backoff:** On by default (`adaptiveRefreshEnabled`). After two unchanged refreshes the delay doubles; after four it triples, capped at 15 minutes.
+- **Battery saver:** Doubles the refresh delay (up to 30 minutes) and disables the reset animation under the default setting.
+- **Locked PC and minimized dashboard:** While locked, refreshes wait at least 30 minutes (`lockedRefreshIntervalMinutes`) and cost scans and API credit polls pause. Minimizing the dashboard stops its clock and cost demand.
+- **Offline resilience:** Last-known usage is kept in memory for transient errors, rate limits, or expired tokens, and restored as stale from `cache.json` on startup (dropped after 7 days). Usage history is kept for 14 days; cost caches and the daily ledger are kept indefinitely.
+
+## Configuration, data folder, and optional WSL fallback
+
+For the packaged MSIX app, data lives in:
+
+```text
+%LOCALAPPDATA%\Packages\AgentsWinBar_w05y65rx3mcz6\LocalCache\Local\AgentsWinBar\
 ```
 
-- `time` is local time without a zone. `backend` is `aistudio`, `vertex` or missing. `usd_cache_aware` is used when present, otherwise `usd`. Rows that can't be read are skipped.
-- The default path is `%USERPROFILE%\.claude\gemini-api\spend.jsonl`. Set the user environment variable `CODEXBAR_GEMINI_SPEND_LOG` to use another file.
-- Without the file, nothing shows.
+Quit the app from the tray menu before editing `settings.json` by hand. Notable files in that folder:
 
-What it shows: the month's total and number of calls, the spend per route (**AI Studio key**, **Vertex**, **Route not recorded**), a **By model** list with each model's share, and when the last call was. The amounts are list-price estimates before any credits or prepaid balance, not your bill. The log is read only while a dashboard window is visible, and only again when the file changes.
+- `settings.json` (saved atomically; malformed values recover to defaults)
+- `cache.json`, `usage-history.json`, `claude-cooldown.json`, `early-resets.json`, `alerts-sent.json` (which usage alerts were already shown, so a restart doesn't repeat them)
+- `cost-cache.json`, `cost-ledger.json`, `cost-index\index.sqlite`, `model-prices.json`, optional `custom-pricing.json`
+- `app.log` and `crash.log` (local warning and error logs, 1 MB each; they record exception types and stack frames, never exception messages, file paths or process output; read them before sharing)
 
-## What this fork adds
+Options available only in `settings.json` (no Settings UI toggle): `renewClaudeSignIn` (default `true`), `renewGeminiSignIn` (default `true`), `adaptiveRefreshEnabled` (default `true`), `lockedRefreshIntervalMinutes` (default `30`), `usageSources`, and `costSource`.
 
-Compared with upstream, this fork adds:
-
-- **A dashboard window** with a needs-attention summary, a detailed panel per provider, a graphs section and collapsible diagnostics. See [The dashboard](#the-dashboard).
-- **An API credits tracker** on the dashboard: Anthropic organization API spend against a monthly budget, read with an Admin key and never saved to disk. See [API credits](#api-credits).
-- **A reset animation** that plays a short green effect on a bar when its usage window resets. See [Reset animation](#reset-animation).
-- **Lower battery use**: refreshes back off when usage is unchanged, double under Windows battery saver, and refreshes, cost scans and the compact displays' timers slow down or stop while the PC is locked. See [Battery use](#battery-use).
-- **Always-on overlay and taskbar strip.** Borderless, rounded where it should be, flush with the taskbar, never steals focus, and hides during fullscreen apps.
-- **A flyout that reliably appears over other programs**, instead of sometimes opening behind them.
-- **Pace layer, marker and run-out projections** on every bar.
-- **Usage alerts** as Windows notifications, with a test button.
-- **Provider service status badges** with incident details and status-page links. The overlay and taskbar logos show a dot only for reported incidents or maintenance.
-- **Estimated cost and token totals**, with Windows log discovery for Claude and Codex, daily cost bars and top models. Optional in Settings; never shown on the compact displays.
-- **Usage history charts** for session, weekly and extra windows, with an even-use guide, observed-rate projection, capture time and sample count. Snapshots are kept locally for 14 days; charts show "Collecting data" until two current-window samples have been captured.
-- **Codex support**, and **provider logos** in place of text labels on the compact displays.
-- **Extra windows**: Claude's Fable limit, and Antigravity's External (Claude and GPT) quota under Gemini, on the flyout cards and detail page, in provider colours.
-- **Relevance-based bar selection** on the compact displays.
-- **A working Gemini.** Google shut down the Gemini CLI login for individual accounts, so Gemini is read from Antigravity and shown as 5-hour and weekly windows.
-- **Reliable Claude.** The OAuth usage endpoint is rate limited by Anthropic ("Command failed (exit code 3)"), and the CLI route became slow. The shim now uses OAuth first with a cooldown, falls back to the CLI, caches for 10 minutes and shows the last good result on failure.
-- **No more hidden 30-second cap** on WSL commands, which was the cause of "Command timed out after 30 seconds".
-- **Providers apply immediately** when enabled, disabled or reordered in Settings.
-- **Safer settings and refreshes.** Settings saves replace a complete file atomically, failed saves show a visible error and restore uncommitted values, and malformed values recover to defaults. Canceled refreshes cannot put old results back on screen. Quit flushes history before exiting.
-- **`tools/wsl`**: one-step setup for the CLI and shim.
-- More than 1,000 unit tests, including settings persistence, refresh cancellation races and cost-cache recovery after cancellation.
-
-The full list is in the [changelog](CHANGELOG.md).
-
-## How it works
-
-```
-AgentsWinBar (WinUI 3)  ->  wsl.exe  ->  codexbar shim  ->  CodexBar CLI  ->  Claude / Codex / Antigravity
-```
-
-The app runs `codexbar usage --provider <id> --format json` inside your WSL distro on a timer and draws the result. The shim sits in front of the real CLI and handles the provider-specific problems (Gemini via Antigravity, Claude rate limits and caching); everything else passes straight through. WSL itself shuts down when idle, which is why nothing in WSL can run as a background process: each refresh starts the command fresh.
+**Optional WSL fallback:** If you ever need the older WSL + CodexBar CLI route for a provider, set `"usageSources": { "<provider>": "wsl" }` (and optionally `"costSource": "wsl"`) in `settings.json` and run `install.ps1 -WithWsl`. See [INSTALL.md](INSTALL.md) for details; native Windows is recommended for everyone else.
 
 ## Troubleshooting
 
-### Claude shows an error or old numbers
-
-Anthropic rate limits the usage endpoint. The shim backs off for 10 minutes and shows the last good result. If it shows an error with no numbers at all, run `claude` in WSL once to confirm you're signed in. Test the shim directly: `wsl -d Ubuntu-24.04 codexbar usage --provider claude --format json --source cli`.
-
-### "Command timed out after N seconds"
-
-The limit is the larger of `wslCommandTimeoutSeconds` and the provider timeouts in [settings.json](#configuration). A cold WSL start plus a slow provider can still exceed it; raise `cliProviderFirstFetchTimeoutSeconds`.
-
-### A provider is missing
-
-Enable it in Settings, Providers. Codex and Gemini also need their sign-in from [step 3](#3-sign-in-to-each-provider-once-inside-wsl).
-
-### "Part of this app has been blocked" / the app won't start
-
-That's Smart App Control or App Control for Business rejecting an unsigned build. Install the signed MSIX ([step 4](#4-install-the-app)). The app's crash log is at `%LOCALAPPDATA%\AgentsWinBar\crash.log`.
-
-### "The app package must be signed" or error `0x800B0109`
-
-The signing certificate isn't in **Trusted People** on the *Local Machine* store, or the certificate you trusted isn't the one that signed the package (releases from 1.0.0 share one certificate; earlier releases each had their own, so trust the `.cer` that came with that release). `install.ps1` handles this for you. Compare thumbprints: `Get-AuthenticodeSignature .\AgentsWinBar.msix`.
-
-### WSL won't install
-
-If `wsl --install` fails with a network error, install the distro from the Microsoft Store or with `winget install Canonical.Ubuntu.2404`, then run `ubuntu2404.exe install --root`.
-
-### Data not refreshing
-
-Check `wsl --status`, then run the CLI by hand (see [step 3](#3-sign-in-to-each-provider-once-inside-wsl)). If that works, check the refresh interval in Settings.
-
-### Uninstall
-
-**Settings, Apps, Installed apps, AgentsWinBar, Uninstall.** To remove the WSL side, delete `/opt/codexbar` and `/usr/local/bin/codexbar` inside the distro. To keep the CLI but drop the shim: `ln -sf /opt/codexbar/CodexBarCLI /usr/local/bin/codexbar`.
-
-## Configuration
-
-Settings live in `settings.json`. For the packaged app it is under `%LOCALAPPDATA%\Packages\AgentsWinBar_w05y65rx3mcz6\LocalCache\Local\AgentsWinBar\`. Edit it with the app closed.
-
-```json
-{
-  "refreshIntervalSeconds": 300,
-  "adaptiveRefreshEnabled": true,
-  "alwaysOnOverlayEnabled": false,
-  "taskbarDisplayEnabled": true,
-  "alertsEnabled": true,
-  "timeouts": {
-    "wslCommandTimeoutSeconds": 30,
-    "cliProviderFirstFetchTimeoutSeconds": 60,
-    "cliProviderTimeoutSeconds": 45
-  }
-}
-```
-
-`wslCommandTimeoutSeconds` is a minimum: it is never allowed to be shorter than the provider timeouts.
-
-Cost and token totals are enabled by default (`showCostTotals`). They read Windows Claude/Codex logs when
-available, or WSL home logs otherwise; Gemini cost reads Antigravity's WSL logs. The shim must be updated
-for cost support: its older Claude cache also intercepted cost commands. Amounts are list-price estimates
-and can omit unpriced or unmetered activity.
-
-The last complete totals per provider are kept in `cost-cache.json` beside `settings.json` and shown straight
-away at startup. Unlike usage limits which expire after 7 days, cost data is retained indefinitely. A permanent
-cost ledger is kept in `cost-ledger.json` beside `settings.json`, recording daily cost and token series across
-local log rotations. You can query lifetime or 30-day costs anytime with the read-only PowerShell report script:
-`powershell -ExecutionPolicy Bypass -File tools\cost-ledger-report.ps1` (uses the packaged LocalCache ledger first, then the unpackaged path; supports `-Path`, `-Provider`, `-From`, and `-To`).
-A scan that fails or times out keeps showing last-known totals, and only a newer complete scan replaces them
-("today" resets once that day has passed). Scans can take a while when logs are large, so each one gets up to 5 minutes.
-
-Usage snapshots live in `usage-history.json` beside `settings.json`. The app records a sample when usage
-changes by at least half a percentage point, ten minutes pass, or a limit window resets. Each chart shows
-only the current window; old-window samples remain on disk until the 14-day retention period expires.
-
-### Battery use
-
-- **Adaptive refresh.** While usage isn't changing, the delay between refreshes grows (see the Refresh interval setting). A window's reset time has to move by more than an hour to count as a change, so idle rolling windows whose reset time drifts don't keep the app refreshing at full speed.
-- **Battery saver.** While Windows battery saver is on, the refresh delay is doubled, up to 30 minutes, and the change applies to the pending refresh straight away. Under the default **Reset animation** setting the animation is off too.
-- **Locked PC.** Refreshes wait at least `lockedRefreshIntervalMinutes` (default 30). No background cost scans or API credits polls run, and the overlay and taskbar strip stop their keep-on-top timers until you unlock.
-- **Minimized dashboard.** Its clock stops and it stops asking for cost scans.
-
-### Keeping WSL light
-
-Each refresh starts the WSL VM, which by default can claim up to half your RAM and gives memory back slowly.
-A `%USERPROFILE%\.wslconfig` keeps it small and shuts it down 10 seconds after the last command instead of a minute (apply with `wsl --shutdown`):
-
-```ini
-[wsl2]
-memory=4GB
-vmIdleTimeout=10000
-
-[experimental]
-autoMemoryReclaim=gradual
-```
+- **Provider says "Signed out":** Click **Sign in** on the dashboard or in **Settings > Sign-ins**, or sign in directly on Windows (`claude`, `codex login` or the Codex app, or Antigravity). For Codex, plan limits require a ChatGPT login rather than an API-key-only `auth.json`.
+- **Stale numbers / "Expired, waiting for ... to renew it":** For Claude and Gemini, automatic renewal runs at most every 30 minutes as long as `claude.exe` (on `PATH` or `%USERPROFILE%\.local\bin`) or `agy.exe` (on `PATH` or WinGet links) is installed. For Codex, open Codex on Windows. Opening any provider's own app renews its sign-in immediately.
+- **Claude says rate limited:** Anthropic rate-limits the OAuth usage endpoint. AgentsWinBar keeps showing your last good numbers and backs off for at least 10 minutes (persisted across restarts in `claude-cooldown.json`).
+- **Data is not refreshing:** Confirm **Developer mode** is turned off in Settings (it shows sample data and stops all fetches). Check your network, **Settings > Sign-ins**, and the dashboard's **Diagnostics** panel. Remember that adaptive backoff (up to 15 min) and battery saver (up to 30 min) space out idle refreshes.
+- **No cost totals shown:** Confirm **Show cost and token totals** is enabled in Settings, open the flyout or dashboard to trigger a scan, and check that Windows logs exist in `%USERPROFILE%\.claude\projects` or `%USERPROFILE%\.codex\sessions`. Gemini has no local logs.
+- **Install fails with `0x800B0109` or "The app package must be signed":** The release certificate (`CN=CodexBarWin OSS`) is not trusted in `LocalMachine\TrustedPeople`. Run `install.ps1` or import the release `.cer` from an administrator PowerShell.
+- **"Part of this app has been blocked" on a local build:** Windows App Control policies (such as Smart App Control) can block an unsigned `AgentsWinBar.exe` run from `bin\`. Install a signed MSIX package instead.
+- **Launching the app again does nothing:** AgentsWinBar runs as a single instance; check the system tray (including the `^` overflow menu). If it exited silently on startup, check `crash.log` in the data folder.
+- **Resetting settings or uninstalling:** Quit the app and delete `settings.json` to reset preferences (or delete `cost-index` to rebuild the cost index). To uninstall, use **Settings > Apps > Installed apps > AgentsWinBar > Uninstall** or run `Get-AppxPackage -Name AgentsWinBar | Remove-AppxPackage`. Shared runtimes, provider tools, and sign-ins are untouched; optionally remove `%LOCALAPPDATA%\AgentsWinBar-Setup` and any leftover files in the app data folder.
 
 ## Development
+
+Built with **.NET 10**, **WinUI 3** (Windows App SDK 1.8), **CommunityToolkit.Mvvm**, **H.NotifyIcon.WinUI**, and **MSTest**.
 
 ```powershell
 dotnet restore AgentsWinBar.sln
@@ -405,15 +227,20 @@ dotnet build AgentsWinBar.csproj -c Release -p:Platform=x64 -p:PublishReadyToRun
 dotnet test AgentsWinBar.Tests.Unit -c Debug -p:Platform=x64
 ```
 
-Stack: .NET 10, WinUI 3 (Windows App SDK 1.8), MVVM with CommunityToolkit, H.NotifyIcon, MSTest. Pure logic (pace, alerts, bar selection, formatting) is covered by unit tests; new files in `Services/`, `Models/` and `Helpers/` need tests and must be linked into the test project.
+New files under `Services/`, `Models/`, and `Helpers/` must be linked into the unit test project. To package a signed MSIX locally, create a self-signed code-signing certificate with subject `CN=CodexBarWin OSS`, trust it in `LocalMachine\TrustedPeople`, bump `Identity Version` in `Package.appxmanifest`, build the sideload MSIX, and sign it with Windows SDK `signtool`.
 
-Releases are built by [`release.yml`](.github/workflows/release.yml): push a tag like `v0.9.6` and CI builds, signs and publishes the MSIX and certificate.
-
-- [Contributing guidelines](CONTRIBUTING.md)
+- [Install guide for AI agents](INSTALL.md)
+- [Performance: how memory and CPU were measured](PERFORMANCE.md)
 - [Changelog](CHANGELOG.md)
+- [Contributing guidelines](CONTRIBUTING.md)
 - [Security policy](SECURITY.md)
 - [Code of conduct](CODE_OF_CONDUCT.md)
+- [Third-party notices](THIRD-PARTY-NOTICES.md)
 
 ## Credits and license
 
-Built on [nek0der/CodexBarWin](https://github.com/nek0der/CodexBarWin) and the [CodexBar](https://github.com/steipete/CodexBar) CLI by Peter Steinberger. MIT licensed, see [LICENSE.txt](LICENSE.txt). Third-party licenses are checked in CI.
+AgentsWinBar grew out of [nek0der/CodexBarWin](https://github.com/nek0der/CodexBarWin) (MIT), which brought [Peter Steinberger's CodexBar](https://github.com/steipete/CodexBar) (MIT) to Windows. Huge thanks to both projects: AgentsWinBar's native Windows usage readers and built-in pricing tables are ported from CodexBar, and live model pricing comes from [models.dev](https://models.dev) (MIT).
+
+AgentsWinBar is an independent open-source project and is not affiliated with Anthropic, OpenAI, or Google.
+
+Licensed under the [MIT License](LICENSE.txt). Third-party package licenses are tracked in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) and checked in CI.
