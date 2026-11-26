@@ -80,7 +80,8 @@ public sealed partial class DashboardAppWindow : Window
         // Redraw shortly after new data arrives (several providers can land in quick succession).
         // Every 30 seconds: refresh the relative times on the current snapshot (DashboardClockUpdater). A fresh snapshot
         // is taken instead when a boundary was crossed (reset, midnight, expiry) or a full redraw was skipped or failed
-        // since the last one (DashboardRedrawTracker); the page then skips whatever did not change.
+        // since the last one, and on every 10th tick (5 minutes) without one, so values that change without a notification
+        // cannot stay stale for long (DashboardRedrawTracker); the page then skips whatever did not change.
         var queue = DispatcherQueue.GetForCurrentThread();
         _redrawTimer = queue.CreateTimer();
         _redrawTimer.Interval = TimeSpan.FromMilliseconds(250);

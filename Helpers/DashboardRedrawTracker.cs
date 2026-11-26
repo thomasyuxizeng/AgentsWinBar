@@ -5,18 +5,34 @@ namespace AgentsWinBar.Helpers;
 /// snapshot, see <see cref="DashboardClockUpdater"/>) or must take a fresh snapshot. A full redraw that was skipped (locked
 /// screen, hidden window) or failed leaves one pending, and the next clock tick that runs does it, so nothing that
 /// arrived meanwhile stays off screen. The lock state is polled, not signalled, so the tick itself is the catch-up point.
+/// Every <see cref="FullRedrawEveryTicks"/>th tick without a full redraw also takes one, so values that change without
+/// a notification (history file size, cost cache attempts) cannot stay stale for long; the page still skips whatever
+/// did not change.
 /// </summary>
 public sealed class DashboardRedrawTracker
 {
+    /// <summary>Ten 30-second ticks: at most five minutes between full redraws while the dashboard is shown.</summary>
+    public const int FullRedrawEveryTicks = 10;
+
+    private int _ticksSinceFullRedraw;
+
     /// <summary>True while a full redraw was skipped or failed and no full redraw has succeeded since.</summary>
     public bool RedrawPending { get; private set; }
 
     /// <summary>A full redraw was skipped or failed: the next clock tick must take a fresh snapshot.</summary>
     public void RedrawMissed() => RedrawPending = true;
 
-    /// <summary>A full redraw succeeded.</summary>
-    public void RedrawDone() => RedrawPending = false;
+    /// <summary>A full redraw succeeded: nothing is pending and the periodic count starts again.</summary>
+    public void RedrawDone()
+    {
+        RedrawPending = false;
+        _ticksSinceFullRedraw = 0;
+    }
 
     /// <summary>Called once per clock tick that runs; true when this tick must do a full redraw.</summary>
-    public bool ClockTickNeedsFullRedraw() => RedrawPending;
+    public bool ClockTickNeedsFullRedraw()
+    {
+        if (_ticksSinceFullRedraw < FullRedrawEveryTicks) _ticksSinceFullRedraw++;
+        return RedrawPending || _ticksSinceFullRedraw >= FullRedrawEveryTicks;
+    }
 }

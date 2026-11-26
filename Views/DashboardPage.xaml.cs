@@ -183,12 +183,14 @@ public sealed partial class DashboardPage : Page
 
     private void OnDiagnosticsExpanding(Expander sender, ExpanderExpandingEventArgs args)
     {
-        if (_disposed || _pendingDiagnostics is not { } pending) return;
+        if (_disposed) return;
+        var pending = _pendingDiagnostics;
         _pendingDiagnostics = null;
         try
         {
-            if (!DashboardContent.DiagnosticsEquals(Diagnostics.Data, pending)) Diagnostics.Data = pending;
-            else Diagnostics.RefreshTimes();
+            // Nothing new since it was last open: its relative times were not refreshed while it was collapsed
+            if (pending == null || DashboardContent.DiagnosticsEquals(Diagnostics.Data, pending)) Diagnostics.RefreshTimes();
+            else Diagnostics.Data = pending;
         }
         catch (Exception ex) { App.LogHandled("Dashboard diagnostics expand failed", ex); }
     }
