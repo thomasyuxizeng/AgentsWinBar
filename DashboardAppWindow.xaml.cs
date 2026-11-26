@@ -45,6 +45,7 @@ public sealed partial class DashboardAppWindow : Window
     private readonly AppWindow _appWindow;
     private volatile bool _closed;
     private bool _redrawing;
+    private readonly DashboardRedrawTracker _redrawTracker = new();
     /// <summary>True while the window is minimised or hidden: nothing is drawn and no timer runs.</summary>
     private bool _hidden;
     private bool _topmost;
@@ -77,8 +78,9 @@ public sealed partial class DashboardAppWindow : Window
         UpdateWindowIcon();
 
         // Redraw shortly after new data arrives (several providers can land in quick succession).
-        // Every 30 seconds: take a fresh snapshot (the page skips whatever did not change and just refreshes the
-        // relative times), so nothing the change notifications missed stays stale.
+        // Every 30 seconds: refresh the relative times on the current snapshot (DashboardClockUpdater). A fresh snapshot
+        // is taken instead when a boundary was crossed (reset, midnight, expiry) or a full redraw was skipped or failed
+        // since the last one (DashboardRedrawTracker); the page then skips whatever did not change.
         var queue = DispatcherQueue.GetForCurrentThread();
         _redrawTimer = queue.CreateTimer();
         _redrawTimer.Interval = TimeSpan.FromMilliseconds(250);
@@ -219,8 +221,14 @@ public sealed partial class DashboardAppWindow : Window
 
     private void Redraw()
     {
-        // Nobody sees a locked screen; the 30-second clock redraws once it is unlocked (a cheap query, not a snapshot)
-        if (_closed || _redrawing || _hidden || _page == null || SessionStateNative.IsCurrentSessionLocked()) return;
+        if (_closed) return;
+        // Nobody sees a locked screen (a cheap query, not a snapshot). A skipped redraw stays pending: the first 30-second
+        // clock tick after the unlock (or after the window is shown again) takes the fresh snapshot instead.
+        if (_redrawing || _hidden || _page == null || SessionStateNative.IsCurrentSessionLocked())
+        {
+            _redrawTracker.RedrawMissed();
+            return;
+        }
         _redrawing = true;
         try
         {
@@ -232,6 +240,7 @@ public sealed partial class DashboardAppWindow : Window
             var snapshotEnd = timing ? Stopwatch.GetTimestamp() : 0;
             _page.SetHiddenGraphs(GraphVisibility.HiddenIds(_settings.Settings.Providers));
             _page.Update(snapshot);
+            _redrawTracker.RedrawDone();
             if (timing) _logger.LogDebug("Dashboard redraw: GetSnapshot {SnapshotMs:F2} ms, Page.Update {UpdateMs:F2} ms",
                 Stopwatch.GetElapsedTime(start, snapshotEnd).TotalMilliseconds,
                 Stopwatch.GetElapsedTime(snapshotEnd).TotalMilliseconds);
@@ -239,6 +248,7 @@ public sealed partial class DashboardAppWindow : Window
         catch (Exception ex)
         {
             _logger.LogError(ex, "Dashboard redraw failed");
+            _redrawTracker.RedrawMissed();
         }
         finally { _redrawing = false; }
     }
@@ -365,6 +375,11 @@ public sealed partial class DashboardAppWindow : Window
     private void RefreshClock()
     {
         if (_closed || _redrawing || _hidden || _page == null || SessionStateNative.IsCurrentSessionLocked()) return;
+        if (_redrawTracker.ClockTickNeedsFullRedraw())
+        {
+            Redraw();
+            return;
+        }
         _redrawing = true;
         try
         {
@@ -378,6 +393,8 @@ public sealed partial class DashboardAppWindow : Window
         catch (Exception ex)
         {
             _logger.LogError(ex, "Dashboard clock refresh failed");
+            // The next tick takes a fresh snapshot instead of retrying the cheap path on a half-applied one
+            _redrawTracker.RedrawMissed();
             return;
         }
         finally { _redrawing = false; }

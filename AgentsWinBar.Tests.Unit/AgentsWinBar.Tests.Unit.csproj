@@ -70,6 +70,7 @@
     <Compile Include="..\Helpers\DashboardValues.cs" Link="Linked\DashboardValues.cs" />
     <Compile Include="..\Helpers\DashboardContent.cs" Link="Linked\DashboardContent.cs" />
     <Compile Include="..\Helpers\DashboardClockUpdater.cs" Link="Linked\DashboardClockUpdater.cs" />
+    <Compile Include="..\Helpers\DashboardRedrawTracker.cs" Link="Linked\DashboardRedrawTracker.cs" />
     <Compile Include="..\Helpers\DashboardGlance.cs" Link="Linked\DashboardGlance.cs" />
     <Compile Include="..\Helpers\GraphVisibility.cs" Link="Linked\GraphVisibility.cs" />
     <Compile Include="..\Helpers\DashboardSnapshotBuilder.cs" Link="Linked\DashboardSnapshotBuilder.cs" />
