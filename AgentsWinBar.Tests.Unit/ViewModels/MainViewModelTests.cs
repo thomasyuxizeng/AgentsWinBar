@@ -314,7 +314,7 @@ public class MainViewModelTests
 
     private Task PeriodicRefreshAsync() => (Task)typeof(MainViewModel)
         .GetMethod("RefreshCoreAsync", BindingFlags.Instance | BindingFlags.NonPublic)!
-        .Invoke(_viewModel, [false, null, null])!;
+        .Invoke(_viewModel, [false, null, null, null])!;
 
     private Task CostScanCompletion(bool background = true) => ((TaskCompletionSource)typeof(MainViewModel)
         .GetField(background ? "_backgroundCostRefreshCompletion" : "_costRefreshCompletion",

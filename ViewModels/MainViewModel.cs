@@ -82,6 +82,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private readonly Dictionary<string, DateTime> _lastResultUtc = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, int> _providerStreaks = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, UsageFingerprint> _providerFingerprints = new(StringComparer.OrdinalIgnoreCase);
+    // The providers the running refresh reads; null while it reads every enabled provider (or none runs)
+    private HashSet<string>? _inFlightProviders;
+    // Asked for during a partial refresh: read right after it (a full follow-up, _refreshPending, covers them)
+    private readonly HashSet<string> _pendingProviders = new(StringComparer.OrdinalIgnoreCase);
+    private RefreshStartLog? _pendingLog;
+    private RefreshStartLog? _pendingPartialLog;
     /// <summary>A refresh that fires up to this much before a provider is due (timer and wall clock disagree) still takes it.</summary>
     private static readonly TimeSpan DueTolerance = TimeSpan.FromSeconds(1);
 
@@ -186,8 +192,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             return;
         }
         RestoreLastKnownUsage();
-        LogRefreshForAll("Startup", RefreshReason.First);
-        await RefreshCoreAsync();
+        await RefreshCoreAsync(log: new("Startup", RefreshReason.First));
     }
 
     internal void RestoreLastKnownUsage()
@@ -276,6 +281,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _stopped = true;
         CancelApiCredits();
         _refreshPending = false;
+        _pendingProviders.Clear();
+        _pendingLog = _pendingPartialLog = null;
         _refreshCts?.Cancel();
         _timerCts?.Cancel();
         _timerCts?.Dispose();
@@ -290,8 +297,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private Task RefreshAsync()
     {
         ResetAdaptiveRefresh();
-        LogRefreshForAll("Manual", RefreshReason.Manual);
-        return RefreshCoreAsync(forceCostRefresh: true);
+        return RefreshCoreAsync(forceCostRefresh: true, log: new("Manual", RefreshReason.Manual));
     }
 
     /// <summary>
@@ -308,8 +314,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             (LastUpdated != default && age >= TimeSpan.Zero && age <= maxAge)) return Task.CompletedTask;
         ResetAdaptiveRefresh();
         if (IsLoading) return _refreshCompletion?.Task ?? Task.CompletedTask;
-        LogRefreshForAll("OnOpen", RefreshReason.OnOpen);
-        return RefreshCoreAsync();
+        return RefreshCoreAsync(log: new("OnOpen", RefreshReason.OnOpen));
     }
 
     /// <summary>
@@ -328,9 +333,14 @@ public partial class MainViewModel : ObservableObject, IDisposable
             .Select(due => due.Provider).ToList();
         if (stale.Count == 0) return Task.CompletedTask;
         ResetAdaptiveRefresh();
-        if (IsLoading) return _refreshCompletion?.Task ?? Task.CompletedTask;
-        LogRefresh("OnOpen", stale.Select(provider => new ProviderRefreshDue(provider, now, TimeSpan.Zero, RefreshReason.OnOpen)));
-        return RefreshCoreAsync(onlyProviders: stale);
+        var log = new RefreshStartLog("OnOpen", RefreshReason.OnOpen);
+        if (IsLoading)
+        {
+            // The stale providers the running refresh does not read are read right after it
+            QueueBehindInFlight(stale, log);
+            return _refreshCompletion?.Task ?? Task.CompletedTask;
+        }
+        return RefreshCoreAsync(onlyProviders: stale, log: log);
     }
 
     /// <summary>
@@ -348,9 +358,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 return;
             }
             ResetAdaptiveRefresh();
-            if (IsLoading) { _refreshPending = true; return; }
-            LogRefreshForAll("SignIn", RefreshReason.Manual);
-            RefreshCoreAsync().SafeFireAndForget(onError: ex => _logger.LogError(ex, "Sign-in refresh failed"));
+            var log = new RefreshStartLog("SignIn", RefreshReason.Manual);
+            if (IsLoading) { QueueFullRefresh(log); return; }
+            RefreshCoreAsync(log: log).SafeFireAndForget(onError: ex => _logger.LogError(ex, "Sign-in refresh failed"));
         }
         catch (Exception ex)
         {
@@ -706,8 +716,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
     /// Read only these providers (the per-provider schedule); the others keep their readings and fetch times. Null
     /// (and a list naming every enabled provider) reads them all.
     /// </param>
+    /// <param name="log">The schedule log lines, written only when the refresh actually starts.</param>
     private async Task RefreshCoreAsync(bool forceCostRefresh = false, IReadOnlyList<EarlyResetWindowReading>? resetTargets = null,
-        IReadOnlyCollection<string>? onlyProviders = null)
+        IReadOnlyCollection<string>? onlyProviders = null, RefreshStartLog? log = null)
     {
         if (_stopped || _disposed || _exiting)
         {
@@ -723,7 +734,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
             _costRefreshCts?.Cancel();
             _backgroundCostRefreshCts?.Cancel();
         }
-        if (IsLoading) return;
+        if (IsLoading)
+        {
+            QueueBehindInFlight(onlyProviders, log);
+            return;
+        }
         forceCostRefresh |= _forceCostRefreshPending;
 
         // Check if this is the first load (no existing data)
@@ -736,6 +751,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _adaptiveResetPending = false;
         _forceCostRefreshPending = forceCostRefresh;
         IsLoading = true;
+        _inFlightProviders = PartialSet(onlyProviders);
         ErrorMessage = null;
         using var refreshCts = new CancellationTokenSource();
         _refreshCts = refreshCts;
@@ -787,6 +803,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             attempted = partial ?? enabledIds;
             // Every provider that was due has been disabled meanwhile
             if (attempted.Count == 0) return;
+            LogStart(log, attempted);
             if (ActivityRefreshOn) held = CooldownsAt(attempted, DateTime.UtcNow);
 
             // The providers being read are loading again (existing data stays visible while it refreshes)
@@ -932,6 +949,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     _lastFetchUtc[provider] = triedAt;
                 }
             }
+            _inFlightProviders = null;
             if (!_disposed)
             {
                 for (var i = 0; i < Providers.Count; i++)
@@ -943,16 +961,23 @@ public partial class MainViewModel : ObservableObject, IDisposable
             // Finish usage and restore its timer before starting any potentially slow cost work.
             // Keep the forced-pending guard until the background scan registers its owner synchronously.
             forceCostRefresh |= _forceCostRefreshPending;
-            if (costProviders != null && !ct.IsCancellationRequested && !_refreshPending)
+            var followUp = _refreshPending || _pendingProviders.Count > 0;
+            if (costProviders != null && !ct.IsCancellationRequested && !followUp)
                 RefreshBackgroundCostsAsync(costProviders, forceCostRefresh).SafeFireAndForget(
                     onError: ex => _logger.LogError(ex, "Background cost refresh failed"));
-            else if (!_refreshPending)
+            else if (!followUp)
                 ScheduleWorkingSetTrim();
             _forceCostRefreshPending = false;
-            if (_refreshPending && !_disposed && !_stopped && !_exiting)
+            if (followUp && !_disposed && !_stopped && !_exiting)
             {
+                // A full follow-up reads every provider; otherwise only those asked for during this partial refresh
+                IReadOnlyCollection<string>? only = _refreshPending ? null : _pendingProviders.ToArray();
+                var pendingLog = _refreshPending ? _pendingLog : _pendingPartialLog;
                 _refreshPending = false;
-                RefreshCoreAsync(forceCostRefresh).SafeFireAndForget(onError: ex => _logger.LogError(ex, "Pending settings refresh failed"));
+                _pendingProviders.Clear();
+                _pendingLog = _pendingPartialLog = null;
+                RefreshCoreAsync(forceCostRefresh, onlyProviders: only, log: pendingLog)
+                    .SafeFireAndForget(onError: ex => _logger.LogError(ex, "Pending refresh failed"));
             }
         }
     }
@@ -1107,10 +1132,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
             }
             if (!ActivityRefreshOn)
             {
-                if (_scheduleLog.IsEnabled(LogLevel.Information))
-                    LogRefresh("Scheduled", BuildPlan(DateTime.UtcNow, legacy: true)
-                        .Select(due => targets == null ? due : due with { Reason = RefreshReason.Reset }));
-                await RefreshCoreAsync(resetTargets: targets);
+                var lines = _scheduleLog.IsEnabled(LogLevel.Information)
+                    ? BuildPlan(DateTime.UtcNow, legacy: true)
+                        .Select(due => targets == null ? due : due with { Reason = RefreshReason.Reset }).ToList()
+                    : null;
+                await RefreshCoreAsync(resetTargets: targets,
+                    log: lines == null ? null : new("Scheduled", RefreshReason.Idle, lines));
                 return;
             }
             // Re-plan at the time of the wake-up: activity, settings or a lock may have changed while waiting.
@@ -1134,8 +1161,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 RecreateTimer();
                 return;
             }
-            LogRefresh("Scheduled", dueNow);
-            await RefreshCoreAsync(resetTargets: targets, onlyProviders: dueNow.Select(d => d.Provider).ToArray());
+            await RefreshCoreAsync(resetTargets: targets, onlyProviders: dueNow.Select(d => d.Provider).ToArray(),
+                log: new("Scheduled", RefreshReason.Idle, dueNow));
         }
         catch (OperationCanceledException)
         {
@@ -1204,9 +1231,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
             _backgroundCostRefreshCts?.Cancel();
             if (!_settingsService.Settings.ShowCostTotals)
                 for (var i = 0; i < Providers.Count; i++) Providers[i] = Providers[i] with { Cost = null };
-            if (IsLoading) { _refreshPending = true; _refreshCts?.Cancel(); return; }
-            LogRefreshForAll("Settings", RefreshReason.Manual);
-            await RefreshCoreAsync();
+            var log = new RefreshStartLog("Settings", RefreshReason.Manual);
+            if (IsLoading) { QueueFullRefresh(log); _refreshCts?.Cancel(); return; }
+            await RefreshCoreAsync(log: log);
         }
         catch (Exception ex)
         {
@@ -1363,11 +1390,54 @@ public partial class MainViewModel : ObservableObject, IDisposable
         held != null && held.TryGetValue(provider, out var until) && until > resultAtUtc && RateLimitedUntil(provider) == until
             ? provider : null;
 
-    private void LogRefreshForAll(string trigger, RefreshReason reason)
+    /// <summary>The schedule log lines a refresh writes when it actually starts (one per provider it reads).</summary>
+    /// <param name="Lines">Planned lines; null writes one line with <paramref name="Reason"/> for each provider read.</param>
+    private sealed record RefreshStartLog(string Trigger, RefreshReason Reason, IReadOnlyList<ProviderRefreshDue>? Lines = null);
+
+    /// <summary>The providers a refresh of <paramref name="onlyProviders"/> reads, or null when it reads every enabled one.</summary>
+    private HashSet<string>? PartialSet(IReadOnlyCollection<string>? onlyProviders)
     {
-        if (!_scheduleLog.IsEnabled(LogLevel.Information)) return;
+        if (onlyProviders == null) return null;
+        var enabled = EnabledProviderIds();
+        var read = enabled.Where(provider => onlyProviders.Contains(provider, StringComparer.OrdinalIgnoreCase))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return read.Count < enabled.Count ? read : null;
+    }
+
+    /// <summary>A refresh of every provider asked for while one runs: it follows the running one.</summary>
+    private void QueueFullRefresh(RefreshStartLog log)
+    {
+        _refreshPending = true;
+        _pendingLog = log;
+    }
+
+    /// <summary>
+    /// A refresh asked for while another runs. One that reads every provider covers it (as before the per-provider
+    /// schedule). Behind a partial one, a refresh of every provider, or the asked-for providers it does not read, follow it.
+    /// </summary>
+    private void QueueBehindInFlight(IReadOnlyCollection<string>? providers, RefreshStartLog? log)
+    {
+        if (_inFlightProviders is not { } inFlight) return;
+        if (providers == null)
+        {
+            _refreshPending = true;
+            _pendingLog = log ?? _pendingLog;
+            return;
+        }
+        var queued = false;
+        foreach (var provider in providers)
+            queued |= !inFlight.Contains(provider) && _pendingProviders.Add(provider);
+        if (queued && log != null) _pendingPartialLog = log;
+    }
+
+    /// <summary>Writes the schedule lines of a refresh that starts now, for the providers it reads.</summary>
+    private void LogStart(RefreshStartLog? log, IReadOnlyList<string> attempted)
+    {
+        if (log == null || !_scheduleLog.IsEnabled(LogLevel.Information)) return;
         var now = DateTime.UtcNow;
-        LogRefresh(trigger, EnabledProviderIds().Select(provider => new ProviderRefreshDue(provider, now, TimeSpan.Zero, reason)));
+        LogRefresh(log.Trigger, log.Lines?.Where(due => attempted.Contains(due.Provider, StringComparer.OrdinalIgnoreCase)) ??
+            attempted.Distinct(StringComparer.OrdinalIgnoreCase)
+                .Select(provider => new ProviderRefreshDue(provider, now, TimeSpan.Zero, log.Reason)));
     }
 
     /// <summary>One line per provider read: the trigger, the provider and why (no paths, no usage values).</summary>

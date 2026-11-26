@@ -25,6 +25,8 @@ public class MainViewModelActivityRefreshTests
     private readonly ListLogger<RefreshScheduleLog> _scheduleLog = new();
     private readonly List<string[]> _subsetReads = [];
     private readonly HashSet<string> _failing = [];
+    // While set, every read waits for it before answering (a refresh stays in flight)
+    private TaskCompletionSource? _hold;
     private int _allReads;
     private int _reading;
     private AppSettings _values = null!;
@@ -66,6 +68,7 @@ public class MainViewModelActivityRefreshTests
 
     private async IAsyncEnumerable<UsageData> Read(IEnumerable<string> providers, [EnumeratorCancellation] CancellationToken ct = default)
     {
+        if (_hold is { } hold) await hold.Task.WaitAsync(ct);
         foreach (var provider in providers.ToArray())
         {
             await Task.Yield();
@@ -98,6 +101,25 @@ public class MainViewModelActivityRefreshTests
         .Invoke(_viewModel, [null]);
 
     private UsageData Shown(string provider) => _viewModel.Providers.Single(p => p.Provider == provider);
+
+    private static async Task WaitUntilAsync(Func<bool> condition)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+        while (!condition() && DateTime.UtcNow < deadline) await Task.Delay(10);
+        condition().Should().BeTrue();
+    }
+
+    /// <summary>Starts a scheduled refresh of Codex alone and leaves it in flight until <see cref="_hold"/> is released.</summary>
+    private async Task<Task> PartialRefreshInFlightAsync()
+    {
+        _activity.Touch("codex");
+        await _viewModel.StartAsync();
+        FetchedAgo("codex", TimeSpan.FromMinutes(2.5));
+        _hold = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        var scheduled = TimerFiresAsync();
+        _viewModel.IsLoading.Should().BeTrue();
+        return scheduled;
+    }
 
     [TestMethod]
     public async Task StartAsync_ToolInUse_SchedulesTwoMinutesAndShowsWhichProvider()
@@ -432,6 +454,75 @@ public class MainViewModelActivityRefreshTests
         await _viewModel.RefreshCommand.ExecuteAsync(null);
 
         Stamps("_lastFetchUtc")["claude"].Should().BeCloseTo(DateTime.UtcNow, TimeSpan.FromSeconds(5));
+    }
+
+    [TestMethod]
+    public async Task RefreshCommand_DuringPartialRefresh_ReadsEveryProviderRightAfterIt()
+    {
+        var scheduled = await PartialRefreshInFlightAsync();
+
+        await _viewModel.RefreshCommand.ExecuteAsync(null);
+        _allReads.Should().Be(1);
+        _scheduleLog.Messages.Should().NotContain(m => m.StartsWith("Manual refresh"), "nothing started yet");
+        _hold!.SetResult();
+        await scheduled;
+        await WaitUntilAsync(() => _allReads == 2 && !_viewModel.IsLoading);
+
+        _subsetReads.Should().ContainSingle().Which.Should().Equal("codex");
+        _scheduleLog.Messages.Should().Contain("Manual refresh of claude: Manual, back-off step 0, interval 0 s, rate limited False");
+        _scheduleLog.Messages.Should().Contain(m => m.StartsWith("Manual refresh of codex: Manual"));
+    }
+
+    [TestMethod]
+    public async Task RefreshCommand_DuringFullRefresh_JoinsIt()
+    {
+        _hold = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        var start = _viewModel.StartAsync();
+        _viewModel.IsLoading.Should().BeTrue();
+
+        await _viewModel.RefreshCommand.ExecuteAsync(null);
+        _hold.SetResult();
+        await start;
+
+        _allReads.Should().Be(1);
+        _subsetReads.Should().BeEmpty();
+        _scheduleLog.Messages.Should().NotContain(m => m.StartsWith("Manual refresh"));
+        typeof(MainViewModel).GetField("_refreshPending", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .GetValue(_viewModel).Should().Be(false);
+    }
+
+    [TestMethod]
+    public async Task RefreshIfStaleAsync_DuringPartialRefresh_ReadsTheOtherStaleProvidersRightAfterIt()
+    {
+        var scheduled = await PartialRefreshInFlightAsync();
+        // By the time a window opens both readings are 12 minutes old; Codex is already being read
+        FetchedAgo("claude", TimeSpan.FromMinutes(12));
+        FetchedAgo("codex", TimeSpan.FromMinutes(12));
+
+        var open = _viewModel.RefreshIfStaleAsync(TimeSpan.FromMinutes(2));
+        _hold!.SetResult();
+        await scheduled;
+        await open;
+        await WaitUntilAsync(() => _subsetReads.Count == 2 && !_viewModel.IsLoading);
+
+        _subsetReads[0].Should().Equal("codex");
+        _subsetReads[1].Should().Equal("claude");
+        _scheduleLog.Messages.Should().Contain(m => m.StartsWith("OnOpen refresh of claude: OnOpen"));
+        _scheduleLog.Messages.Should().NotContain(m => m.StartsWith("OnOpen refresh of codex"), "codex was already being read");
+    }
+
+    [TestMethod]
+    public async Task SettingsChanged_DuringPartialRefresh_LogsTheFollowUpWhenItStarts()
+    {
+        var scheduled = await PartialRefreshInFlightAsync();
+
+        _settings.Raise(s => s.SettingsChanged += null, EventArgs.Empty);
+        _hold!.SetResult();
+        await scheduled;
+        await WaitUntilAsync(() => _allReads == 2 && !_viewModel.IsLoading);
+
+        _scheduleLog.Messages.Should().Contain(m => m.StartsWith("Settings refresh of claude: Manual"));
+        _scheduleLog.Messages.Should().Contain(m => m.StartsWith("Settings refresh of codex: Manual"));
     }
 
     [TestMethod]
