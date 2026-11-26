@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using System.Runtime.CompilerServices;
 using AgentsWinBar.Services;
 using AwesomeAssertions;
 using Microsoft.Extensions.Logging;
@@ -14,6 +16,31 @@ public class FileLoggerProviderTests
 
     [TestCleanup]
     public void Cleanup() => _directory.Delete(recursive: true);
+
+    [TestMethod]
+    public void DescribeException_WhenThrownWithInner_ReturnsTypesAndFramesWithoutMessages()
+    {
+        Exception caught;
+        try { ThrowWrapped(); throw new UnreachableException(); }
+        catch (Exception ex) { caught = ex; }
+
+        var text = RollingLogFile.DescribeException(caught);
+
+        text.Should().StartWith(" (System.InvalidOperationException)");
+        text.Should().Contain("inner (System.IO.IOException)");
+        text.Should().Contain(nameof(ThrowWrapped)).And.Contain(nameof(ThrowInner));
+        text.Should().NotContain("synthetic outer message").And.NotContain(@"C:\synthetic\private\path");
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void ThrowWrapped()
+    {
+        try { ThrowInner(); }
+        catch (IOException inner) { throw new InvalidOperationException("synthetic outer message", inner); }
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void ThrowInner() => throw new IOException(@"C:\synthetic\private\path could not be read");
 
     [TestMethod]
     public void Log_WhenExceptionIsAttached_WritesItsTypeAndOmitsItsMessage()

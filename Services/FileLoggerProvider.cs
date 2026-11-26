@@ -68,6 +68,22 @@ internal static class RollingLogFile
         }
     }
 
+    /// <summary>
+    /// The exception's type and stack frames, then those of up to three inner exceptions, outermost first. Messages are
+    /// left out: they can carry file paths, response text or other data from the user's machine.
+    /// </summary>
+    internal static string DescribeException(Exception exception)
+    {
+        var text = new StringBuilder();
+        var depth = 0;
+        for (var current = exception; current != null && depth < 4; current = current.InnerException, depth++)
+        {
+            text.Append(depth == 0 ? " (" : Environment.NewLine + "  inner (").Append(current.GetType().FullName).Append(')');
+            if (current.StackTrace is { Length: > 0 } stack) text.Append(Environment.NewLine).Append(stack);
+        }
+        return text.ToString();
+    }
+
     private static int EncodeTruncated(string line, Span<byte> destination)
     {
         Encoding.UTF8.GetEncoder().Convert(line, destination, flush: true, out _, out var written, out _);

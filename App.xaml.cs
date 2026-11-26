@@ -70,8 +70,9 @@ public partial class App : Application
         try
         {
             var folder = NativeTestOverrides.Current?.AppDataDirectory ?? AppPaths.DataDirectory;
-            var exceptionType = ex == null ? string.Empty : $" ({ex.GetType().Name})";
-            RollingLogFile.Append(Path.Combine(folder, "crash.log"), $"{DateTimeOffset.UtcNow:O} {source}{exceptionType}");
+            // Types and stack frames are enough to diagnose a crash; messages stay out (see DescribeException).
+            var details = ex == null ? string.Empty : RollingLogFile.DescribeException(ex);
+            RollingLogFile.Append(Path.Combine(folder, "crash.log"), $"{DateTimeOffset.UtcNow:O} {source}{details}");
         }
         catch
         {
