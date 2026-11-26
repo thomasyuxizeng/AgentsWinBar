@@ -288,17 +288,36 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - name: Download all artifacts
+      # Exact names, never a pattern: any job in the run can upload artifacts, and only the sign and cert jobs'
+      # uploads may reach the release (a second upload under one of these names fails in that job).
+      - name: Download signed x64 package
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
+          name: release-x64
           path: artifacts
-          pattern: release-*
-          merge-multiple: true
+
+      - name: Download signed ARM64 package
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-ARM64
+          path: artifacts
+
+      - name: Download public certificates
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-certificate
+          path: artifacts
 
       - name: Verify release artifacts
         shell: bash
         run: |
+          pin=$(sed -n "s/^\$ExpectedReleaseCertificateThumbprint = '\([A-F0-9]\{40\}\)'.*/\1/p" install.ps1 | head -n 1)
+          test -n "$pin" || { echo "install.ps1 does not pin a release certificate thumbprint." >&2; exit 1; }
           cd artifacts
+          test "$(ls | wc -l)" -eq 8 || { echo "Expected exactly eight release files, found: $(ls | tr '\n' ' ')" >&2; exit 1; }
+          cmp "AgentsWinBar-$TAG-Certificate.cer" AgentsWinBar-Certificate.cer
+          thumb=$(openssl x509 -inform DER -in "AgentsWinBar-$TAG-Certificate.cer" -noout -fingerprint -sha1 | sed 's/.*=//; s/://g' | tr 'a-f' 'A-F')
+          test "$thumb" = "$pin" || { echo "The release certificate differs from the thumbprint pinned in install.ps1." >&2; exit 1; }
           for platform in x64 ARM64; do
             for file in "AgentsWinBar-$TAG-$platform.msix" "AgentsWinBar-$platform.msix" "AgentsWinBar-$TAG-$platform.msix.sha256"; do
               test -f "$file" || { echo "Missing release artifact: $file" >&2; exit 1; }

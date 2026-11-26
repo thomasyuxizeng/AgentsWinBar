@@ -210,8 +210,18 @@ if ($Group -eq 'Workflow') {
     Assert-True (([regex]::Matches($release, 'contents: write')).Count -eq 1) 'only publish job has contents write'
     Assert-True ($release -notmatch 'RestorePackagesWithLockFile|--locked-mode|RestoreLockedMode') 'unverified NuGet lock mode is not enabled'
     Assert-True ($release.Contains('secrets.SIGNING_PFX_BASE64') -and $release.Contains('secrets.SIGNING_PFX_PASSWORD')) 'signing secret names are preserved'
-    $uses = @([regex]::Matches($release, '(?m)^\s+uses:\s*(\S+)') | ForEach-Object { $_.Groups[1].Value })
-    Assert-True (@($uses | Where-Object { $_ -notlike './*' -and $_ -notmatch '@[0-9a-f]{40}$' }).Count -eq 0) 'every external action is pinned to a commit SHA'
+    # Every workflow, not only release.yml: the release run calls test.yml and licenses.yml, and any job in a run can
+    # upload artifacts. The pattern also matches steps written as "- uses:".
+    foreach ($workflow in Get-ChildItem (Join-Path $root '.github/workflows') -Filter *.yml) {
+        $text = [IO.File]::ReadAllText($workflow.FullName)
+        $uses = @([regex]::Matches($text, '(?m)^\s*(?:-\s*)?uses:\s*(\S+)') | ForEach-Object { $_.Groups[1].Value })
+        Assert-True (@($uses | Where-Object { $_ -notlike './*' -and $_ -notmatch '@[0-9a-f]{40}$' }).Count -eq 0) "every external action in $($workflow.Name) is pinned to a commit SHA"
+    }
+    Assert-True ($jobs.release -notmatch '(?m)^\s+pattern:' -and $jobs.release -notmatch 'merge-multiple') 'the publish job downloads artifacts by exact name'
+    foreach ($artifact in @('release-x64', 'release-ARM64', 'release-certificate')) {
+        Assert-True ($jobs.release -match "(?m)^\s+name: $artifact\s*$") "the publish job downloads $artifact"
+    }
+    Assert-True ($jobs.release -match 'ExpectedReleaseCertificateThumbprint' -and $jobs.release -match 'openssl x509') 'the published certificate is checked against the installer pin'
     Assert-True ($jobs.build -notmatch 'SIGNING_PFX' -and $jobs.release -notmatch 'SIGNING_PFX') 'the build and publish jobs never see the signing key'
     Assert-True ($jobs.sign -notmatch 'actions/checkout|actions/cache|dotnet |msbuild') 'the signing job checks out, restores and builds nothing'
     Assert-True ($jobs.sign -match '/sha1' -and $release -notmatch 'signtool[^\r\n]*\s/p\s') 'signtool selects the key by thumbprint and never takes the password'
