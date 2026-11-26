@@ -18,12 +18,29 @@ The first release as AgentsWinBar, and the first that reads everything natively 
 
 ### Added
 - A Sign in button for a signed-out provider, on the dashboard, on the provider page and in Settings > Sign-ins, opening that provider's official sign-in.
-- An expired sign-in is renewed by the provider's own tool: `claude auth status --json` for Claude Code and `agy models` for Antigravity, each at most every 30 minutes, hidden, with its output discarded. `RenewClaudeSignIn` and `RenewGeminiSignIn` in settings.json turn them off.
+- An expired sign-in is renewed by the provider's own tool: `claude auth status --json` for Claude Code and `agy models` for Antigravity, hidden, with its output discarded, at most every 30 minutes and backing off to every 2 and then 6 hours while renewal keeps failing. `RenewClaudeSignIn` and `RenewGeminiSignIn` in settings.json turn them off.
+- Release builds keep two small local logs in the data folder: `app.log` for warnings and `crash.log` for unexpected errors, each capped at 1 MB with one older copy. They record exception types and stack frames, never exception messages.
 - The Gemini provider card on the dashboard shows this month's Gemini API spend, estimated at list prices from token counts in a local spend log, with cached input at the cache rate when the log records it (hidden when no log exists). The spend log path can be overridden through the `CODEXBAR_GEMINI_SPEND_LOG` environment variable.
 - The taskbar strip supports UI Automation's Invoke pattern, so assistive tools can open the flyout.
 
+### Security
+- Setup trusts and installs only packages signed by the release certificate (thumbprint `4E280F44AE28900533BBC497F28F62505990F3BD`) and stops when no certificate is pinned; before, any certificate named `CN=CodexBarWin OSS` was accepted.
+- Releases are signed in a separate job that checks out and builds nothing; the signing key is selected by thumbprint so its password never reaches a command line, every workflow action is pinned to a commit SHA, and the release fails when the signing secret differs from the installer's pin.
+- The Sign in buttons start each provider's tool by its full path from the system folder, with Command Prompt's AutoRun and current-folder search off, so a same-named file in the home folder cannot run instead.
+- Setup reads the repository from git only when the script sits in that checkout, and reads package manifests with DTDs prohibited and a size cap.
+- A malformed token in a provider's sign-in is treated as unreadable instead of reaching an HTTP header.
+
 ### Fixed
 - A click on a flyout button no longer leaves the app drawing frames in the background (15-30 ms of CPU every second until it restarted).
+- Gemini renewal no longer runs up to a minute early and then waits 30 minutes; a token that has not expired yet is still used.
+- Codex and Gemini respect HTTP 429 and its Retry-After, as Claude already did.
+- A fresh, unused Gemini account shows its limits instead of an error.
+- Cost totals: a damaged or outdated cost index is rebuilt from every log (it could be refilled only from changed files and show totals far too low), one log line with invalid UTF-8 no longer stops cost scans, and the full index check runs once per start instead of on every update. Daily totals follow a change of Windows time zone after a restart, and a Claude model the price catalog lists without cache rates uses the bundled cache rates (or stays unpriced) instead of the full input rate.
+- The log folder watchers stop 15 minutes after the last cost view closes.
+- The one-time import from CodexBarWin copies the cost index as a consistent snapshot and retries files that failed.
+- A Claude Code installed through npm (claude.cmd) gets a message to open Claude Code, since background renewal needs claude.exe.
+- A failed save of an early-reset record no longer breaks later refreshes, and a sign-in that writes its file more than once is still picked up.
+- A clean install with `-WithWsl` now points the app at the WSL route it set up.
 - A closed dashboard is fully released (page, backdrop and animation listeners), and its refresh spinner stops when it closes mid-refresh.
 - The app starts even when the Windows taskbar is not ready yet.
 - An expired sign-in shows the last reading as stale instead of signed out.
