@@ -162,8 +162,11 @@ jobs:
 
           msbuild AgentsWinBar.csproj /p:Configuration=Release /p:Platform=${{ matrix.platform }} /p:UapAppxPackageBuildMode=SideloadOnly /p:AppxBundle=Never /p:AppxPackageDir="AppPackages\" /p:AppxPackageSigningEnabled=false /p:GenerateAppxPackageOnBuild=true /p:PublishReadyToRun=false /p:AppxVersion="$appxVersion"
 
-          $msix = @(Get-ChildItem -Path "AppPackages" -Filter "*.msix" -Recurse)
-          if ($msix.Count -ne 1) { throw "Expected exactly one MSIX package, found $($msix.Count)." }
+          # Packaging also writes the Windows App Runtime framework packages under Dependencies\ (install.ps1
+          # installs that runtime itself), so match only the app's own package.
+          $msix = @(Get-ChildItem -Path "AppPackages" -Filter "AgentsWinBar_*.msix" -Recurse |
+            Where-Object { $_.FullName -notmatch '\\Dependencies\\' })
+          if ($msix.Count -ne 1) { throw "Expected exactly one AgentsWinBar MSIX package, found $($msix.Count)." }
           New-Item -ItemType Directory -Path unsigned | Out-Null
           Copy-Item $msix[0].FullName -Destination unsigned/AgentsWinBar-unsigned.msix
 
