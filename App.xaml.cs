@@ -23,6 +23,7 @@ public partial class App : Application
     private const string MutexName = "AgentsWinBar_SingleInstance";
 #endif
 
+    private readonly CancellationTokenSource _shutdown = new();
     private MainWindow? _mainWindow;
     private Window? _setupWindow;
 
@@ -93,7 +94,7 @@ public partial class App : Application
             if (!createdNew)
             {
                 // Another instance is already running
-                Exit();
+                ExitApplication();
                 return;
             }
 
@@ -151,7 +152,7 @@ public partial class App : Application
             LogCrash("Application launch failed", ex);
             Services.GetRequiredService<ILogger<App>>().LogError(ex, "Application launch failed");
             ReleaseMutex();
-            Exit();
+            ExitApplication();
         }
     }
 
@@ -164,6 +165,7 @@ public partial class App : Application
             Windows.Add(_mainWindow);
             _mainWindow.Closed += (s, e) =>
             {
+                _shutdown.Cancel();
                 Windows.Remove(_mainWindow);
                 ReleaseMutex();
             };
@@ -198,7 +200,11 @@ public partial class App : Application
     {
         _setupWindow = new SetupWindow();
         Windows.Add(_setupWindow);
-        _setupWindow.Closed += (s, e) => Windows.Remove(_setupWindow!);
+        _setupWindow.Closed += (s, e) =>
+        {
+            Windows.Remove(_setupWindow!);
+            if (_mainWindow is null) _shutdown.Cancel();
+        };
         _setupWindow.Activate();
 
         // Apply theme
@@ -278,7 +284,13 @@ public partial class App : Application
         }
     }
 
-    private static IServiceProvider ConfigureServices()
+    internal void ExitApplication()
+    {
+        _shutdown.Cancel();
+        Exit();
+    }
+
+    private IServiceProvider ConfigureServices()
     {
         var services = new ServiceCollection();
 
@@ -314,7 +326,7 @@ public partial class App : Application
         services.AddSingleton<Services.Native.INativeUsageService>(sp =>
             new Services.Native.NativeUsageService(sp.GetRequiredService<ILoggerFactory>(),
                 () => sp.GetRequiredService<ISettingsService>().Settings.RenewClaudeSignIn, testOverrides,
-                () => sp.GetRequiredService<ISettingsService>().Settings.RenewGeminiSignIn));
+                () => sp.GetRequiredService<ISettingsService>().Settings.RenewGeminiSignIn, _shutdown.Token));
         // Native cost scanner: index and refreshed prices live beside settings.json. CodexBarService uses it while
         // the cost source is "native"; nothing is scanned or watched before the first cost request.
         services.AddSingleton<Services.Native.INativeCostService>(sp =>

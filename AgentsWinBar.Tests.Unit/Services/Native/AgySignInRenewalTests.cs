@@ -39,13 +39,13 @@ public class AgySignInRenewalTests
     };
 
     private static (AntigravityNativeClient Client, RecordingHandler Handler, TestClock Clock, ListLogger<AntigravityNativeClient> Logger) Create(
-        MutableCredentialSource source, FakeRenewer renewer, bool enabled = true)
+        MutableCredentialSource source, FakeRenewer renewer, bool enabled = true, CancellationToken shutdown = default)
     {
         var handler = new RecordingHandler(Respond);
         var clock = new TestClock(Now);
         var logger = new ListLogger<AntigravityNativeClient>();
         var client = new AntigravityNativeClient(handler.Client(), logger, source,
-            new AntigravityNativeOptions { RenewExpiredSignIn = () => enabled }, clock, renewer);
+            new AntigravityNativeOptions { RenewExpiredSignIn = () => enabled, ShutdownToken = shutdown }, clock, renewer);
         return (client, handler, clock, logger);
     }
 
@@ -160,6 +160,30 @@ public class AgySignInRenewalTests
 
         result.Status.Should().Be(NativeUsageStatus.SignInExpired);
         handler.Requests.Should().BeEmpty();
+    }
+
+    [TestMethod]
+    public async Task FetchAsync_WhenApplicationShutsDown_CancelsInFlightRenewal()
+    {
+        using var shutdown = new CancellationTokenSource();
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var renewer = new FakeRenewer(gate: release.Task);
+        var (client, handler, _, _) = Create(ExpiredSource(), renewer, shutdown: shutdown.Token);
+
+        var fetch = client.FetchAsync();
+        try
+        {
+            await renewer.Started.WaitAsync(TimeSpan.FromSeconds(5));
+            shutdown.Cancel();
+            var result = await fetch.WaitAsync(TimeSpan.FromSeconds(2));
+            result.Status.Should().Be(NativeUsageStatus.SignInExpired);
+            handler.Requests.Should().BeEmpty();
+        }
+        finally
+        {
+            release.TrySetResult();
+            await fetch.WaitAsync(TimeSpan.FromSeconds(5));
+        }
     }
 
     [TestMethod]
@@ -388,7 +412,7 @@ public class AgySignInRenewalTests
             Interlocked.Increment(ref _runs);
             lock (Timeouts) Timeouts.Add(timeout);
             _started.TrySetResult();
-            if (gate != null) await gate;
+            if (gate != null) await gate.WaitAsync(ct);
             onRun?.Invoke();
             return new AgyModelsRun(timedOut ? null : exitCode, TimeSpan.FromSeconds(1.5), timedOut);
         }

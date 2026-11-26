@@ -30,13 +30,13 @@ public class ClaudeSignInRenewalTests
         """;
 
     private (ClaudeNativeClient Client, RecordingHandler Handler, TestClock Clock, ListLogger<ClaudeNativeClient> Logger) Create(
-        FakeRenewer renewer, bool enabled = true)
+        FakeRenewer renewer, bool enabled = true, CancellationToken shutdown = default)
     {
         var handler = new RecordingHandler(_ => Json(UsageJson));
         var clock = new TestClock(Now);
         var logger = new ListLogger<ClaudeNativeClient>();
         var client = new ClaudeNativeClient(handler.Client(), logger,
-            new ClaudeNativeOptions { CredentialsPath = _path, DisplayTimeZone = TimeZoneInfo.Utc, RenewExpiredSignIn = () => enabled },
+            new ClaudeNativeOptions { CredentialsPath = _path, DisplayTimeZone = TimeZoneInfo.Utc, RenewExpiredSignIn = () => enabled, ShutdownToken = shutdown },
             clock, renewer: renewer);
         return (client, handler, clock, logger);
     }
@@ -67,6 +67,30 @@ public class ClaudeSignInRenewalTests
         renewer.Runs.Should().Be(0);
         handler.Requests.Should().BeEmpty();
         logger.Messages.Should().Contain(m => m.Contains("not found"));
+    }
+
+    [TestMethod]
+    public async Task FetchAsync_WhenApplicationShutsDown_CancelsInFlightRenewal()
+    {
+        using var shutdown = new CancellationTokenSource();
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var renewer = new FakeRenewer(gate: release.Task);
+        var (client, handler, _, _) = Create(renewer, shutdown: shutdown.Token);
+
+        var fetch = client.FetchAsync();
+        try
+        {
+            await renewer.Started.WaitAsync(TimeSpan.FromSeconds(5));
+            shutdown.Cancel();
+            var result = await fetch.WaitAsync(TimeSpan.FromSeconds(2));
+            result.Status.Should().Be(NativeUsageStatus.SignInExpired);
+            handler.Requests.Should().BeEmpty();
+        }
+        finally
+        {
+            release.TrySetResult();
+            await fetch.WaitAsync(TimeSpan.FromSeconds(5));
+        }
     }
 
     [TestMethod]
@@ -242,20 +266,24 @@ public class ClaudeSignInRenewalTests
     private static string CommandShell() => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "cmd.exe");
 
     private sealed class FakeRenewer(Action<string>? onRun = null, string? executable = @"C:\synthetic\claude.exe",
-        int exitCode = 0, bool timedOut = false) : IClaudeSignInRenewer
+        int exitCode = 0, bool timedOut = false, Task? gate = null) : IClaudeSignInRenewer
     {
+        private readonly TaskCompletionSource _started = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private int _runs;
         public int Runs => Volatile.Read(ref _runs);
+        public Task Started => _started.Task;
         public List<TimeSpan> Timeouts { get; } = [];
 
         public string? FindClaudeExecutable() => executable;
 
-        public Task<ClaudeAuthStatusRun> RunAuthStatusAsync(string path, TimeSpan timeout, CancellationToken ct)
+        public async Task<ClaudeAuthStatusRun> RunAuthStatusAsync(string path, TimeSpan timeout, CancellationToken ct)
         {
             Interlocked.Increment(ref _runs);
             lock (Timeouts) Timeouts.Add(timeout);
+            _started.TrySetResult();
+            if (gate != null) await gate.WaitAsync(ct);
             onRun?.Invoke(path);
-            return Task.FromResult(new ClaudeAuthStatusRun(timedOut ? null : exitCode, TimeSpan.FromSeconds(1.5), timedOut));
+            return new ClaudeAuthStatusRun(timedOut ? null : exitCode, TimeSpan.FromSeconds(1.5), timedOut);
         }
     }
 }

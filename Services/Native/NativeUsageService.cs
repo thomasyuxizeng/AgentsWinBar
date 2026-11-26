@@ -49,13 +49,13 @@ public sealed class NativeUsageService : INativeTypedUsageService, IDisposable
     /// null in a Release build) points the readers at a fake profile, credential and server.
     /// </summary>
     public NativeUsageService(ILoggerFactory loggerFactory, Func<bool>? renewClaudeSignIn = null,
-        NativeTestOverrides? testOverrides = null, Func<bool>? renewGeminiSignIn = null)
+        NativeTestOverrides? testOverrides = null, Func<bool>? renewGeminiSignIn = null, CancellationToken shutdownToken = default)
     {
         _logger = loggerFactory.CreateLogger<NativeUsageService>();
         _ownedHttp = testOverrides?.CreateHttpClient() ?? NativeHttp.CreateClient();
-        var claude = CreateClaudeOptions() with { RenewExpiredSignIn = renewClaudeSignIn };
+        var claude = CreateClaudeOptions() with { RenewExpiredSignIn = renewClaudeSignIn, ShutdownToken = shutdownToken };
         var codex = new CodexNativeOptions();
-        var antigravity = new AntigravityNativeOptions { RenewExpiredSignIn = renewGeminiSignIn };
+        var antigravity = new AntigravityNativeOptions { RenewExpiredSignIn = renewGeminiSignIn, ShutdownToken = shutdownToken };
         if (testOverrides is not null)
             (claude, codex, antigravity) = (testOverrides.Apply(claude), testOverrides.Apply(codex), testOverrides.Apply(antigravity));
         _clients = Index([

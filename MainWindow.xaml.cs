@@ -579,7 +579,7 @@ public sealed partial class MainWindow : Window
 
     private void OnExitRequested(object? sender, EventArgs e)
     {
-        try { Application.Current.Exit(); }
+        try { App.Current.ExitApplication(); }
         catch (Exception ex) { App.Services.GetRequiredService<ILogger<MainWindow>>().LogError(ex, "Application exit failed"); }
     }
 

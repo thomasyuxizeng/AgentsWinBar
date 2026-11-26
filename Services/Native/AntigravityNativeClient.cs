@@ -32,6 +32,8 @@ public sealed record AntigravityNativeOptions
     public TimeSpan RenewalInterval { get; init; } = TimeSpan.FromMinutes(30);
     /// <summary>A renewal that has not finished by then is stopped (its whole process tree).</summary>
     public TimeSpan RenewalTimeout { get; init; } = TimeSpan.FromSeconds(30);
+    /// <summary>Stops in-flight renewals when the app shuts down.</summary>
+    public CancellationToken ShutdownToken { get; init; }
 }
 
 /// <summary>
@@ -96,7 +98,7 @@ public sealed class AntigravityNativeClient : INativeUsageClient
     }
 
     private Task<AntigravityCredentials?> TryRenewSignInAsync(DateTimeOffset expiry, CancellationToken ct) =>
-        _renewer != null && _options.RenewExpiredSignIn?.Invoke() == true
+        _renewer != null && !_options.ShutdownToken.IsCancellationRequested && _options.RenewExpiredSignIn?.Invoke() == true
             ? _renewal.TryRenewAsync(expiry, RenewAndReadAsync, ct)
             : Task.FromResult<AntigravityCredentials?>(null);
 
@@ -124,13 +126,14 @@ public sealed class AntigravityNativeClient : INativeUsageClient
                 _logger.LogInformation("agy was not found; the expired Antigravity sign-in was not renewed");
                 return null;
             }
-            var run = await _renewer.RunModelsAsync(executable, _options.RenewalTimeout, CancellationToken.None).ConfigureAwait(false);
+            var run = await _renewer.RunModelsAsync(executable, _options.RenewalTimeout, _options.ShutdownToken).ConfigureAwait(false);
             if (run.TimedOut)
                 _logger.LogWarning("Antigravity sign-in renewal timed out after {Seconds:0.0} s and was stopped", run.Duration.TotalSeconds);
             else
                 _logger.LogInformation("Antigravity sign-in renewal finished with exit code {ExitCode} in {Seconds:0.0} s", run.ExitCode, run.Duration.TotalSeconds);
             return run;
         }
+        catch (OperationCanceledException) when (_options.ShutdownToken.IsCancellationRequested) { return null; }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             _logger.LogWarning("Antigravity sign-in renewal could not run ({Type})", ex.GetType().Name);

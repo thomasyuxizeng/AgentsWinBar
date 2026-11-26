@@ -86,7 +86,8 @@ public sealed class ClaudeAuthStatusRunner : IClaudeSignInRenewer
         foreach (var argument in _arguments) info.ArgumentList.Add(argument);
 
         var started = Stopwatch.GetTimestamp();
-        using var process = Process.Start(info) ?? throw new InvalidOperationException("Claude Code did not start.");
+        using var process = new Process { StartInfo = info };
+        using var stopOnShutdown = RenewalProcess.Start(process, ct);
         // Nothing is typed into it, and everything it prints (the account email among it) is thrown away unread.
         process.StandardInput.Close();
         var drainOutput = process.StandardOutput.BaseStream.CopyToAsync(Stream.Null, CancellationToken.None);
@@ -99,11 +100,7 @@ public sealed class ClaudeAuthStatusRunner : IClaudeSignInRenewer
         }
         catch (OperationCanceledException)
         {
-            try { process.Kill(entireProcessTree: true); }
-            catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception or NotSupportedException)
-            {
-                // It exited on its own in the meantime, or cannot be killed; either way nothing more can be done.
-            }
+            RenewalProcess.KillTree(process);
             await DrainQuietlyAsync(drainOutput, drainError).ConfigureAwait(false);
             ct.ThrowIfCancellationRequested();
             return new(null, Stopwatch.GetElapsedTime(started), TimedOut: true);
