@@ -1266,7 +1266,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
         {
             // Each provider is due from its own last fetch, so a changed interval never loses the time already waited.
             pendingSinceUtc = null;
-            _toolActivity?.EnsureWatching();
+            // A folder that cannot be watched only costs the speed-up, never the timer
+            try { _toolActivity?.EnsureWatching(); }
+            catch (Exception ex) { _logger.LogDebug("Tool log folders could not be watched ({Type})", ex.GetType().Name); }
             plan = BuildPlan(now);
             if (ProviderRefreshPlanner.NextDue(plan) is { } next) firstDelay = next - now;
             RefreshCadence = ProviderRefreshPlanner.Cadence(plan);

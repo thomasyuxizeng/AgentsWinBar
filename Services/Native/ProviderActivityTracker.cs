@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using AgentsWinBar.Helpers;
 using AgentsWinBar.Models;
 using AgentsWinBar.Services.Native.Cost;
@@ -24,17 +25,22 @@ public interface IProviderActivitySource
 /// <summary>
 /// Watches the folders Claude Code, Codex and Antigravity write their logs to (the roots of
 /// <see cref="NativeCostService.DefaultRoots"/>) and keeps one timestamp per provider. The notification handler only
-/// stores the time: no file is opened, no name is read, logged or kept, and nothing runs on the UI thread. Name filters
-/// (<c>*.jsonl</c>, Antigravity's <c>*.db</c> and <c>*.db-wal</c>) are matched by the watcher before any event object
-/// is created, so unrelated writes cost nothing in managed code. A lost-notifications overflow counts as activity (it
-/// means many writes); any other watcher error drops the watcher, and the next <see cref="EnsureWatching"/> after
-/// <see cref="RetryInterval"/> starts it again, as it does for a folder that did not exist yet.
-/// Separate from <see cref="CostLogWatcher"/>, whose watchers live only while a cost view is open.
+/// stores the time, without a lock: no file is opened, no name is read, logged or kept, and nothing runs on the UI
+/// thread. Name filters (<c>*.jsonl</c>, Antigravity's <c>*.db</c> and <c>*.db-wal</c>) are matched by the watcher before
+/// any event object is created, so unrelated writes cost nothing in managed code. A lost-notifications overflow counts
+/// as activity (it means many writes); any other watcher error drops the watcher, and the next
+/// <see cref="EnsureWatching"/> after <see cref="RetryInterval"/> starts it again, as it does for a folder that did not
+/// exist yet. Separate from <see cref="CostLogWatcher"/>, whose watchers live only while a cost view is open.
 /// </summary>
 public sealed class ProviderActivityTracker : IProviderActivitySource, IDisposable
 {
     /// <summary>Missing or failed folders are looked for again at most this often.</summary>
     public static readonly TimeSpan RetryInterval = TimeSpan.FromMinutes(1);
+    /// <summary>
+    /// A stamp further ahead of the clock than this means the clock was set back. A stamp a moment ahead is a write
+    /// whose callback read the clock just after this one (watcher callbacks run concurrently).
+    /// </summary>
+    public static readonly TimeSpan ClockStepBack = TimeSpan.FromMinutes(1);
     /// <summary>The smallest buffer Windows accepts; an overflow only means "busy", which is activity anyway.</summary>
     private const int NotificationBufferBytes = 4096;
 
@@ -48,7 +54,8 @@ public sealed class ProviderActivityTracker : IProviderActivitySource, IDisposab
     private readonly TimeProvider _clock;
     private readonly bool _watch;
     private DateTimeOffset? _lastEnsure;
-    private bool _disposed;
+    // Written under _gate, read without it by the notification handler
+    private volatile bool _disposed;
 
     public event EventHandler<string>? ActivityStarted;
 
@@ -71,6 +78,9 @@ public sealed class ProviderActivityTracker : IProviderActivitySource, IDisposab
         _watch = watch;
     }
 
+    /// <summary>Starts a configured watcher (tests replace it to make a start fail).</summary>
+    internal Action<FileSystemWatcher> StartWatcher { get; set; } = watcher => watcher.EnableRaisingEvents = true;
+
     public DateTime? LastActivityUtc(string provider)
     {
         if (string.IsNullOrWhiteSpace(provider) || !ProviderConstants.IsValidProvider(provider.Trim())) return null;
@@ -78,7 +88,7 @@ public sealed class ProviderActivityTracker : IProviderActivitySource, IDisposab
         var stamp = Volatile.Read(ref _stamps[slot]);
         if (stamp == 0) return null;
         var now = _clock.GetUtcNow().UtcTicks;
-        if (stamp > now)
+        if (stamp - now > ClockStepBack.Ticks)
         {
             // The clock was set back: count the write as just now, so the provider is active for one window, not until
             // the clock catches up.
@@ -93,12 +103,24 @@ public sealed class ProviderActivityTracker : IProviderActivitySource, IDisposab
     {
         try
         {
+            if (_disposed) return;
             var slot = (int)provider;
             var now = _clock.GetUtcNow().UtcTicks;
-            var previous = Interlocked.Exchange(ref _stamps[slot], now);
-            // Only the first write after a quiet period is announced; every other write just moves the stamp.
-            if (previous == 0 || now - previous > ProviderRefreshPlanner.ActiveWindow.Ticks || now < previous)
-                ActivityStarted?.Invoke(this, ProviderIds[slot]);
+            // Keep the newest stamp without a lock. Callbacks of one provider's watchers run concurrently: one that read
+            // the clock a moment before another must neither move the stamp back nor look like a new start.
+            var previous = Volatile.Read(ref _stamps[slot]);
+            while (true)
+            {
+                if (previous >= now && previous - now <= ClockStepBack.Ticks) return;
+                var seen = Interlocked.CompareExchange(ref _stamps[slot], now, previous);
+                if (seen == previous) break;
+                previous = seen;
+            }
+            // Only the first write after a quiet period (or after the clock was set back) is announced; every other
+            // write just moves the stamp.
+            var announce = previous == 0 || now - previous > ProviderRefreshPlanner.ActiveWindow.Ticks ||
+                previous - now > ClockStepBack.Ticks;
+            if (announce && !_disposed) ActivityStarted?.Invoke(this, ProviderIds[slot]);
         }
         catch (Exception ex)
         {
@@ -123,13 +145,16 @@ public sealed class ProviderActivityTracker : IProviderActivitySource, IDisposab
         {
             lock (_gate)
             {
-                if (_disposed || _watchers[i] is not null) continue;
+                if (_disposed) return;
+                if (_watchers[i] is not null) continue;
             }
-            var watcher = TryWatch(i);
+            // The folder check and the set-up touch the disk: outside the lock
+            var watcher = TryCreate(i);
             if (watcher is null) continue;
             lock (_gate)
             {
-                if (!_disposed && _watchers[i] is null)
+                // Started only under the lock and only before Dispose, so Dispose never leaves a running watcher behind
+                if (!_disposed && _watchers[i] is null && TryStart(i, watcher))
                 {
                     _watchers[i] = watcher;
                     watcher = null;
@@ -139,7 +164,8 @@ public sealed class ProviderActivityTracker : IProviderActivitySource, IDisposab
         }
     }
 
-    private FileSystemWatcher? TryWatch(int index)
+    /// <summary>A configured, not yet started watcher for root <paramref name="index"/>; null when it cannot be watched.</summary>
+    private FileSystemWatcher? TryCreate(int index)
     {
         var (provider, directory) = _roots[index];
         FileSystemWatcher? watcher = null;
@@ -164,17 +190,34 @@ public sealed class ProviderActivityTracker : IProviderActivitySource, IDisposab
             watcher.Changed += (_, _) => NotifyActivity(provider);
             watcher.Renamed += (_, _) => NotifyActivity(provider);
             watcher.Error += (sender, e) => OnError(index, provider, sender as FileSystemWatcher, e.GetException());
-            watcher.EnableRaisingEvents = true;
             return watcher;
         }
-        catch (Exception ex) when (ex is IOException or ArgumentException or UnauthorizedAccessException
-            or PlatformNotSupportedException)
+        catch (Exception ex) when (IsWatchFailure(ex))
         {
             watcher?.Dispose();
             _logger.LogDebug("Activity folder {Index} cannot be watched ({Type})", index, ex.GetType().Name);
             return null;
         }
     }
+
+    /// <summary>Starts <paramref name="watcher"/>; false (and logged) when Windows refuses.</summary>
+    private bool TryStart(int index, FileSystemWatcher watcher)
+    {
+        try
+        {
+            StartWatcher(watcher);
+            return true;
+        }
+        catch (Exception ex) when (IsWatchFailure(ex))
+        {
+            _logger.LogDebug("Activity folder {Index} cannot be watched ({Type})", index, ex.GetType().Name);
+            return false;
+        }
+    }
+
+    // Win32Exception: a folder that exists but cannot be watched (its access rights, a broken link, removed meanwhile)
+    private static bool IsWatchFailure(Exception ex) => ex is IOException or ArgumentException or UnauthorizedAccessException
+        or PlatformNotSupportedException or Win32Exception;
 
     private void OnError(int index, CostProvider provider, FileSystemWatcher? watcher, Exception? error)
     {

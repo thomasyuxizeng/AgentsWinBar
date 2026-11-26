@@ -127,6 +127,103 @@ public class ProviderActivityTrackerTests
     }
 
     [TestMethod]
+    public void NotifyActivity_OlderTimeFromARacingCallback_KeepsTheNewerStampAndAnnouncesNothing()
+    {
+        _tracker.NotifyActivity(CostProvider.Codex);
+        _clock.Now = Now.AddMinutes(3);
+        _tracker.NotifyActivity(CostProvider.Codex);
+        // A callback that read the clock 50 ms before the one above and finishes after it
+        _clock.Now = Now.AddMinutes(3).AddMilliseconds(-50);
+        _tracker.NotifyActivity(CostProvider.Codex);
+
+        _started.Should().Equal("codex");
+        _tracker.LastActivityUtc("codex").Should().Be(Now.AddMinutes(3).UtcDateTime);
+    }
+
+    [TestMethod]
+    public void NotifyActivity_ConcurrentCallbacks_AnnounceOnce()
+    {
+        var announced = 0;
+        using var tracker = new ProviderActivityTracker([], new ListLogger<ProviderActivityTracker>(), TimeProvider.System, watch: false);
+        tracker.ActivityStarted += (_, _) => Interlocked.Increment(ref announced);
+
+        Parallel.For(0, 50_000, new ParallelOptions { MaxDegreeOfParallelism = Math.Max(4, Environment.ProcessorCount) },
+            _ => tracker.NotifyActivity(CostProvider.Codex));
+
+        announced.Should().Be(1);
+    }
+
+    [TestMethod]
+    public void NotifyActivity_AfterDispose_RaisesNothing()
+    {
+        _tracker.Dispose();
+
+        _tracker.NotifyActivity(CostProvider.Claude);
+
+        _started.Should().BeEmpty();
+    }
+
+    [TestMethod]
+    public void EnsureWatching_FoldersExist_WatchesEachUntilDisposed()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "AgentsWinBar_ActivityWatch_" + Guid.NewGuid());
+        try
+        {
+            var tracker = new ProviderActivityTracker(Roots(root), new ListLogger<ProviderActivityTracker>(), _clock);
+
+            tracker.EnsureWatching();
+            tracker.ActiveWatchers.Should().Be(2);
+            tracker.Dispose();
+            tracker.ActiveWatchers.Should().Be(0);
+            _clock.Now += ProviderActivityTracker.RetryInterval;
+            tracker.EnsureWatching();
+            tracker.ActiveWatchers.Should().Be(0, "no watcher is started after Dispose");
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    public void EnsureWatching_WindowsRefusesToStartAWatcher_DoesNotThrowAndTriesAgainLater()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "AgentsWinBar_ActivityWatch_" + Guid.NewGuid());
+        try
+        {
+            using var tracker = new ProviderActivityTracker(Roots(root), new ListLogger<ProviderActivityTracker>(), _clock)
+            {
+                StartWatcher = _ => throw new System.ComponentModel.Win32Exception(5)
+            };
+
+            var ensure = () => tracker.EnsureWatching();
+
+            ensure.Should().NotThrow();
+            tracker.ActiveWatchers.Should().Be(0);
+            tracker.StartWatcher = watcher => watcher.EnableRaisingEvents = true;
+            _clock.Now += ProviderActivityTracker.RetryInterval;
+            tracker.EnsureWatching();
+            tracker.ActiveWatchers.Should().Be(2);
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
+    /// <summary>Two log folders under a new temporary folder (never a real profile), created on disk.</summary>
+    private static CostLogRoot[] Roots(string root)
+    {
+        CostLogRoot[] roots =
+        [
+            new(CostProvider.Codex, Path.Combine(root, "sessions")),
+            new(CostProvider.Gemini, Path.Combine(root, "antigravity"))
+        ];
+        foreach (var folder in roots) Directory.CreateDirectory(folder.Directory);
+        return roots;
+    }
+
+    [TestMethod]
     public void EnsureWatching_WithoutWatching_StartsNoWatcher()
     {
         _tracker.EnsureWatching();

@@ -526,6 +526,16 @@ public class MainViewModelActivityRefreshTests
     }
 
     [TestMethod]
+    public async Task StartAsync_WatchingToolFoldersFails_KeepsTheTimer()
+    {
+        _activity.ThrowOnEnsure = true;
+
+        await _viewModel.StartAsync();
+
+        _viewModel.NextRefreshUtc.Should().BeCloseTo(DateTime.UtcNow.AddMinutes(5), TimeSpan.FromSeconds(5));
+    }
+
+    [TestMethod]
     public async Task ProviderDisabled_IsNeverReadByTheSchedule()
     {
         _activity.Touch("codex");
@@ -575,8 +585,12 @@ public class MainViewModelActivityRefreshTests
     {
         private readonly Dictionary<string, DateTime> _stamps = new(StringComparer.OrdinalIgnoreCase);
         public event EventHandler<string>? ActivityStarted;
+        public bool ThrowOnEnsure { get; set; }
         public DateTime? LastActivityUtc(string provider) => _stamps.TryGetValue(provider, out var stamp) ? stamp : null;
-        public void EnsureWatching() { }
+        public void EnsureWatching()
+        {
+            if (ThrowOnEnsure) throw new System.ComponentModel.Win32Exception(5);
+        }
         public void Touch(string provider) => _stamps[provider] = DateTime.UtcNow;
         public void Start(string provider)
         {
