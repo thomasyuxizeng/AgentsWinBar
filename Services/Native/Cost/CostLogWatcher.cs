@@ -9,11 +9,17 @@ public readonly record struct CostScanPlan(bool FullListing, IReadOnlyCollection
 /// Turns change notifications on the log roots into the list of files the next cost update has to open, so an
 /// update without changes costs nothing. The roots are listed in full only at startup, after a lost notification
 /// (buffer overflow, watcher error, a root that could not be watched) and every
-/// <see cref="FullListingInterval"/> as a safety net.
+/// <see cref="FullListingInterval"/> as a safety net. The OS watchers exist only while cost requests keep coming:
+/// after <see cref="IdleTimeout"/> without one they are disposed (every log write by Claude Code or Codex would
+/// otherwise raise callbacks for a view nobody looks at), and the next request lists the roots in full.
 /// </summary>
 public sealed class CostLogWatcher : IDisposable
 {
     public static readonly TimeSpan FullListingInterval = TimeSpan.FromHours(6);
+    /// <summary>The watchers are disposed after this long without a cost request.</summary>
+    public static readonly TimeSpan IdleTimeout = TimeSpan.FromMinutes(15);
+    /// <summary>How often the idle timer looks at the time of the last request.</summary>
+    internal static readonly TimeSpan IdleCheckInterval = TimeSpan.FromMinutes(1);
     /// <summary>More pending paths than this are cheaper to find with one listing.</summary>
     internal const int MaxChangedPaths = 2048;
     private const int NotificationBufferBytes = 64 * 1024;
@@ -27,6 +33,8 @@ public sealed class CostLogWatcher : IDisposable
     private HashSet<string> _changed = new(StringComparer.OrdinalIgnoreCase);
     private bool _fullListingNeeded = true;
     private DateTimeOffset? _lastFullListing;
+    private DateTimeOffset _lastRequest;
+    private ITimer? _idleTimer;
     private bool _disposed;
 
     /// <param name="watch">False keeps the bookkeeping without OS watchers (tests feed notifications directly).</param>
@@ -46,6 +54,8 @@ public sealed class CostLogWatcher : IDisposable
     /// </summary>
     public CostScanPlan TakePlan()
     {
+        // Every request counts as use, also the first one that creates the watchers.
+        lock (_gate) _lastRequest = _clock.GetUtcNow();
         EnsureWatching();
         lock (_gate)
         {
@@ -63,6 +73,8 @@ public sealed class CostLogWatcher : IDisposable
     {
         lock (_gate)
         {
+            // A long update is use too: the view is open while it runs.
+            _lastRequest = _clock.GetUtcNow();
             if (succeeded)
             {
                 if (plan.FullListing) _lastFullListing = _clock.GetUtcNow();
@@ -71,6 +83,39 @@ public sealed class CostLogWatcher : IDisposable
             if (plan.FullListing) _fullListingNeeded = true;
             else _changed.UnionWith(plan.ChangedPaths);
         }
+    }
+
+    /// <summary>How many OS watchers are running (for tests).</summary>
+    internal int ActiveWatchers { get { lock (_gate) return _watchers.Count(watcher => watcher is not null); } }
+
+    /// <summary>
+    /// Disposes the OS watchers when no cost request came for <see cref="IdleTimeout"/>, and makes the next request
+    /// list every root, because nothing saw the changes in between. Returns whether watchers were released.
+    /// </summary>
+    internal bool ReleaseIfIdle()
+    {
+        FileSystemWatcher?[] released;
+        ITimer? timer;
+        lock (_gate)
+        {
+            if (_disposed) return false;
+            // A clock set back is not idleness.
+            if (_clock.GetUtcNow() - _lastRequest < IdleTimeout) return false;
+            released = [.. _watchers.Where(watcher => watcher is not null)];
+            Array.Clear(_watchers);
+            timer = _idleTimer;
+            _idleTimer = null;
+            if (released.Length > 0)
+            {
+                _fullListingNeeded = true;
+                _changed.Clear();
+            }
+        }
+        foreach (var watcher in released) watcher?.Dispose();
+        timer?.Dispose();
+        if (released.Length > 0)
+            _logger.LogDebug("No cost request for {Minutes} minutes; stopped watching the log folders", (int)IdleTimeout.TotalMinutes);
+        return released.Length > 0;
     }
 
     /// <summary>The paths waiting for the next plan (a snapshot, for tests).</summary>
@@ -160,7 +205,12 @@ public sealed class CostLogWatcher : IDisposable
                 _fullListingNeeded = true;
                 if (watcher is null) continue;
                 if (_disposed || _watchers[i] is not null) watcher.Dispose();
-                else _watchers[i] = watcher;
+                else
+                {
+                    _watchers[i] = watcher;
+                    // One timer for all watchers; it stops once they are released.
+                    _idleTimer ??= _clock.CreateTimer(_ => ReleaseIfIdle(), null, IdleCheckInterval, IdleCheckInterval);
+                }
             }
         }
     }
@@ -190,13 +240,17 @@ public sealed class CostLogWatcher : IDisposable
     public void Dispose()
     {
         FileSystemWatcher?[] watchers;
+        ITimer? timer;
         lock (_gate)
         {
             if (_disposed) return;
             _disposed = true;
             watchers = [.. _watchers];
             Array.Clear(_watchers);
+            timer = _idleTimer;
+            _idleTimer = null;
         }
+        timer?.Dispose();
         foreach (var watcher in watchers) watcher?.Dispose();
     }
 }

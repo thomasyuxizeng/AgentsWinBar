@@ -228,6 +228,119 @@ public sealed partial class NativeCostScannerTests
         scanner.Update(Claude, Codex).FilesRead.Should().Be(0);
     }
 
+    [TestMethod]
+    public void Update_WhenStringHasInvalidUtf8_CountsBadLineAndIndexesTheOthers()
+    {
+        var path = Path.Combine(Claude, "invalid-utf8.jsonl");
+        var broken = Encoding.UTF8.GetBytes(ClaudeLine("2", 20).Replace("claude-sonnet-4-6", "claude-\u0001-6", StringComparison.Ordinal));
+        broken[Array.IndexOf(broken, (byte)1)] = 0xFF;
+        using (var stream = File.Create(path))
+        {
+            stream.Write(Encoding.UTF8.GetBytes(ClaudeLine("1", 10) + "\n"));
+            stream.Write(broken);
+            stream.Write(Encoding.UTF8.GetBytes("\n" + ClaudeLine("3", 30) + "\n"));
+        }
+        var scanner = Scanner();
+
+        var first = scanner.Update(Claude, Codex);
+        File.AppendAllText(path, ClaudeLine("4", 40) + "\n");
+        var second = Scanner().Update(Claude, Codex);
+
+        first.MalformedLines.Should().Be(1);
+        second.MalformedLines.Should().Be(0, "the bad line is behind the stored offset");
+        scanner.ReadReport(CostProvider.Claude, asOf: Today).SessionTokens.Should().Be(80);
+    }
+
+    [TestMethod]
+    public void Update_WhenIndexIsOpenedAgain_RunsQuickCheckOnlyOnTheFirstOpen()
+    {
+        var path = Path.Combine(Claude, "a.jsonl");
+        File.WriteAllText(path, ClaudeLine("1", 10) + "\n");
+        var scanner = Scanner();
+        IReadOnlyList<CostLogRoot> roots = [new(CostProvider.Claude, Claude)];
+        scanner.Update(roots);
+        scanner.QuickChecks.Should().Be(0, "the first update creates the index");
+
+        for (var i = 2; i <= 4; i++)
+        {
+            File.AppendAllText(path, ClaudeLine(i.ToString(), 10) + "\n");
+            scanner.Update(roots, changedPaths: [path]);
+        }
+
+        scanner.QuickChecks.Should().Be(1, "later updates must not read the whole index again");
+        scanner.ReadReport(CostProvider.Claude, asOf: Today).SessionTokens.Should().Be(40);
+    }
+
+    [TestMethod]
+    public void Update_WhenTheLastUpdateFailed_RunsQuickCheckAgainOnTheNextOpen()
+    {
+        var path = Path.Combine(Claude, "a.jsonl");
+        File.WriteAllText(path, ClaudeLine("1", 10) + "\n");
+        var failing = false;
+        var scanner = new NativeCostScanner(IndexDirectory, Mock.Of<ILogger<NativeCostScanner>>(), TimeZoneInfo.Utc)
+        {
+            ReadHook = _ => { if (failing) throw new CostIndexDatabase.SqliteException(5); }
+        };
+        IReadOnlyList<CostLogRoot> roots = [new(CostProvider.Claude, Claude)];
+        scanner.Update(roots);
+        File.AppendAllText(path, ClaudeLine("2", 10) + "\n");
+        scanner.Update(roots, changedPaths: [path]);
+        scanner.QuickChecks.Should().Be(1);
+
+        failing = true;
+        File.AppendAllText(path, ClaudeLine("3", 10) + "\n");
+        var act = () => scanner.Update(roots, changedPaths: [path]);
+        act.Should().Throw<CostIndexDatabase.SqliteException>();
+        failing = false;
+        scanner.Update(roots, changedPaths: [path]);
+        scanner.QuickChecks.Should().Be(2, "an error may have left the index damaged");
+
+        scanner.Update(roots, changedPaths: [path]);
+        scanner.QuickChecks.Should().Be(2);
+        scanner.ReadReport(CostProvider.Claude, asOf: Today).SessionTokens.Should().Be(30);
+    }
+
+    [TestMethod]
+    [DataRow("missing trigger")]
+    [DataRow("old version")]
+    public void UpdateAndReadReports_WhenIndexIsRebuiltDuringAChangedPathsUpdate_IndexesEveryLog(string damage)
+    {
+        var changed = Path.Combine(Claude, "a.jsonl");
+        File.WriteAllText(changed, ClaudeLine("1", 10) + "\n");
+        File.WriteAllText(Path.Combine(Claude, "b.jsonl"), ClaudeLine("2", 25) + "\n");
+        var scanner = Scanner();
+        IReadOnlyList<CostLogRoot> roots = [new(CostProvider.Claude, Claude), new(CostProvider.Codex, Codex)];
+        scanner.Update(roots, workers: 2);
+        using (var database = new CostIndexDatabase(IndexPath))
+            database.Execute(damage == "old version" ? "PRAGMA user_version=1" : "DROP TRIGGER usage_delete");
+        File.AppendAllText(changed, ClaudeLine("3", 40) + "\n");
+
+        var update = scanner.UpdateAndReadReports(
+            roots, workers: 2, [CostProvider.Claude], null, Today, 30, CancellationToken.None, changedPaths: [changed]);
+
+        update.Reports[CostProvider.Claude].SessionTokens.Should().Be(75, "the rebuilt index needs every log, not only the changed one");
+        update.ScanResult.FilesRead.Should().Be(2);
+        update.ScanResult.DiscoveredFiles.Should().Be(2);
+        update.ScanResult.IndexRebuilt.Should().BeTrue("the caller learns that the index was rebuilt");
+        scanner.UpdateAndReadReports(roots, workers: 2, [CostProvider.Claude], null, Today, 30, CancellationToken.None,
+            changedPaths: [changed]).ScanResult.IndexRebuilt.Should().BeFalse();
+    }
+
+    [TestMethod]
+    public void Update_WhenAParallelWorkerHitsADamagedIndex_ThrowsTheSqliteErrorItself()
+    {
+        File.WriteAllText(Path.Combine(Claude, "a.jsonl"), ClaudeLine("1", 10) + "\n");
+        File.WriteAllText(Path.Combine(Claude, "b.jsonl"), ClaudeLine("2", 25) + "\n");
+        var scanner = new NativeCostScanner(IndexDirectory, Mock.Of<ILogger<NativeCostScanner>>(), TimeZoneInfo.Utc)
+        {
+            ReadHook = _ => throw new CostIndexDatabase.SqliteException(11)
+        };
+
+        var act = () => scanner.Update(Claude, Codex, workers: 2);
+
+        act.Should().Throw<CostIndexDatabase.SqliteException>().Which.InvalidIndex.Should().BeTrue();
+    }
+
     // Review finding 10: a timestamp at the edge of the calendar is skipped instead of failing the whole scan.
     [TestMethod]
     [DataRow(9.0, "9999-12-31T20:00:00Z")]
@@ -261,6 +374,29 @@ public sealed partial class NativeCostScannerTests
 
         scan.FilesRead.Should().Be(0);
         var daily = scanner.ReadReport(CostProvider.Claude, asOf: Today).Daily!;
+        daily.Select(day => day.Date).Should().Equal(new DateOnly(2026, 11, 24), new DateOnly(2026, 11, 25));
+        daily.Select(day => day.TotalTokens).Should().Equal(10, 20);
+    }
+
+    [TestMethod]
+    public void UpdateAndReadReports_WhenRestartedInAnotherZone_RebucketsWithoutReadingLogs()
+    {
+        var korea = Scanner(TimeZoneInfo.FindSystemTimeZoneById("Korea Standard Time"));
+        var australia = Scanner(TimeZoneInfo.FindSystemTimeZoneById("AUS Eastern Standard Time"));
+        IReadOnlyList<CostLogRoot> roots = [new(CostProvider.Claude, Claude)];
+        File.WriteAllLines(Path.Combine(Claude, "travel.jsonl"),
+        [
+            ClaudeLine("1", 10, "2026-11-24T12:59:59Z"),
+            ClaudeLine("2", 20, "2026-11-24T13:00:00Z")
+        ]);
+        korea.Update(roots);
+
+        var result = australia.UpdateAndReadReports(
+            roots, 1, [CostProvider.Claude], null, Today, 30, CancellationToken.None, changedPaths: []);
+
+        result.ScanResult.DiscoveredFiles.Should().Be(0);
+        result.ScanResult.FilesRead.Should().Be(0);
+        var daily = result.Reports[CostProvider.Claude].Daily!;
         daily.Select(day => day.Date).Should().Equal(new DateOnly(2026, 11, 24), new DateOnly(2026, 11, 25));
         daily.Select(day => day.TotalTokens).Should().Equal(10, 20);
     }
@@ -472,6 +608,44 @@ public sealed partial class NativeCostScannerTests
 
         result.ScanResult.FilesRead.Should().Be(0);
         result.Reports[CostProvider.Claude].SessionTokens.Should().Be(15);
+    }
+
+    [TestMethod]
+    [DataRow("PRAGMA user_version=1", true)]
+    [DataRow("PRAGMA user_version=0", true)]
+    [DataRow("DROP TABLE days", true)]
+    [DataRow("DROP TRIGGER usage_delete", true)]
+    [DataRow("ALTER TABLE days RENAME COLUMN reasoning TO broken", true)]
+    [DataRow("corrupt file", true)]
+    [DataRow("deleted file", false)]
+    public void UpdateAndReadReports_WhenNoPathsChangedAndIndexIsUnreadable_IndexesEveryLog(
+        string damage, bool rebuilt)
+    {
+        File.WriteAllLines(Path.Combine(Claude, "a.jsonl"), [ClaudeLine("1", 10)]);
+        File.WriteAllLines(Path.Combine(Claude, "b.jsonl"), [ClaudeLine("2", 25)]);
+        var scanner = Scanner();
+        IReadOnlyList<CostLogRoot> roots = [new(CostProvider.Claude, Claude)];
+        scanner.Update(roots);
+        switch (damage)
+        {
+            case "deleted file":
+                File.Delete(IndexPath);
+                break;
+            case "corrupt file":
+                File.WriteAllText(IndexPath, "not SQLite");
+                break;
+            default:
+                using (var database = new CostIndexDatabase(IndexPath)) database.Execute(damage);
+                break;
+        }
+
+        var result = scanner.UpdateAndReadReports(
+            roots, 1, [CostProvider.Claude], null, Today, 30, CancellationToken.None, changedPaths: []);
+
+        result.Reports[CostProvider.Claude].SessionTokens.Should().Be(35);
+        result.ScanResult.DiscoveredFiles.Should().Be(2);
+        result.ScanResult.FilesRead.Should().Be(2);
+        result.ScanResult.IndexRebuilt.Should().Be(rebuilt);
     }
 
     private static ILogger<NativeCostScanner> OnBatchCommitted(Action action)

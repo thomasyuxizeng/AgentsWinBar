@@ -8,8 +8,13 @@ using Microsoft.Win32.SafeHandles;
 namespace AgentsWinBar.Services.Native.Cost;
 
 /// <param name="SkippedPaths">The logs that could not be opened (locked or unreadable), or null when none were.</param>
+/// <param name="IndexRebuilt">
+/// An existing index failed validation (damaged, or of another version) and was replaced by an empty one. Every log
+/// was then listed, whatever the caller asked for, because only a full listing can fill a new index.
+/// </param>
 public sealed record CostScanResult(long FilesRead, long BytesRead, long MalformedLines, long OversizedLines,
-    long UnavailableFiles, int DiscoveredFiles, long DiscoveredBytes, IReadOnlyList<string>? SkippedPaths = null)
+    long UnavailableFiles, int DiscoveredFiles, long DiscoveredBytes, IReadOnlyList<string>? SkippedPaths = null,
+    bool IndexRebuilt = false)
 {
     public long SkippedFiles => UnavailableFiles;
 }
@@ -27,7 +32,6 @@ public sealed partial class NativeCostScanner
     private readonly TimeZoneInfo? _zone;
     private readonly ILogger<NativeCostScanner> _logger;
     /// <summary>The zone the index was last bucketed in by this instance (null before the first update).</summary>
-    private volatile string? _appliedZoneId;
 
     public NativeCostScanner(string indexDirectory, ILogger<NativeCostScanner> logger, TimeZoneInfo? zone = null)
     {
@@ -45,6 +49,17 @@ public sealed partial class NativeCostScanner
 
     /// <summary>An archive is decompressed up to this many bytes; the rest (a damaged or hostile file) is not counted.</summary>
     internal long MaxArchiveBytes { get; init; } = 1L << 30;
+
+    private int _quickChecks;
+
+    /// <summary>1 while the next open of the index must run the full quick_check (the first open, and after an error).</summary>
+    private int _fullCheckDue = 1;
+
+    /// <summary>How many times PRAGMA quick_check has run over the index (tests watch this).</summary>
+    internal int QuickChecks => Volatile.Read(ref _quickChecks);
+
+    /// <summary>Called with the path of every log about to be read; tests make it throw to simulate a failing worker.</summary>
+    internal Action<string>? ReadHook { get; init; }
 
     /// <summary>True when the index file exists (a missing index needs a full listing to rebuild).</summary>
     internal bool IndexExists => File.Exists(_indexPath);
@@ -77,10 +92,9 @@ public sealed partial class NativeCostScanner
         if (changedPaths is not null)
         {
             changedPaths = RelevantPaths(roots, changedPaths);
-            var applied = _appliedZoneId;
-            if (changedPaths.Count == 0 && (applied is null || applied == zone.Id))
+            if (changedPaths.Count == 0 &&
+                TryReadReportsFromDisk(reportProviders, pricing, asOf, historyDays, zone, cancellationToken) is { } skippedReports)
             {
-                var skippedReports = ReadReportsFromDisk(reportProviders, pricing, asOf, historyDays, zone, cancellationToken);
                 return (new(0, 0, 0, 0, 0, 0, 0), skippedReports);
             }
         }
@@ -101,9 +115,13 @@ public sealed partial class NativeCostScanner
 
         try
         {
-            var outcome = UpdateIndexCore(roots, workers, zone, changedPaths, reportProviders, pricing, asOf, historyDays, cancellationToken);
-            _appliedZoneId = zone.Id;
-            return outcome;
+            return UpdateIndexCore(roots, workers, zone, changedPaths, reportProviders, pricing, asOf, historyDays, cancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // Whatever failed may have damaged the index: check all of it again at the next open.
+            Volatile.Write(ref _fullCheckDue, 1);
+            throw;
         }
         finally
         {
@@ -148,11 +166,18 @@ public sealed partial class NativeCostScanner
     {
         cancellationToken.ThrowIfCancellationRequested();
         Directory.CreateDirectory(Path.GetDirectoryName(_indexPath)!);
-        using var database = OpenForUpdate(cancellationToken);
+        using var database = OpenForUpdate(cancellationToken, out var indexRebuilt, out var indexCreated);
         using var index = new CostIndex(database);
         database.Execute("BEGIN IMMEDIATE");
         index.SetZone(zone, cancellationToken);
         database.Execute("COMMIT");
+        if (changedPaths is not null && (indexRebuilt || (indexCreated && changedPaths.Count == 0)))
+        {
+            // A new index holds nothing: filling it from the changed files alone would report far too little
+            // while looking fresh. List every log instead.
+            _logger.LogInformation("The native cost index is new during an incremental update; listing every log");
+            changedPaths = null;
+        }
 
         // A compressed archive stands for the plain log of the same name: one index entry, and the plain file wins.
         var candidates = new Dictionary<(CostProvider, CostKey), Discovered>();
@@ -255,7 +280,8 @@ public sealed partial class NativeCostScanner
         List<string>? skippedPaths = null;
         foreach (var input in inputs)
             if (input.Skipped) (skippedPaths ??= []).Add(input.Entry.Path);
-        var scanResult = new CostScanResult(opened, bytes, malformed, oversized, unavailable, files, size, skippedPaths);
+        var scanResult = new CostScanResult(opened, bytes, malformed, oversized, unavailable, files, size, skippedPaths,
+            indexRebuilt);
         var reports = ReadReportsFromIndex(index, reportProviders, pricing, asOf, historyDays, zone, cancellationToken);
         return (scanResult, reports);
 
@@ -275,6 +301,7 @@ public sealed partial class NativeCostScanner
                     var modified = false;
                     try
                     {
+                        ReadHook?.Invoke(input.Entry.Path);
                         using var stream = new FileStream(input.Entry.Path, FileMode.Open, FileAccess.Read,
                             FileShare.ReadWrite | FileShare.Delete, 1, FileOptions.SequentialScan);
                         var length = stream.Length;
@@ -401,18 +428,31 @@ public sealed partial class NativeCostScanner
             return;
         }
 
-        Parallel.ForEach(batch, new ParallelOptions { MaxDegreeOfParallelism = workers, CancellationToken = cancellationToken },
-            () => (Buffer: ArrayPool<byte>.Shared.Rent(BufferBytes), Priority: new BackgroundPriority()),
-            (input, _, local) =>
-            {
-                read(input, local.Buffer);
-                return local;
-            },
-            local =>
-            {
-                try { ArrayPool<byte>.Shared.Return(local.Buffer, clearArray: true); }
-                finally { local.Priority.Dispose(); }
-            });
+        try
+        {
+            Parallel.ForEach(batch, new ParallelOptions { MaxDegreeOfParallelism = workers, CancellationToken = cancellationToken },
+                () => (Buffer: ArrayPool<byte>.Shared.Rent(BufferBytes), Priority: new BackgroundPriority()),
+                (input, _, local) =>
+                {
+                    read(input, local.Buffer);
+                    return local;
+                },
+                local =>
+                {
+                    try { ArrayPool<byte>.Shared.Return(local.Buffer, clearArray: true); }
+                    finally { local.Priority.Dispose(); }
+                });
+        }
+        catch (AggregateException ex)
+        {
+            // Parallel.ForEach wraps what a worker throws. Callers match on the real exception, such as the
+            // damaged-index error that triggers a rebuild, so hand it on as it was thrown.
+            var failures = ex.Flatten().InnerExceptions;
+            var first = failures.OfType<CostIndexDatabase.SqliteException>().FirstOrDefault(e => e.InvalidIndex) ??
+                (failures.Count == 1 ? failures[0] : null);
+            if (first is null) throw;
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(first).Throw();
+        }
     }
 
     public CostDataDto ReadReport(CostProvider provider, CostPricing? pricing = null, DateTimeOffset? asOf = null,
@@ -427,7 +467,7 @@ public sealed partial class NativeCostScanner
         return BuildReport(provider, rows, pricing, today, historyDays);
     }
 
-    private IReadOnlyDictionary<CostProvider, CostDataDto> ReadReportsFromDisk(
+    private IReadOnlyDictionary<CostProvider, CostDataDto>? TryReadReportsFromDisk(
         IReadOnlyList<CostProvider>? reportProviders,
         CostPricing? pricing,
         DateTimeOffset? asOf,
@@ -435,38 +475,24 @@ public sealed partial class NativeCostScanner
         TimeZoneInfo zone,
         CancellationToken cancellationToken)
     {
-        if (reportProviders is null || reportProviders.Count == 0)
-            return new Dictionary<CostProvider, CostDataDto>();
-
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(historyDays);
-        pricing ??= new CostPricing();
-        var today = CostIndex.LocalDay(asOf ?? DateTimeOffset.UtcNow, zone);
-        var first = Math.Max(0, today.DayNumber - historyDays + 1);
-        var reports = new Dictionary<CostProvider, CostDataDto>(reportProviders.Count);
-
-        if (File.Exists(_indexPath))
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!File.Exists(_indexPath))
+            return reportProviders is { Count: > 0 } ? null : new Dictionary<CostProvider, CostDataDto>();
+        try
         {
             using var database = new CostIndexDatabase(_indexPath, readOnly: true);
             database.Execute("PRAGMA busy_timeout=5000; BEGIN");
-            if (CostIndex.ReadVersion(database) == CostIndex.SchemaVersion)
-            {
-                using var index = new CostIndex(database);
-                foreach (var provider in reportProviders)
-                {
-                    if (reports.ContainsKey(provider)) continue;
-                    var rows = index.ReadDays(provider, first, today.DayNumber, cancellationToken);
-                    reports[provider] = BuildReport(provider, rows, pricing, today, historyDays);
-                }
-                return reports;
-            }
+            if (CostIndex.ReadVersion(database) != CostIndex.SchemaVersion || !ValidateIndex(database)) return null;
+            using var index = new CostIndex(database);
+            if (index.ReadZone() != zone.Id) return null;
+            return ReadReportsFromIndex(index, reportProviders, pricing, asOf, historyDays, zone, cancellationToken);
         }
-
-        foreach (var provider in reportProviders)
+        catch (CostIndexDatabase.SqliteException ex) when (ex.InvalidIndex)
         {
-            if (!reports.ContainsKey(provider))
-                reports[provider] = BuildReport(provider, [], pricing, today, historyDays);
+            // Recheck under the writer mutex before replacing an unreadable index.
+            Volatile.Write(ref _fullCheckDue, 1);
+            return null;
         }
-        return reports;
     }
 
     private static IReadOnlyDictionary<CostProvider, CostDataDto> ReadReportsFromIndex(
@@ -593,8 +619,12 @@ public sealed partial class NativeCostScanner
         return index.ReadDays(provider, first, last, token);
     }
 
-    private CostIndexDatabase OpenForUpdate(CancellationToken token)
+    /// <param name="rebuilt">True when an existing index failed validation and was replaced by an empty one.</param>
+    /// <param name="created">True when there was no usable index and a new one was created.</param>
+    private CostIndexDatabase OpenForUpdate(CancellationToken token, out bool rebuilt, out bool created)
     {
+        rebuilt = false;
+        created = false;
         if (File.Exists(_indexPath))
         {
             CostIndexDatabase? existing = null;
@@ -617,6 +647,7 @@ public sealed partial class NativeCostScanner
 
             token.ThrowIfCancellationRequested();
             _logger.LogInformation("Rebuilding native cost index");
+            rebuilt = true;
             File.Delete(_indexPath);
             File.Delete(_indexPath + "-journal");
             File.Delete(_indexPath + "-wal");
@@ -628,6 +659,7 @@ public sealed partial class NativeCostScanner
         {
             ConfigureWriter(database);
             database.Execute(CostIndex.Schema);
+            created = true;
             return database;
         }
         catch
@@ -640,7 +672,7 @@ public sealed partial class NativeCostScanner
     private static void ConfigureWriter(CostIndexDatabase database) =>
         database.Execute("PRAGMA busy_timeout=5000; PRAGMA cache_size=-12288; PRAGMA temp_store=FILE");
 
-    private static bool ValidateIndex(CostIndexDatabase database)
+    private bool ValidateIndex(CostIndexDatabase database)
     {
         using var objects = database.Prepare("""
             SELECT COUNT(*) FROM sqlite_master WHERE name IN
@@ -652,8 +684,17 @@ public sealed partial class NativeCostScanner
                 OR EXISTS (SELECT 1 FROM settings WHERE id=1 AND zone<>'')
             """);
         if (!layout.Step() || layout.Number(0) != 1) return false;
+        // A table with the right name can still have columns incompatible with the report query.
+        using var reportLayout = CostIndex.PrepareReadDays(database);
+
+        // quick_check reads the whole index, which grows with the lifetime history: run it on the first open of
+        // this scanner (one per process) and again after an update failed, not on every refresh.
+        if (Volatile.Read(ref _fullCheckDue) == 0) return true;
+        Interlocked.Increment(ref _quickChecks);
         using var check = database.Prepare("PRAGMA quick_check(1)");
-        return check.Step() && check.Text(0) == "ok";
+        if (!check.Step() || check.Text(0) != "ok") return false;
+        Volatile.Write(ref _fullCheckDue, 0);
+        return true;
     }
 
     private static (long CompleteOffset, long Bytes, long Oversized) ReadLines(Stream stream, long start, long length,

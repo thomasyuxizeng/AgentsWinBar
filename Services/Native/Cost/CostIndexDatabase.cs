@@ -42,8 +42,12 @@ internal sealed class CostIndexDatabase : IDisposable
     public void Dispose()
     {
         if (_handle == IntPtr.Zero) return;
-        Native.sqlite3_close(_handle);
+        // close_v2 never fails on a statement that is still open: the connection closes once the last one is
+        // finalized. sqlite3_close would return BUSY and leak the connection, and with it the file handle.
+        // Its only other failure is misuse of the handle, which Dispose cannot act on (and must not throw for).
+        var status = Native.sqlite3_close_v2(_handle);
         _handle = IntPtr.Zero;
+        System.Diagnostics.Debug.Assert(status == 0, "sqlite3_close_v2 failed.");
     }
 
     internal sealed class Statement(IntPtr statement) : IDisposable
@@ -68,8 +72,19 @@ internal sealed class CostIndexDatabase : IDisposable
         }
         internal void Write()
         {
-            Step();
-            Check(Native.sqlite3_reset(Handle));
+            var stepped = false;
+            try
+            {
+                Step();
+                stepped = true;
+            }
+            finally
+            {
+                // Always reset, or a failed step leaves the cached statement holding its error and its locks.
+                // The reset status only matters when the step itself succeeded; it must not hide the step's error.
+                var reset = Native.sqlite3_reset(Handle);
+                if (stepped) Check(reset);
+            }
         }
 
         internal void Reset() => Check(Native.sqlite3_reset(Handle));
@@ -89,7 +104,7 @@ internal sealed class CostIndexDatabase : IDisposable
         [DllImport(Library, CallingConvention = CallingConvention.StdCall)]
         internal static extern int sqlite3_open_v2([MarshalAs(UnmanagedType.LPUTF8Str)] string path, out IntPtr db, int flags, IntPtr vfs);
         [DllImport(Library, CallingConvention = CallingConvention.StdCall)]
-        internal static extern int sqlite3_close(IntPtr db);
+        internal static extern int sqlite3_close_v2(IntPtr db);
         [DllImport(Library, CallingConvention = CallingConvention.StdCall)]
         internal static extern int sqlite3_exec(IntPtr db, [MarshalAs(UnmanagedType.LPUTF8Str)] string sql, IntPtr callback, IntPtr state, IntPtr error);
         [DllImport(Library, CallingConvention = CallingConvention.StdCall)]

@@ -250,4 +250,114 @@ public sealed class CostLogWatcherTests
         again.Should().NotThrow();
         watcher.TakePlan().ChangedPaths.Should().BeEmpty();
     }
+
+    [TestMethod]
+    public void ReleaseIfIdle_WhenNoCostRequestForTheIdleTimeout_DisposesWatchersAndListsEverythingNext()
+    {
+        using var watcher = Settled(watch: true);
+        watcher.ActiveWatchers.Should().Be(2);
+        watcher.NotifyChanged(CostProvider.Claude, Path.Combine(Claude, "a.jsonl"), created: false);
+
+        _clock.Now = Start + CostLogWatcher.IdleTimeout - TimeSpan.FromSeconds(1);
+        watcher.ReleaseIfIdle().Should().BeFalse();
+        watcher.ActiveWatchers.Should().Be(2);
+
+        _clock.Now = Start + CostLogWatcher.IdleTimeout;
+        watcher.ReleaseIfIdle().Should().BeTrue();
+        watcher.ActiveWatchers.Should().Be(0);
+
+        var plan = watcher.TakePlan();
+        plan.FullListing.Should().BeTrue("nothing watched the logs while the view was closed");
+        plan.ChangedPaths.Should().BeEmpty();
+        watcher.ActiveWatchers.Should().Be(2, "the next request watches again");
+        watcher.Complete(plan, succeeded: true);
+        watcher.TakePlan().FullListing.Should().BeFalse();
+    }
+
+    [TestMethod]
+    public void ReleaseIfIdle_WhenACostRequestWasRecent_KeepsTheWatchers()
+    {
+        using var watcher = Settled(watch: true);
+        _clock.Now = Start + TimeSpan.FromMinutes(10);
+        watcher.TakePlan();
+
+        _clock.Now = Start + TimeSpan.FromMinutes(20);
+        watcher.ReleaseIfIdle().Should().BeFalse("the last request was 10 minutes ago");
+        watcher.ActiveWatchers.Should().Be(2);
+
+        _clock.Now = Start + TimeSpan.FromMinutes(25);
+        watcher.ReleaseIfIdle().Should().BeTrue();
+        watcher.ActiveWatchers.Should().Be(0);
+    }
+
+    [TestMethod]
+    public void ReleaseIfIdle_WhenCalledAgainOrAfterDispose_DoesNothing()
+    {
+        var watcher = Settled(watch: true);
+        _clock.Now = Start + CostLogWatcher.IdleTimeout;
+        watcher.ReleaseIfIdle().Should().BeTrue();
+
+        watcher.ReleaseIfIdle().Should().BeFalse("there is nothing left to release");
+        watcher.Dispose();
+        watcher.ReleaseIfIdle().Should().BeFalse();
+    }
+
+    [TestMethod]
+    public void IdleTimer_WhenWatching_ChecksPeriodicallyAndStopsOnceReleased()
+    {
+        var clock = new TimerClock(Start);
+        using var watcher = new CostLogWatcher([new(CostProvider.Claude, Claude), new(CostProvider.Codex, Codex)],
+            NullLogger<CostLogWatcher>.Instance, clock, watch: true);
+        watcher.Complete(watcher.TakePlan(), succeeded: true);
+        var first = clock.Timers.Should().ContainSingle().Subject;
+        first.Period.Should().Be(CostLogWatcher.IdleCheckInterval);
+
+        clock.Now = Start + CostLogWatcher.IdleTimeout;
+        first.Fire();
+
+        watcher.ActiveWatchers.Should().Be(0);
+        first.Disposed.Should().BeTrue("an idle watcher needs no timer either");
+        watcher.TakePlan().FullListing.Should().BeTrue();
+        clock.Timers.Should().HaveCount(2, "watching again starts a new timer");
+    }
+
+    [TestMethod]
+    public void TakePlan_WhenNotWatching_StartsNoTimer()
+    {
+        var clock = new TimerClock(Start);
+        using var watcher = new CostLogWatcher([new(CostProvider.Claude, Claude)], NullLogger<CostLogWatcher>.Instance, clock, watch: false);
+
+        watcher.TakePlan();
+
+        clock.Timers.Should().BeEmpty();
+    }
+
+    private sealed class TimerClock(DateTimeOffset now) : TimeProvider
+    {
+        internal DateTimeOffset Now { get; set; } = now;
+        internal List<FakeTimer> Timers { get; } = [];
+        public override DateTimeOffset GetUtcNow() => Now;
+
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
+        {
+            var timer = new FakeTimer(callback, state, period);
+            Timers.Add(timer);
+            return timer;
+        }
+    }
+
+    private sealed class FakeTimer(TimerCallback callback, object? state, TimeSpan period) : ITimer
+    {
+        internal TimeSpan Period { get; } = period;
+        internal bool Disposed { get; private set; }
+        internal void Fire() => callback(state);
+        public bool Change(TimeSpan dueTime, TimeSpan newPeriod) => true;
+        public void Dispose() => Disposed = true;
+
+        public ValueTask DisposeAsync()
+        {
+            Disposed = true;
+            return ValueTask.CompletedTask;
+        }
+    }
 }

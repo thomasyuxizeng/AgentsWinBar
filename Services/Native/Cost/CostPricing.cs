@@ -2,12 +2,17 @@ namespace AgentsWinBar.Services.Native.Cost;
 
 public enum CostProvider { Claude, Codex }
 
-public readonly record struct CostRates(decimal Input, decimal Output, decimal CacheRead,
-    decimal CacheWrite = 0, decimal CacheWriteOneHour = 0)
+public readonly record struct CostRates(decimal Input, decimal Output, decimal? CacheRead,
+    decimal? CacheWrite = 0, decimal CacheWriteOneHour = 0)
 {
-    internal decimal Price(CostTokens tokens) =>
-        (Input * tokens.Input + Output * tokens.Output + CacheRead * tokens.Read +
-         CacheWrite * (tokens.Write - tokens.OneHour) + CacheWriteOneHour * tokens.OneHour) / 1_000_000m;
+    internal decimal? Price(CostTokens tokens)
+    {
+        var shortWrites = tokens.Write - tokens.OneHour;
+        if ((tokens.Read != 0 && CacheRead is null) || (shortWrites != 0 && CacheWrite is null))
+            return null;
+        return (Input * tokens.Input + Output * tokens.Output + CacheRead.GetValueOrDefault() * tokens.Read +
+                CacheWrite.GetValueOrDefault() * shortWrites + CacheWriteOneHour * tokens.OneHour) / 1_000_000m;
+    }
 
     internal CostRates Multiply(decimal factor) => factor == 1 ? this
         : new(Input * factor, Output * factor, CacheRead * factor, CacheWrite * factor, CacheWriteOneHour * factor);
@@ -41,8 +46,8 @@ internal readonly record struct CostTokens(long Input, long Output, long Read, l
 /// List prices in USD per million tokens, ported from CodexBar's pricing (CostUsagePricing.swift at a26ca57). Rates
 /// are data: the user's custom-pricing.json first, then rates from before a published price change, then the
 /// models.dev catalog, then upstream's built-in tables (Pricing/pricing-overlay.json). The rules stay in code:
-/// model aliases, long-context tiers, Claude cache-write TTLs and the Codex Fast multipliers. A model without a
-/// rate stays unpriced (null) so the report can count its tokens.
+/// model aliases, long-context tiers, Claude cache-write TTLs and the Codex Fast multipliers. A bucket that uses a
+/// token class with no known rate stays unpriced so the report can count its tokens.
 /// </summary>
 public class CostPricing
 {
@@ -180,6 +185,7 @@ public class CostPricing
     private CostRates? ClaudeRates(string model, bool above200K, bool above272K, bool historical)
     {
         ModelPrice? price;
+        ModelPrice? bundled = null;
         int? threshold;
         if (_overlay.ClaudeHistorical.TryGetValue(model, out var before) &&
             _overlay.Claude.TryGetValue(model, out var current))
@@ -195,8 +201,10 @@ public class CostPricing
             price = _catalog.Find(openAi ? CostPriceCatalog.OpenAI : CostPriceCatalog.Anthropic, model);
             if (price is not null)
             {
-                var bundled = openAi && _overlay.Codex.TryGetValue(model, out var codex) ? codex.Long?.TierSize : null;
-                threshold = bundled ?? (price.Long is { } lane ? lane.TierSize ?? 200_000 : null);
+                var vendorOverlay = openAi ? _overlay.Codex : _overlay.Claude;
+                vendorOverlay.TryGetValue(model, out bundled);
+                var bundledThreshold = openAi ? bundled?.Long?.TierSize : null;
+                threshold = bundledThreshold ?? (price.Long is { } lane ? lane.TierSize ?? 200_000 : null);
             }
             else if (_overlay.Claude.TryGetValue(model, out price))
             {
@@ -206,12 +214,13 @@ public class CostPricing
         }
 
         var longContext = UsesLongContext(threshold, above200K, above272K) ? price.Long : null;
+        var bundledLong = longContext is not null && bundled?.Long is { } fallback &&
+                          UsesLongContext(fallback.TierSize ?? 200_000, above200K, above272K) ? fallback : null;
         var input = longContext?.Input ?? price.Input;
-        var write = price.CacheWrite ?? price.Input;
-        var read = price.CacheRead ?? price.Input;
+        var read = longContext?.CacheRead ?? bundledLong?.CacheRead ?? price.CacheRead ?? bundled?.CacheRead;
+        var write = longContext?.CacheWrite ?? bundledLong?.CacheWrite ?? price.CacheWrite ?? bundled?.CacheWrite;
         // A one-hour cache write costs twice the input rate that applies to the request.
-        return new(input, longContext?.Output ?? price.Output, longContext?.CacheRead ?? read,
-            longContext?.CacheWrite ?? write, input * 2);
+        return new(input, longContext?.Output ?? price.Output, read, write, input * 2);
     }
 
     private CostRates? CodexRates(string model, bool above200K, bool above272K, bool historical)
