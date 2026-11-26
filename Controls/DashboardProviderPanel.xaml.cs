@@ -180,6 +180,8 @@ public sealed partial class DashboardProviderPanel : UserControl
         if (ShowDetails)
         {
             BuildCostRows(data?.Cost);
+            // The cost facts may be the ones built before the details were closed: the next clock tick rewrites "Scanned"
+            _lastScannedText = null;
             var historyText = HistoryTextFor(data);
             if (!string.Equals(HistoryText.Text, historyText, StringComparison.Ordinal))
                 HistoryText.Text = historyText;
@@ -402,9 +404,9 @@ public sealed partial class DashboardProviderPanel : UserControl
         if (!string.Equals(HistoryText.Text, historyText, StringComparison.Ordinal))
             HistoryText.Text = historyText;
 
-        _lastScannedText = data?.Cost is { } c
-            ? $"{DashboardFormat.Local(c.CapturedAtUtc)} · {DashboardFormat.Ago(c.CapturedAtUtc)}"
-            : null;
+        // Unknown, not the current text: BuildCostRows keeps unchanged facts, so the "Scanned" fact on screen can be older
+        // than now. The next clock tick rewrites it.
+        _lastScannedText = null;
 
         Bindings.Update();
     }
