@@ -30,6 +30,11 @@ public sealed record DashboardSummary
     public IReadOnlyList<string> FasterWhileInUse { get; init; } = [];
     /// <summary>An idle provider is read faster because a window is near its limit.</summary>
     public bool FasterNearLimit { get; init; }
+    /// <summary>
+    /// The shortest interval the per-provider schedule allows any enabled provider (Claude alone is held to its floor
+    /// whatever the user's interval); 0 when that schedule is off.
+    /// </summary>
+    public int MinimumRefreshIntervalSeconds { get; init; }
 
     public int ProviderCount { get; init; }
 

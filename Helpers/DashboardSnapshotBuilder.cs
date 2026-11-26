@@ -203,6 +203,7 @@ public static class DashboardSnapshotBuilder
                 RefreshIntervalSeconds = settings.RefreshIntervalSeconds,
                 EffectiveRefreshIntervalSeconds = effectiveIntervalSeconds, ProviderCount = providers.Length,
                 FasterWhileInUse = inputs.RefreshCadence.ActiveProviders, FasterNearLimit = inputs.RefreshCadence.NearLimit,
+                MinimumRefreshIntervalSeconds = (int)Math.Clamp(inputs.RefreshCadence.Floor.TotalSeconds, 0, int.MaxValue),
                 HealthyProviderCount = providers.Count(p => !p.AuthRequired && string.IsNullOrEmpty(p.Error) && !p.IsStale),
                 ErrorProviderCount = providers.Count(p => !p.AuthRequired && !string.IsNullOrEmpty(p.Error)),
                 StaleProviderCount = providers.Count(p => !p.AuthRequired && p.IsStale),

@@ -374,6 +374,7 @@ public class ProviderRefreshPlannerTests
         var due = Plan(Input("claude", fetchMinutesAgo: 1), Options with { ActivityRefreshEnabled = false });
 
         due.NotBeforeUtc.Should().Be(Now.AddMinutes(-1));
+        due.Faster.Should().BeFalse();
     }
 
     [TestMethod]
@@ -492,6 +493,55 @@ public class ProviderRefreshPlannerTests
         cadence.NearLimit.Should().BeTrue();
         cadence.Should().Be(new RefreshCadence(["claude", "gemini"], true));
         ProviderRefreshPlanner.Cadence([]).Should().Be(RefreshCadence.None);
+    }
+
+    [TestMethod]
+    public void Cadence_ProviderInCooldown_IsNotFaster()
+    {
+        var plan = ProviderRefreshPlanner.Plan(
+            [Input("claude", activityMinutesAgo: 1, fetchMinutesAgo: 1, limitedUntil: Now.AddMinutes(9)),
+             Input("codex", activityMinutesAgo: 1, fetchMinutesAgo: 1, limitedUntil: Now.AddSeconds(30)),
+             Input("gemini", percent: 95, streak: 4, limitedUntil: Now.AddMinutes(1))],
+            Options, Now);
+
+        plan[0].Reason.Should().Be(RefreshReason.Active);
+        plan[1].RateLimited.Should().BeFalse("the cooldown ends before its active due time");
+        plan[2].Reason.Should().Be(RefreshReason.NearLimit);
+        ProviderRefreshPlanner.Cadence(plan).IsFaster.Should().BeFalse();
+    }
+
+    [TestMethod]
+    public void Cadence_ActiveIntervalNoShorterThanQuiet_IsNotFaster()
+    {
+        // A 1-minute interval: Claude is held to its 2-minute floor either way, and Codex is read every minute either way
+        var options = Options with { BaseInterval = TimeSpan.FromMinutes(1) };
+        var plan = ProviderRefreshPlanner.Plan(
+            [Input("claude", activityMinutesAgo: 1), Input("codex", activityMinutesAgo: 1)], options, Now);
+
+        plan.Should().OnlyContain(p => p.Reason == RefreshReason.Active && !p.Faster);
+        plan[0].Interval.Should().Be(TimeSpan.FromMinutes(2));
+        ProviderRefreshPlanner.Cadence(plan).IsFaster.Should().BeFalse();
+    }
+
+    [TestMethod]
+    public void Cadence_ActiveAfterQuietBackoff_IsFaster()
+    {
+        // Claude backed off to 3 minutes at a 1-minute interval: its 2-minute floor while in use is still faster
+        var options = Options with { BaseInterval = TimeSpan.FromMinutes(1) };
+        var plan = ProviderRefreshPlanner.Plan([Input("claude", activityMinutesAgo: 1, streak: 4)], options, Now);
+
+        ProviderRefreshPlanner.Cadence(plan).ActiveProviders.Should().Equal("claude");
+    }
+
+    [TestMethod]
+    public void Cadence_Floor_IsTheShortestMinimumInterval()
+    {
+        var claudeOnly = ProviderRefreshPlanner.Plan([Input("claude")], Options, Now);
+        var both = ProviderRefreshPlanner.Plan([Input("claude"), Input("codex")], Options, Now);
+
+        ProviderRefreshPlanner.Cadence(claudeOnly).Floor.Should().Be(ProviderRefreshPlanner.ClaudeActiveFloor);
+        ProviderRefreshPlanner.Cadence(both).Floor.Should().Be(TimeSpan.Zero);
+        ProviderRefreshPlanner.Cadence(claudeOnly).Should().NotBe(new RefreshCadence([], false));
     }
 
     [TestMethod]

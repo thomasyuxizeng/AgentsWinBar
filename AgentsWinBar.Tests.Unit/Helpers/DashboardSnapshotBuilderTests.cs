@@ -175,6 +175,18 @@ public class DashboardSnapshotBuilderTests
     }
 
     [TestMethod]
+    public void Build_RefreshCadenceFloor_IsCarriedIntoTheSummary()
+    {
+        var snapshot = DashboardSnapshotBuilder.Build(Inputs(Provider()) with
+        {
+            RefreshCadence = new RefreshCadence([], false, TimeSpan.FromMinutes(2))
+        });
+
+        snapshot.Summary.MinimumRefreshIntervalSeconds.Should().Be(120);
+        DashboardSnapshotBuilder.Build(Inputs(Provider())).Summary.MinimumRefreshIntervalSeconds.Should().Be(0);
+    }
+
+    [TestMethod]
     public void Build_FreshFetchOfOldCachedReading_MarksProviderStaleWithReadingTime()
     {
         var reading = Now.AddHours(-12);

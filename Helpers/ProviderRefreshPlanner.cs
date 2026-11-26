@@ -62,6 +62,10 @@ public sealed record RefreshPlanOptions
 /// floor) or the end of a 429 cooldown, whichever is later. MinValue when nothing holds it back.
 /// </param>
 /// <param name="CooldownUntilUtc">The end of a 429 cooldown that still lasts at the time of the plan, if any.</param>
+/// <param name="Faster">
+/// It is read more often than it would be while its tool is quiet (<see cref="RefreshReason.Active"/>), or than its idle
+/// back-off allows (<see cref="RefreshReason.NearLimit"/>).
+/// </param>
 public readonly record struct ProviderRefreshDue(
     string Provider,
     DateTime DueUtc,
@@ -70,7 +74,8 @@ public readonly record struct ProviderRefreshDue(
     int BackoffStep = 0,
     bool RateLimited = false,
     DateTime NotBeforeUtc = default,
-    DateTime? CooldownUntilUtc = null);
+    DateTime? CooldownUntilUtc = null,
+    bool Faster = false);
 
 /// <summary>
 /// Pure per-provider refresh schedule. A provider whose tool wrote local logs in the last <see cref="ActiveWindow"/>
@@ -146,6 +151,7 @@ public static class ProviderRefreshPlanner
         TimeSpan interval;
         RefreshReason reason;
         var step = 0;
+        var faster = false;
         var floor = TimeSpan.Zero;
         if (!options.ActivityRefreshEnabled)
         {
@@ -163,11 +169,15 @@ public static class ProviderRefreshPlanner
             {
                 interval = Finish(ActiveInterval < baseInterval ? ActiveInterval : baseInterval);
                 reason = RefreshReason.Active;
+                // Only faster when it beats the interval the provider has while its tool is quiet: a 1-minute base
+                // interval is not sped up, and Claude's floor can hold it to its quiet interval.
+                faster = interval < Finish(nearLimit ? NearLimitInterval : idle);
             }
             else if (nearLimit)
             {
                 interval = Finish(NearLimitInterval);
                 reason = RefreshReason.NearLimit;
+                faster = interval < Finish(idle);
             }
             else
             {
@@ -180,6 +190,7 @@ public static class ProviderRefreshPlanner
         {
             interval = options.LockedInterval;
             reason = RefreshReason.Locked;
+            faster = false;
         }
 
         DateTime? cooldown = input.RateLimitedUntilUtc is { } limit && Utc(limit) > now ? Utc(limit) : null;
@@ -194,7 +205,8 @@ public static class ProviderRefreshPlanner
             due = due with
             {
                 NotBeforeUtc = cooldown is { } end && end > notBefore ? end : notBefore,
-                CooldownUntilUtc = cooldown
+                CooldownUntilUtc = cooldown,
+                Faster = faster
             };
             return input.RateLimitedUntilUtc is { } until && Utc(until) > due.DueUtc
                 ? due with { DueUtc = Utc(until), RateLimited = true }
@@ -268,10 +280,17 @@ public static class ProviderRefreshPlanner
         }
     }
 
-    /// <summary>What the dashboard says about the schedule: the active providers in plan order, and a near-limit speed-up.</summary>
+    /// <summary>
+    /// What the dashboard says about the schedule: the providers read faster while their tool is in use (in plan order),
+    /// a near-limit speed-up, and the shortest interval the schedule allows at all. A provider in a 429 cooldown, or one
+    /// whose active interval is no shorter than its quiet one, is not faster.
+    /// </summary>
     public static RefreshCadence Cadence(IReadOnlyList<ProviderRefreshDue> plan) => new(
-        plan.Where(p => p.Reason == RefreshReason.Active).Select(p => p.Provider).ToArray(),
-        plan.Any(p => p.Reason == RefreshReason.NearLimit));
+        plan.Where(p => p.Reason == RefreshReason.Active && IsFaster(p)).Select(p => p.Provider).ToArray(),
+        plan.Any(p => p.Reason == RefreshReason.NearLimit && IsFaster(p)),
+        plan.Count == 0 ? TimeSpan.Zero : plan.Min(p => MinimumInterval(p.Provider)));
+
+    private static bool IsFaster(ProviderRefreshDue due) => due.Faster && !due.RateLimited && due.CooldownUntilUtc == null;
 
     private static DateTime Add(DateTime time, TimeSpan delta) =>
         DateTime.MaxValue - time < delta ? DateTime.MaxValue : time + delta;
@@ -280,9 +299,13 @@ public static class ProviderRefreshPlanner
 }
 
 /// <summary>Which providers refresh faster right now (for the dashboard header). Empty when the setting is off.</summary>
-/// <param name="ActiveProviders">Provider ids whose tool is in use, in display order.</param>
+/// <param name="ActiveProviders">Provider ids whose tool is in use and that are read faster for it, in display order.</param>
 /// <param name="NearLimit">An idle provider refreshes faster because a window is near its limit.</param>
-public sealed record RefreshCadence(IReadOnlyList<string> ActiveProviders, bool NearLimit)
+/// <param name="Floor">
+/// The shortest interval any enabled provider may have: Claude alone is never read more often than its floor, whatever
+/// the user's interval. Zero when the setting is off.
+/// </param>
+public sealed record RefreshCadence(IReadOnlyList<string> ActiveProviders, bool NearLimit, TimeSpan Floor = default)
 {
     public static readonly RefreshCadence None = new([], false);
 
@@ -307,9 +330,10 @@ public sealed record RefreshCadence(IReadOnlyList<string> ActiveProviders, bool 
     }
 
     public bool Equals(RefreshCadence? other) =>
-        other is not null && NearLimit == other.NearLimit && ActiveProviders.SequenceEqual(other.ActiveProviders);
+        other is not null && NearLimit == other.NearLimit && Floor == other.Floor &&
+        ActiveProviders.SequenceEqual(other.ActiveProviders);
 
-    public override int GetHashCode() => HashCode.Combine(NearLimit, ActiveProviders.Count);
+    public override int GetHashCode() => HashCode.Combine(NearLimit, Floor, ActiveProviders.Count);
 }
 
 /// <summary>Log category for the refresh schedule (each scheduled refresh, its providers and reasons).</summary>

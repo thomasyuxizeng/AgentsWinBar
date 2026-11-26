@@ -536,6 +536,19 @@ public class MainViewModelActivityRefreshTests
     }
 
     [TestMethod]
+    public async Task Replan_ActiveProviderInCooldown_IsNotShownAsFaster()
+    {
+        _activity.Touch("claude");
+        await _viewModel.StartAsync();
+        _viewModel.RefreshCadence.ActiveProviders.Should().Equal("claude");
+        _usage.Setup(s => s.GetRateLimitedUntil("claude")).Returns(DateTime.UtcNow.AddMinutes(9));
+
+        Replan();
+
+        _viewModel.RefreshCadence.IsFaster.Should().BeFalse();
+    }
+
+    [TestMethod]
     public async Task ProviderDisabled_IsNeverReadByTheSchedule()
     {
         _activity.Touch("codex");

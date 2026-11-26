@@ -227,11 +227,13 @@ public sealed partial class DashboardPage : Page
         {
             parts.Add($"Updated {DashboardFormat.LocalTime(last)} ({DashboardFormat.Ago(last)})");
             if (summary.NextRefreshUtc.HasValue) parts.Add($"next refresh {DashboardFormat.In(summary.NextRefreshUtc)}");
-            // "faster while Claude is in use" replaces the interval while the per-provider schedule speeds a provider up
+            // "faster while Claude is in use" replaces the interval while the per-provider schedule speeds a provider up.
+            // Claude alone at a 1-minute interval is held to its floor: that is its interval, not an idle back-off.
+            var every = Math.Max(summary.RefreshIntervalSeconds, summary.MinimumRefreshIntervalSeconds);
             parts.Add(RefreshCadence.Caption(summary.FasterWhileInUse, summary.FasterNearLimit) ??
-                (summary.EffectiveRefreshIntervalSeconds > summary.RefreshIntervalSeconds
+                (summary.EffectiveRefreshIntervalSeconds > every
                     ? $"every {DashboardFormat.Seconds(summary.EffectiveRefreshIntervalSeconds)} while usage is idle"
-                    : $"every {DashboardFormat.Seconds(summary.RefreshIntervalSeconds)}"));
+                    : $"every {DashboardFormat.Seconds(every)}"));
         }
         else parts.Add("Waiting for the first refresh…");
         var full = string.Join(" · ", parts);
