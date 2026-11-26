@@ -5,6 +5,7 @@ using CommunityToolkit.Mvvm.Input;
 using AgentsWinBar.Helpers;
 using AgentsWinBar.Models;
 using AgentsWinBar.Services;
+using AgentsWinBar.Services.Native;
 using Microsoft.Extensions.Logging;
 
 namespace AgentsWinBar.ViewModels;
@@ -74,6 +75,19 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private readonly HashSet<DateTime> _knownResetStamps = [];
     private readonly Dictionary<DateTime, ResetRefreshAttempt> _resetRefreshAttempts = [];
     private bool? _resetTrackerDeveloperMode;
+    // Per-provider schedule ("Refresh faster while a tool is in use"). All touched on the UI thread only.
+    private readonly IProviderActivitySource? _toolActivity;
+    private readonly ILogger _scheduleLog;
+    private readonly Dictionary<string, DateTime> _lastFetchUtc = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, DateTime> _lastResultUtc = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, int> _providerStreaks = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, UsageFingerprint> _providerFingerprints = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>A refresh that fires up to this much before a provider is due (timer and wall clock disagree) still takes it.</summary>
+    private static readonly TimeSpan DueTolerance = TimeSpan.FromSeconds(1);
+
+    /// <summary>Which providers refresh faster right now (shown in the dashboard header).</summary>
+    [ObservableProperty]
+    private RefreshCadence _refreshCadence = RefreshCadence.None;
 
     [ObservableProperty]
     private DateTime? _nextRefreshUtc;
@@ -118,8 +132,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
         IDashboardService? dashboardService = null,
         ResetAnimationVisibility? resetVisibility = null,
         ISignInWatcher? signInWatcher = null,
-        IAdminKeyService? adminKeys = null)
+        IAdminKeyService? adminKeys = null,
+        IProviderActivitySource? toolActivity = null,
+        ILogger<RefreshScheduleLog>? scheduleLog = null)
     {
+        _toolActivity = toolActivity;
+        _scheduleLog = scheduleLog ?? (ILogger)logger;
+        if (_toolActivity != null) _toolActivity.ActivityStarted += OnToolActivityStarted;
         _resetVisibility = resetVisibility ?? ResetAnimationVisibility.Shared;
         _codexBarService = codexBarService;
         _settingsService = settingsService;
@@ -167,6 +186,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             return;
         }
         RestoreLastKnownUsage();
+        LogRefreshForAll("Startup", RefreshReason.First);
         await RefreshCoreAsync();
     }
 
@@ -225,9 +245,18 @@ public partial class MainViewModel : ObservableObject, IDisposable
         while (Providers.Count > restored.Count) Providers.RemoveAt(Providers.Count - 1);
         ErrorMessage = null;
         _usageFingerprint = UsageFingerprint.Create(Providers);
+        foreach (var data in restored)
+        {
+            if (!ProviderConstants.IsValidProvider(data.Provider)) continue;
+            var provider = ProviderConstants.ValidateAndNormalize(data.Provider);
+            _lastFetchUtc[provider] = _lastResultUtc[provider] = CacheTimestampUtc(data.FetchedAt);
+            _providerFingerprints[provider] = UsageFingerprint.Create([data]);
+        }
         LastUpdated = oldest.ToLocalTime();
         UpdateLastUpdatedText();
-        RecreateTimer(interval - (now - oldest));
+        // Per provider, each cached reading's own age decides when it is due; otherwise the oldest one does.
+        if (ActivityRefreshOn) RecreateTimer();
+        else RecreateTimer(interval - (now - oldest));
         RefreshDemandedCostsAsync().SafeFireAndForget(
             onError: ex => _logger.LogError(ex, "Cached usage cost refresh failed"));
         ScheduleWorkingSetTrim();
@@ -259,6 +288,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private Task RefreshAsync()
     {
         ResetAdaptiveRefresh();
+        LogRefreshForAll("Manual", RefreshReason.Manual);
         return RefreshCoreAsync(forceCostRefresh: true);
     }
 
@@ -270,12 +300,35 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         var baseInterval = TimeSpan.FromSeconds(_settingsService.Settings.RefreshIntervalSeconds);
         if (maxAge < baseInterval) maxAge = baseInterval;
+        if (ActivityRefreshOn && LastUpdated != default) return RefreshStaleProvidersAsync(maxAge);
         var age = DateTime.Now - LastUpdated;
         if (_disposed || _stopped || _exiting ||
             (LastUpdated != default && age >= TimeSpan.Zero && age <= maxAge)) return Task.CompletedTask;
         ResetAdaptiveRefresh();
         if (IsLoading) return _refreshCompletion?.Task ?? Task.CompletedTask;
+        LogRefreshForAll("OnOpen", RefreshReason.OnOpen);
         return RefreshCoreAsync();
+    }
+
+    /// <summary>
+    /// Refresh-on-open under the per-provider schedule: providers refresh at different times, so each one's own last
+    /// fetch decides, and only the providers older than <paramref name="maxAge"/> are read.
+    /// </summary>
+    private Task RefreshStaleProvidersAsync(TimeSpan maxAge)
+    {
+        if (_disposed || _stopped || _exiting) return Task.CompletedTask;
+        var now = DateTime.UtcNow;
+        // LastUpdated is the newest reading of any provider: when even that is old (or ahead of the clock), all are.
+        var age = DateTime.Now - LastUpdated;
+        var allStale = age < TimeSpan.Zero || age > maxAge;
+        // A provider's last answer, not its last attempt: a refresh that failed is tried again when a window opens
+        var stale = EnabledProviderIds().Where(provider => allStale || !_lastResultUtc.TryGetValue(provider, out var last) ||
+            now < last || now - last > maxAge).ToList();
+        if (stale.Count == 0) return Task.CompletedTask;
+        ResetAdaptiveRefresh();
+        if (IsLoading) return _refreshCompletion?.Task ?? Task.CompletedTask;
+        LogRefresh("OnOpen", stale.Select(provider => new ProviderRefreshDue(provider, now, TimeSpan.Zero, RefreshReason.OnOpen)));
+        return RefreshCoreAsync(onlyProviders: stale);
     }
 
     /// <summary>
@@ -294,6 +347,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             }
             ResetAdaptiveRefresh();
             if (IsLoading) { _refreshPending = true; return; }
+            LogRefreshForAll("SignIn", RefreshReason.Manual);
             RefreshCoreAsync().SafeFireAndForget(onError: ex => _logger.LogError(ex, "Sign-in refresh failed"));
         }
         catch (Exception ex)
@@ -361,6 +415,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private void ResetAdaptiveRefresh()
     {
         _unchangedRefreshes = 0;
+        _providerStreaks.Clear();
         _adaptiveResetVersion++;
         _adaptiveResetPending = true;
         EffectiveRefreshInterval = GetScheduledDelay();
@@ -645,7 +700,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
     }
 
-    private async Task RefreshCoreAsync(bool forceCostRefresh = false, IReadOnlyList<EarlyResetWindowReading>? resetTargets = null)
+    /// <param name="onlyProviders">
+    /// Read only these providers (the per-provider schedule); the others keep their readings and fetch times. Null
+    /// (and a list naming every enabled provider) reads them all.
+    /// </param>
+    private async Task RefreshCoreAsync(bool forceCostRefresh = false, IReadOnlyList<EarlyResetWindowReading>? resetTargets = null,
+        IReadOnlyCollection<string>? onlyProviders = null)
     {
         if (_stopped || _disposed || _exiting)
         {
@@ -688,6 +748,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
             await _historyPersistence.LoadAsync(ct);
         }
         List<string>? costProviders = null;
+        List<string>? attempted = null;
+        var stamped = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var refreshStarted = Stopwatch.GetTimestamp();
 
         try
@@ -713,14 +775,25 @@ public partial class MainViewModel : ObservableObject, IDisposable
             _resetTracker.RetainProviders(enabledProviders.Select(p => p.Id));
             ProviderListSynchronizer.Sync(Providers, enabledProviders.Select(p => p.Id).ToList());
 
-            // Everything is loading again (existing data stays visible while it refreshes)
+            var enabledIds = enabledProviders.Where(p => ProviderConstants.IsValidProvider(p.Id))
+                .Select(p => ProviderConstants.ValidateAndNormalize(p.Id)).ToList();
+            List<string>? partial = onlyProviders == null ? null
+                : enabledIds.Where(id => onlyProviders.Contains(id, StringComparer.OrdinalIgnoreCase)).ToList();
+            if (partial != null && partial.Count == enabledIds.Count) partial = null;
+            attempted = partial ?? enabledIds;
+            // Every provider that was due has been disabled meanwhile
+            if (attempted.Count == 0) return;
+
+            // The providers being read are loading again (existing data stays visible while it refreshes)
             for (int i = 0; i < Providers.Count; i++)
             {
-                if (!Providers[i].IsLoading) Providers[i] = Providers[i] with { IsLoading = true };
+                if (!Providers[i].IsLoading && (partial == null || partial.Contains(Providers[i].Provider, StringComparer.OrdinalIgnoreCase)))
+                    Providers[i] = Providers[i] with { IsLoading = true };
             }
 
             // Stream results and update as they complete
-            await foreach (var data in _codexBarService.GetAllUsageStreamAsync(ct))
+            var stream = partial == null ? _codexBarService.GetAllUsageStreamAsync(ct) : _codexBarService.GetUsageStreamAsync(partial, ct);
+            await foreach (var data in stream)
             {
                 // Services may finish despite cancellation; obsolete results must never reach UI or history.
                 ct.ThrowIfCancellationRequested();
@@ -765,6 +838,19 @@ public partial class MainViewModel : ObservableObject, IDisposable
                             ? CacheRetention.RetainedCost(previous.Cost, DateTime.UtcNow) : null
                     };
                     TrackResetStamps(Providers[index]);
+                }
+                if (ProviderConstants.IsValidProvider(data.Provider))
+                {
+                    // Each provider's own fetch time and unchanged streak drive the per-provider schedule
+                    var key = ProviderConstants.ValidateAndNormalize(data.Provider);
+                    stamped.Add(key);
+                    _lastFetchUtc[key] = resultAtUtc;
+                    _lastResultUtc[key] = resultAtUtc;
+                    var providerFingerprint = UsageFingerprint.Create(index >= 0 ? [Providers[index]] : [data]);
+                    _providerStreaks[key] = resetAdaptiveStreak || resetVersion != _adaptiveResetVersion || forceCostRefresh ||
+                        providerFingerprint.HasChangedFrom(_providerFingerprints.GetValueOrDefault(key))
+                            ? 0 : _providerStreaks.GetValueOrDefault(key) + 1;
+                    _providerFingerprints[key] = providerFingerprint;
                 }
             }
 
@@ -820,6 +906,14 @@ public partial class MainViewModel : ObservableObject, IDisposable
         finally
         {
             _refreshCts = null;
+            // A provider that gave no answer (the refresh failed) still counts as tried, so a failing provider waits its
+            // interval instead of being retried at once. A canceled refresh is followed by the one that canceled it.
+            if (attempted != null && !ct.IsCancellationRequested)
+            {
+                var triedAt = DateTime.UtcNow;
+                foreach (var provider in attempted)
+                    if (!stamped.Contains(provider)) _lastFetchUtc[provider] = triedAt;
+            }
             if (!_disposed)
             {
                 for (var i = 0; i < Providers.Count; i++)
@@ -993,7 +1087,34 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     : new ResetRefreshAttempt(DateTime.UtcNow);
                 _logger.LogInformation("Refreshing after usage reset {ResetAtUtc}; retry: {IsRetry}", reset, schedule.IsRetry);
             }
-            await RefreshCoreAsync(resetTargets: targets);
+            if (!ActivityRefreshOn)
+            {
+                if (_scheduleLog.IsEnabled(LogLevel.Information))
+                    LogRefresh("Scheduled", BuildPlan(DateTime.UtcNow, legacy: true)
+                        .Select(due => targets == null ? due : due with { Reason = RefreshReason.Reset }));
+                await RefreshCoreAsync(resetTargets: targets);
+                return;
+            }
+            // Re-plan at the time of the wake-up: activity, settings or a lock may have changed while waiting.
+            var now = DateTime.UtcNow;
+            var dueNow = ProviderRefreshPlanner.SelectDue(BuildPlan(now), now + DueTolerance, IsSessionLocked).ToList();
+            if (targets != null)
+            {
+                foreach (var provider in targets.Select(t => t.Provider).Where(ProviderConstants.IsValidProvider)
+                    .Select(ProviderConstants.ValidateAndNormalize).Distinct(StringComparer.Ordinal))
+                {
+                    var index = dueNow.FindIndex(d => d.Provider == provider);
+                    if (index >= 0) dueNow[index] = dueNow[index] with { Reason = RefreshReason.Reset };
+                    else dueNow.Add(new ProviderRefreshDue(provider, now, TimeSpan.Zero, RefreshReason.Reset));
+                }
+            }
+            if (dueNow.Count == 0)
+            {
+                RecreateTimer();
+                return;
+            }
+            LogRefresh("Scheduled", dueNow);
+            await RefreshCoreAsync(resetTargets: targets, onlyProviders: dueNow.Select(d => d.Provider).ToArray());
         }
         catch (OperationCanceledException)
         {
@@ -1063,6 +1184,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             if (!_settingsService.Settings.ShowCostTotals)
                 for (var i = 0; i < Providers.Count; i++) Providers[i] = Providers[i] with { Cost = null };
             if (IsLoading) { _refreshPending = true; _refreshCts?.Cancel(); return; }
+            LogRefreshForAll("Settings", RefreshReason.Manual);
             await RefreshCoreAsync();
         }
         catch (Exception ex)
@@ -1091,6 +1213,17 @@ public partial class MainViewModel : ObservableObject, IDisposable
         ResetRefreshScheduler.PruneExpiredAttempts(_resetRefreshAttempts, now);
         var pendingSinceUtc = _carryOverSinceUtc;
         _carryOverSinceUtc = null;
+        IReadOnlyList<ProviderRefreshDue>? plan = null;
+        if (ActivityRefreshOn)
+        {
+            // Each provider is due from its own last fetch, so a changed interval never loses the time already waited.
+            pendingSinceUtc = null;
+            _toolActivity?.EnsureWatching();
+            plan = BuildPlan(now);
+            if (ProviderRefreshPlanner.NextDue(plan) is { } next) firstDelay = next - now;
+            RefreshCadence = ProviderRefreshPlanner.Cadence(plan);
+        }
+        else RefreshCadence = RefreshCadence.None;
         var normalDelay = firstDelay ?? GetScheduledDelay();
         if (normalDelay < ResetRefreshScheduler.MinimumDelay) normalDelay = ResetRefreshScheduler.MinimumDelay;
         var locked = _sessionLocked || QuerySessionLocked();
@@ -1113,7 +1246,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
         var schedule = locked ? new ResetRefreshSchedule(normalDelay)
             : ResetRefreshScheduler.GetSchedule(resetTimes, now, normalDelay, _resetRefreshAttempts);
-        EffectiveRefreshInterval = schedule.Delay;
+        // The per-provider schedule shows its shortest whole interval (a reset refresh shows its own wait, as before)
+        EffectiveRefreshInterval = plan is { Count: > 0 } && schedule.TargetResetAtUtc == null
+            ? plan.Min(due => due.Interval) : schedule.Delay;
         // A new interval for the refresh already pending (battery saver) keeps the time already waited; the interval shown stays whole
         if (pendingSinceUtc is { } since && schedule.TargetResetAtUtc == null)
             schedule = schedule with { Delay = TimeSpan.FromTicks(Math.Max(ResetRefreshScheduler.MinimumDelay.Ticks, (schedule.Delay - (now - since)).Ticks)) };
@@ -1129,6 +1264,91 @@ public partial class MainViewModel : ObservableObject, IDisposable
         if (_sessionLocked || QuerySessionLocked())
             WatchForUnlockAsync(_timerCts.Token).SafeFireAndForget(
                 onError: ex => _logger.LogError(ex, "Unlock watcher failed"));
+    }
+
+    /// <summary>The "Refresh faster while a tool is in use" setting: one schedule per provider instead of one for all.</summary>
+    private bool ActivityRefreshOn => _settingsService.Settings.ActivityRefreshEnabled;
+
+    private List<string> EnabledProviderIds() => _settingsService.Settings.Providers
+        .Where(p => p.IsEnabled && ProviderConstants.IsValidProvider(p.Id)).OrderBy(p => p.Order)
+        .Select(p => ProviderConstants.ValidateAndNormalize(p.Id)).Distinct(StringComparer.Ordinal).ToList();
+
+    /// <summary>
+    /// When each enabled provider is due and why. <paramref name="legacy"/> plans with the setting off (one shared
+    /// streak), only for the log line of a refresh under today's schedule.
+    /// </summary>
+    private IReadOnlyList<ProviderRefreshDue> BuildPlan(DateTime nowUtc, bool legacy = false)
+    {
+        var settings = _settingsService.Settings;
+        var inputs = new List<ProviderRefreshInput>(3);
+        foreach (var provider in EnabledProviderIds())
+        {
+            DateTime? lastFetch = null;
+            if (_lastFetchUtc.TryGetValue(provider, out var stamp))
+            {
+                // The clock was set back: a fetch "in the future" counts as just now (once), so the wait stays one interval.
+                if (stamp > nowUtc) _lastFetchUtc[provider] = stamp = nowUtc;
+                lastFetch = stamp;
+            }
+            UsageData? data = null;
+            foreach (var shown in Providers)
+            {
+                if (shown.Provider.Equals(provider, StringComparison.OrdinalIgnoreCase)) { data = shown; break; }
+            }
+            var (percent, pace) = ProviderRefreshPlanner.Pressure(data, nowUtc);
+            DateTime? limitedUntil = null;
+            try { limitedUntil = _codexBarService.GetRateLimitedUntil(provider); }
+            catch (Exception ex) { _logger.LogDebug("Rate limit state unavailable ({Type})", ex.GetType().Name); }
+            inputs.Add(new(provider, _toolActivity?.LastActivityUtc(provider), lastFetch, percent, pace,
+                legacy ? _unchangedRefreshes : _providerStreaks.GetValueOrDefault(provider), limitedUntil));
+        }
+        return ProviderRefreshPlanner.Plan(inputs, new RefreshPlanOptions
+        {
+            BaseInterval = TimeSpan.FromSeconds(settings.RefreshIntervalSeconds),
+            AdaptiveEnabled = settings.AdaptiveRefreshEnabled,
+            ActivityRefreshEnabled = !legacy && settings.ActivityRefreshEnabled,
+            BatterySaver = _batterySaverMonitor?.BatterySaverActive ?? false,
+            Locked = IsSessionLocked,
+            LockedInterval = TimeSpan.FromMinutes(settings.LockedRefreshIntervalMinutes)
+        }, nowUtc);
+    }
+
+    private void LogRefreshForAll(string trigger, RefreshReason reason)
+    {
+        if (!_scheduleLog.IsEnabled(LogLevel.Information)) return;
+        var now = DateTime.UtcNow;
+        LogRefresh(trigger, EnabledProviderIds().Select(provider => new ProviderRefreshDue(provider, now, TimeSpan.Zero, reason)));
+    }
+
+    /// <summary>One line per provider read: the trigger, the provider and why (no paths, no usage values).</summary>
+    private void LogRefresh(string trigger, IEnumerable<ProviderRefreshDue> providers)
+    {
+        if (!_scheduleLog.IsEnabled(LogLevel.Information)) return;
+        foreach (var due in providers)
+        {
+            _scheduleLog.LogInformation(
+                "{Trigger} refresh of {Provider}: {Reason}, back-off step {Step}, interval {IntervalSeconds} s, rate limited {RateLimited}",
+                trigger, due.Provider, due.Reason, due.BackoffStep, (int)due.Interval.TotalSeconds, due.RateLimited);
+        }
+    }
+
+    /// <summary>A provider's tool started writing logs after a quiet period: re-plan so it is read soon, not at its idle time.</summary>
+    private void OnToolActivityStarted(object? sender, string provider)
+    {
+        try
+        {
+            OnUiThread(() =>
+            {
+                try
+                {
+                    // A locked session waits its locked interval whatever the tools do (re-planning would restart that wait)
+                    if (_disposed || _stopped || _exiting || IsLoading || !ActivityRefreshOn || IsSessionLocked) return;
+                    RecreateTimer();
+                }
+                catch (Exception ex) { _logger.LogError(ex, "Failed to re-plan after tool activity"); }
+            });
+        }
+        catch (Exception ex) { _logger.LogError(ex, "Failed to dispatch tool activity"); }
     }
 
     /// <summary>How often a locked session is checked for having been unlocked (the lock-state query is a cheap call).</summary>
@@ -1171,6 +1391,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             if (_batterySaverMonitor != null) _batterySaverMonitor.BatterySaverChanged -= OnBatterySaverChanged;
             if (_signInWatcher != null) _signInWatcher.RefreshRequested -= OnSignInRefreshRequested;
             if (_adminKeys != null) _adminKeys.KeyChanged -= OnAdminKeyChanged;
+            if (_toolActivity != null) _toolActivity.ActivityStarted -= OnToolActivityStarted;
             _sessionState.Locked -= OnSessionLocked;
             _sessionState.Unlocked -= OnSessionActivated;
             _sessionState.Resumed -= OnSessionActivated;

@@ -11,9 +11,16 @@ using Moq;
 
 namespace AgentsWinBar.Tests.Unit.ViewModels;
 
+/// <summary>
+/// Runs with "Refresh faster while a tool is in use" on (the default). <see cref="MainViewModelLegacyScheduleTests"/>
+/// runs every test again with it off, which must behave exactly as before the setting existed.
+/// </summary>
 [TestClass]
 public class MainViewModelTests
 {
+    /// <summary>The "Refresh faster while a tool is in use" setting for every test of this class.</summary>
+    protected virtual bool ActivityRefresh => true;
+
     [TestMethod]
     public async Task StartAsync_ShimAuthAnnotation_RecordsFailedRefreshWithAuthMessage()
     {
@@ -75,6 +82,7 @@ public class MainViewModelTests
         _values = AppSettings.GetDefaults();
         _values.RefreshIntervalSeconds = 86400;
         _values.AlertsEnabled = false;
+        _values.ActivityRefreshEnabled = ActivityRefresh;
         _values.Providers = [new() { Id = "claude" }];
         _settings.SetupGet(s => s.Settings).Returns(_values);
         _settings.SetupGet(s => s.SettingsFilePath).Returns(Path.Combine(_directory, "settings.json"));
@@ -291,7 +299,7 @@ public class MainViewModelTests
 
     private Task PeriodicRefreshAsync() => (Task)typeof(MainViewModel)
         .GetMethod("RefreshCoreAsync", BindingFlags.Instance | BindingFlags.NonPublic)!
-        .Invoke(_viewModel, [false, null])!;
+        .Invoke(_viewModel, [false, null, null])!;
 
     private Task CostScanCompletion(bool background = true) => ((TaskCompletionSource)typeof(MainViewModel)
         .GetField(background ? "_backgroundCostRefreshCompletion" : "_costRefreshCompletion",
@@ -409,6 +417,8 @@ public class MainViewModelTests
     [DataRow(true)]
     public async Task StartAsync_ZeroIntervals_ClampsTimerToTwoSeconds(bool locked)
     {
+        // Today's schedule; the per-provider one never reads Claude more often than its floor
+        _values.ActivityRefreshEnabled = false;
         _values.RefreshIntervalSeconds = 0;
         _values.LockedRefreshIntervalMinutes = 0;
         _values.AdaptiveRefreshEnabled = false;
@@ -472,6 +482,8 @@ public class MainViewModelTests
     [TestMethod]
     public async Task RunPeriodicRefreshAsync_StaleReset_PerformsOneRetryThenNormalCadence()
     {
+        // Today's schedule; per provider, a 90% window is read every 5 minutes, not at the 1-day base interval
+        _values.ActivityRefreshEnabled = false;
         _values.AdaptiveRefreshEnabled = false;
         var reset = DateTime.UtcNow.AddSeconds(30);
         var data = Data(90) with { Session = new() { ResetAt = reset, ReportedPercent = 90 } };
@@ -973,6 +985,8 @@ public class MainViewModelTests
     [TestMethod]
     public async Task PeriodicTimer_MissedUnlockEvent_ReturnsToNormalDelayAndClearsFlag()
     {
+        // Today's schedule fetches on any timer; per provider, a wake-up before anything is due only re-plans
+        _values.ActivityRefreshEnabled = false;
         _values.RefreshIntervalSeconds = 300;
         _values.AdaptiveRefreshEnabled = false;
         SetupImmediateUsage();
@@ -1122,6 +1136,8 @@ public class MainViewModelTests
     [TestMethod]
     public async Task StartAsync_AllEnabledCachesFresh_HydratesAndSchedulesOldestRemainingDelay()
     {
+        // Today's schedule shows the remaining wait; per provider, the whole interval is shown
+        _values.ActivityRefreshEnabled = false;
         _values.RefreshIntervalSeconds = 300;
         _values.Providers = [new() { Id = "claude", Order = 1 }, new() { Id = "codex", Order = 0 }];
         var oldest = DateTime.UtcNow.AddMinutes(-2);
@@ -2214,4 +2230,11 @@ public class MainViewModelTests
         savedContent.Should().Contain("42");
         savedContent.Should().Contain("20");
     }
+}
+
+/// <summary>Every <see cref="MainViewModelTests"/> test with "Refresh faster while a tool is in use" off: today's schedule.</summary>
+[TestClass]
+public class MainViewModelLegacyScheduleTests : MainViewModelTests
+{
+    protected override bool ActivityRefresh => false;
 }

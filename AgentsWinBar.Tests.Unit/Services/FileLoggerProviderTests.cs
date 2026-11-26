@@ -44,6 +44,25 @@ public class FileLoggerProviderTests
     private static void ThrowInner() => throw new IOException(@"C:\synthetic\private\path could not be read");
 
     [TestMethod]
+    public void Log_ScheduleInformation_IsWrittenWithEveryArgumentAndOtherInformationIsNot()
+    {
+        using var provider = new FileLoggerProvider(_directory.FullName);
+        var schedule = provider.CreateLogger(typeof(AgentsWinBar.Helpers.RefreshScheduleLog).FullName!);
+        var other = provider.CreateLogger("Test.Category");
+
+        other.LogInformation("Not kept");
+        schedule.LogDebug("Not kept either");
+        schedule.LogInformation(
+            "{Trigger} refresh of {Provider}: {Reason}, back-off step {Step}, interval {IntervalSeconds} s, rate limited {RateLimited}",
+            "Scheduled", "codex", AgentsWinBar.Helpers.RefreshReason.Active, 0, 120, false);
+
+        var text = File.ReadAllText(Path.Combine(_directory.FullName, "app.log"));
+        text.Should().NotContain("Not kept");
+        text.Should().Contain("[Information] AgentsWinBar.Helpers.RefreshScheduleLog: " +
+            "Scheduled refresh of codex: Active, back-off step 0, interval 120 s, rate limited False");
+    }
+
+    [TestMethod]
     public void Log_WhenExceptionIsAttached_WritesItsTypeAndOmitsItsMessage()
     {
         using var provider = new FileLoggerProvider(_directory.FullName);

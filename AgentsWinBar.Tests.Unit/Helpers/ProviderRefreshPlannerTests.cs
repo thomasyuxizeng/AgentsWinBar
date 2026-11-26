@@ -1,5 +1,6 @@
 using AwesomeAssertions;
 using AgentsWinBar.Helpers;
+using AgentsWinBar.Models;
 
 namespace AgentsWinBar.Tests.Unit.Helpers;
 
@@ -330,6 +331,70 @@ public class ProviderRefreshPlannerTests
         ProviderRefreshPlanner.IsActive(Now - ProviderRefreshPlanner.ActiveWindow, Now).Should().BeTrue();
         ProviderRefreshPlanner.IsActive(Now - ProviderRefreshPlanner.ActiveWindow - TimeSpan.FromTicks(1), Now).Should().BeFalse();
         ProviderRefreshPlanner.IsActive(null, Now).Should().BeFalse();
+    }
+
+    [TestMethod]
+    public void Pressure_TakesHighestNumericWindowAndPaceWarning()
+    {
+        var data = new UsageData
+        {
+            Provider = "codex",
+            Session = new UsageWindow { ReportedPercent = 40, WindowMinutes = 300, ResetAt = Now.AddHours(4) },
+            Weekly = new UsageWindow { ReportedPercent = 86, WindowMinutes = 10080, ResetAt = Now.AddDays(6) },
+            ExtraWindows = [new() { Key = "x", Window = new UsageWindow() }]
+        };
+
+        var (percent, pace) = ProviderRefreshPlanner.Pressure(data, Now);
+
+        percent.Should().Be(86);
+        // 86% used one day into a seven-day window runs out long before the reset
+        pace.Should().BeTrue();
+    }
+
+    [TestMethod]
+    public void Pressure_NoNumericPercentOrSignedOut_IsUnknown()
+    {
+        ProviderRefreshPlanner.Pressure(new UsageData { Provider = "codex", Session = new UsageWindow() }, Now)
+            .Should().Be(((double?)null, false));
+        ProviderRefreshPlanner.Pressure(new UsageData
+        {
+            Provider = "codex", AuthRequired = true, Session = new UsageWindow { ReportedPercent = 99 }
+        }, Now).Should().Be(((double?)null, false));
+        ProviderRefreshPlanner.Pressure(null, Now).Should().Be(((double?)null, false));
+    }
+
+    [TestMethod]
+    public void Cadence_ListsActiveProvidersInPlanOrderAndNearLimit()
+    {
+        var plan = ProviderRefreshPlanner.Plan(
+            [Input("claude", activityMinutesAgo: 1), Input("codex", percent: 95, streak: 4), Input("gemini", activityMinutesAgo: 2)],
+            Options, Now);
+
+        var cadence = ProviderRefreshPlanner.Cadence(plan);
+
+        cadence.ActiveProviders.Should().Equal("claude", "gemini");
+        cadence.NearLimit.Should().BeTrue();
+        cadence.Should().Be(new RefreshCadence(["claude", "gemini"], true));
+        ProviderRefreshPlanner.Cadence([]).Should().Be(RefreshCadence.None);
+    }
+
+    [TestMethod]
+    [DataRow(new[] { "claude" }, false, "faster while Claude is in use")]
+    [DataRow(new[] { "claude", "codex" }, false, "faster while Claude and Codex are in use")]
+    [DataRow(new[] { "claude", "codex", "gemini" }, true, "faster while Claude, Codex and Gemini are in use")]
+    [DataRow(new string[0], true, "faster near a limit")]
+    public void Caption_PlainUsEnglish(string[] active, bool nearLimit, string expected)
+    {
+        var caption = RefreshCadence.Caption(active, nearLimit);
+
+        caption.Should().Be(expected);
+        caption!.Should().NotContainAny("\u2013", "\u2014");
+    }
+
+    [TestMethod]
+    public void Caption_NothingFaster_IsNull()
+    {
+        RefreshCadence.Caption([], false).Should().BeNull();
     }
 
     [TestMethod]

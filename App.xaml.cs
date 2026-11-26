@@ -319,6 +319,8 @@ public partial class App : Application
 #else
             builder.AddProvider(new FileLoggerProvider(AppPaths.DataDirectory));
             builder.SetMinimumLevel(LogLevel.Warning);
+            // The refresh schedule's one line per provider read (no paths, no usage values) is kept for live tests
+            builder.AddFilter(FileLoggerProvider.ScheduleCategory, LogLevel.Information);
 #endif
         });
 
@@ -343,7 +345,13 @@ public partial class App : Application
         services.AddSingleton<Services.Native.INativeUsageService>(sp =>
             new Services.Native.NativeUsageService(sp.GetRequiredService<ILoggerFactory>(),
                 () => sp.GetRequiredService<ISettingsService>().Settings.RenewClaudeSignIn, testOverrides,
-                () => sp.GetRequiredService<ISettingsService>().Settings.RenewGeminiSignIn, _shutdown.Token));
+                () => sp.GetRequiredService<ISettingsService>().Settings.RenewGeminiSignIn, _shutdown.Token,
+                // Claude's reading cache follows the per-provider schedule while "Refresh faster while a tool is in use" is on
+                () => sp.GetRequiredService<ISettingsService>().Settings.ActivityRefreshEnabled));
+        // When each tool last wrote its local logs (a timestamp per provider; no file is read)
+        services.AddSingleton<Services.Native.IProviderActivitySource>(sp =>
+            new Services.Native.ProviderActivityTracker(
+                sp.GetRequiredService<ILogger<Services.Native.ProviderActivityTracker>>(), testOverrides));
         // Native cost scanner: index and refreshed prices live beside settings.json. CodexBarService uses it while
         // the cost source is "native"; nothing is scanned or watched before the first cost request.
         services.AddSingleton<Services.Native.INativeCostService>(sp =>

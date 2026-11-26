@@ -5,11 +5,15 @@ using Microsoft.Extensions.Logging;
 namespace AgentsWinBar.Services;
 
 /// <summary>
-/// Writes Warning and above to app.log. The formatted message is never written: only the message template, with each
+/// Writes Warning and above to app.log, plus Information from the refresh schedule's own category
+/// (<see cref="Helpers.RefreshScheduleLog"/>: one short line per provider read, to tune the schedule in a live test). The formatted message is never written: only the message template, with each
 /// argument kept when it is safe to keep on disk (see <see cref="SafeLogMessage"/>). Exceptions add their type only.
 /// </summary>
 internal sealed class FileLoggerProvider(string directory) : ILoggerProvider
 {
+    /// <summary>The one category whose Information lines are kept.</summary>
+    internal static readonly string ScheduleCategory = typeof(Helpers.RefreshScheduleLog).FullName!;
+
     public ILogger CreateLogger(string categoryName) =>
         new FileLogger(Path.Combine(directory, "app.log"), categoryName);
 
@@ -18,7 +22,8 @@ internal sealed class FileLoggerProvider(string directory) : ILoggerProvider
     private sealed class FileLogger(string path, string category) : ILogger
     {
         public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
-        public bool IsEnabled(LogLevel logLevel) => logLevel is >= LogLevel.Warning and <= LogLevel.Critical;
+        public bool IsEnabled(LogLevel logLevel) => logLevel is >= LogLevel.Warning and <= LogLevel.Critical ||
+            logLevel == LogLevel.Information && category == ScheduleCategory;
 
         public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
             Func<TState, Exception?, string> formatter)

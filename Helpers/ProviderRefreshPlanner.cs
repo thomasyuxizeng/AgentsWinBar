@@ -205,8 +205,77 @@ public static class ProviderRefreshPlanner
     public static DateTime? NextDue(IReadOnlyList<ProviderRefreshDue> plan) =>
         plan.Count == 0 ? null : plan.Min(p => p.DueUtc);
 
+    /// <summary>
+    /// The highest used percent among the provider's windows that report one, and whether any window runs out before
+    /// its reset at the current pace. A window without a numeric percent counts for neither.
+    /// </summary>
+    public static (double? HighestPercent, bool PaceWarning) Pressure(UsageData? data, DateTime nowUtc)
+    {
+        if (data == null || data.AuthRequired) return (null, false);
+        double? highest = null;
+        var pace = false;
+        Add(data.Session);
+        Add(data.Weekly);
+        Add(data.Tertiary);
+        foreach (var extra in data.ExtraWindows) Add(extra.Window);
+        return (highest, pace);
+
+        void Add(UsageWindow? window)
+        {
+            if (window == null) return;
+            double? percent = window.ReportedPercent ?? (window.Limit > 0 ? window.Percent : null);
+            if (percent is not { } value || !double.IsFinite(value)) return;
+            if (highest is not { } current || value > current) highest = value;
+            pace |= PaceCalculator.Project(value, window.WindowMinutes, window.ResetAt, Utc(nowUtc)).Kind == PaceKind.WillRunOut;
+        }
+    }
+
+    /// <summary>What the dashboard says about the schedule: the active providers in plan order, and a near-limit speed-up.</summary>
+    public static RefreshCadence Cadence(IReadOnlyList<ProviderRefreshDue> plan) => new(
+        plan.Where(p => p.Reason == RefreshReason.Active).Select(p => p.Provider).ToArray(),
+        plan.Any(p => p.Reason == RefreshReason.NearLimit));
+
     private static DateTime Add(DateTime time, TimeSpan delta) =>
         DateTime.MaxValue - time < delta ? DateTime.MaxValue : time + delta;
 
     private static DateTime Utc(DateTime time) => DashboardValues.Utc(time);
+}
+
+/// <summary>Which providers refresh faster right now (for the dashboard header). Empty when the setting is off.</summary>
+/// <param name="ActiveProviders">Provider ids whose tool is in use, in display order.</param>
+/// <param name="NearLimit">An idle provider refreshes faster because a window is near its limit.</param>
+public sealed record RefreshCadence(IReadOnlyList<string> ActiveProviders, bool NearLimit)
+{
+    public static readonly RefreshCadence None = new([], false);
+
+    public bool IsFaster => ActiveProviders.Count > 0 || NearLimit;
+
+    /// <summary>
+    /// The header's schedule part when it is faster than the user's interval ("faster while Claude is in use",
+    /// "faster while Claude and Codex are in use", "faster near a limit"); null otherwise.
+    /// </summary>
+    public static string? Caption(IReadOnlyList<string> activeProviders, bool nearLimit)
+    {
+        if (activeProviders.Count > 0)
+        {
+            // As ProviderIcons.GetDisplayName (which needs WinUI): "claude" reads "Claude".
+            var names = activeProviders.Where(p => p.Length > 0)
+                .Select(p => char.ToUpperInvariant(p[0]) + p[1..]).ToArray();
+            if (names.Length == 0) return nearLimit ? "faster near a limit" : null;
+            var list = names.Length == 1 ? names[0] : string.Join(", ", names[..^1]) + " and " + names[^1];
+            return $"faster while {list} {(names.Length == 1 ? "is" : "are")} in use";
+        }
+        return nearLimit ? "faster near a limit" : null;
+    }
+
+    public bool Equals(RefreshCadence? other) =>
+        other is not null && NearLimit == other.NearLimit && ActiveProviders.SequenceEqual(other.ActiveProviders);
+
+    public override int GetHashCode() => HashCode.Combine(NearLimit, ActiveProviders.Count);
+}
+
+/// <summary>Log category for the refresh schedule (each scheduled refresh, its providers and reasons).</summary>
+public sealed class RefreshScheduleLog
+{
+    private RefreshScheduleLog() { }
 }
