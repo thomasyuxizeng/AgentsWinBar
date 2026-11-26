@@ -8,6 +8,7 @@ namespace AgentsWinBar.Tests.Unit.Services;
 public class SignInLauncherTests
 {
     private const string LocalAppData = @"C:\Users\Test\AppData\Local";
+    private const string ToolFolder = @"C:\Program Files\Synthetic npm";
     private const string System32 = @"C:\Windows\System32";
     private const string Cmd = @"C:\Windows\System32\cmd.exe";
     private const string Wt = @"C:\Users\Test\AppData\Local\Microsoft\WindowsApps\wt.exe";
@@ -22,13 +23,12 @@ public class SignInLauncherTests
         public List<SignInProcess> Started { get; } = [];
         public List<SignInProcess> Attempts { get; } = [];
         public string LocalAppData => SignInLauncherTests.LocalAppData;
-        public string UserProfile => @"C:\Users\Test";
         public string SystemDirectory => System32;
 
         public string? FindOnPath(string command) => command switch
         {
             "wt" when OnPath.Contains("wt") => Wt,
-            _ when OnPath.Contains(command) => $@"C:\tools\{command}.exe",
+            _ when OnPath.Contains(command) => $@"{ToolFolder}\{command}.cmd",
             _ => null
         };
 
@@ -46,9 +46,20 @@ public class SignInLauncherTests
     private SignInLauncher Launcher() => new(_system, NullLogger<SignInLauncher>.Instance);
 
     [TestMethod]
-    [DataRow("claude", "claude auth login")]
-    [DataRow("codex", "codex login")]
-    public void Launch_WhenToolOnPathAndWindowsTerminal_OpensLoginInWindowsTerminal(string provider, string command)
+    public void FindOnPath_WhenRelativeEntriesComeFirst_ReturnsFullyQualifiedShim()
+    {
+        var candidates = new List<string>();
+        var result = WindowsSignInSystem.FindOnPath("provider", $"tools;C:relative;\\rooted;\"{ToolFolder}\"", ".CMD",
+            candidate => { candidates.Add(candidate); return true; });
+
+        result.Should().Be($@"{ToolFolder}\provider.CMD");
+        candidates.Should().ContainSingle().Which.Should().Be(result);
+    }
+
+    [TestMethod]
+    [DataRow("claude", "auth login")]
+    [DataRow("codex", "login")]
+    public void Launch_WhenToolOnPathAndWindowsTerminal_OpensLoginInWindowsTerminal(string provider, string arguments)
     {
         _system.OnPath.UnionWith([provider, "wt"]);
 
@@ -58,14 +69,16 @@ public class SignInLauncherTests
         result.Started.Should().BeTrue();
         var started = _system.Started.Single();
         started.FileName.Should().Be(Wt);
-        started.Arguments.Should().StartWith("-w new new-tab --title ").And.EndWith($"\"{Cmd}\" /k {command}");
-        started.WorkingDirectory.Should().Be(@"C:\Users\Test");
+        started.Arguments.Should().Contain($"--startingDirectory \"{System32}\"")
+            .And.Contain($"\"{Cmd}\" /d /v:off /k ")
+            .And.EndWith($"& \"{ToolFolder}\\{provider}.cmd\" {arguments}");
+        started.WorkingDirectory.Should().Be(System32);
     }
 
     [TestMethod]
-    [DataRow("claude", "claude auth login")]
-    [DataRow("CODEX", "codex login")]
-    public void Launch_WhenToolOnPathWithoutWindowsTerminal_OpensLoginInCommandPrompt(string provider, string command)
+    [DataRow("claude", "auth login")]
+    [DataRow("CODEX", "login")]
+    public void Launch_WhenToolOnPathWithoutWindowsTerminal_OpensLoginInCommandPrompt(string provider, string arguments)
     {
         _system.OnPath.Add(provider.ToLowerInvariant());
 
@@ -74,7 +87,9 @@ public class SignInLauncherTests
         result.Route.Should().Be(SignInRoute.CommandPrompt);
         var started = _system.Started.Single();
         started.FileName.Should().Be(Cmd);
-        started.Arguments.Should().StartWith("/k ").And.EndWith($"& {command}");
+        started.Arguments.Should().StartWith("/d /v:off /k ")
+            .And.EndWith($"& \"{ToolFolder}\\{provider.ToLowerInvariant()}.cmd\" {arguments}");
+        started.WorkingDirectory.Should().Be(System32);
     }
 
     [TestMethod]
@@ -114,7 +129,7 @@ public class SignInLauncherTests
 
         result.Route.Should().Be(SignInRoute.WindowsTerminal);
         var arguments = _system.Started.Single().Arguments;
-        arguments.Should().EndWith("/k echo Sign in with Google when Antigravity asks, then close this window. & agy");
+        arguments.Should().Contain("echo Sign in with Google").And.EndWith($"& \"{ToolFolder}\\agy.cmd\"");
     }
 
     [TestMethod]
@@ -125,7 +140,7 @@ public class SignInLauncherTests
         var result = Launcher().Launch("gemini");
 
         result.Route.Should().Be(SignInRoute.CommandPrompt);
-        _system.Started.Single().Arguments.Should().EndWith("& agy").And.Contain("echo Sign in with Google");
+        _system.Started.Single().Arguments.Should().EndWith($"& \"{ToolFolder}\\agy.cmd\"").And.Contain("echo Sign in with Google");
     }
 
     [TestMethod]
