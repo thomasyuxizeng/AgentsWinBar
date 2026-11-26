@@ -191,13 +191,13 @@ public sealed class ClaudeNativeClient : INativeUsageClient
         }
 
         // 4. One GET.
-        using var request = new HttpRequestMessage(HttpMethod.Get, _options.UsageUri);
-        NativeHttp.SetBearer(request, credentials.AccessToken);
-        request.Headers.Accept.ParseAdd("application/json");
-        request.Headers.TryAddWithoutValidation("anthropic-beta", BetaHeader);
-        NativeHttp.SetUserAgent(request, "claude-code/" + _options.ClaudeCodeVersion);
         try
         {
+            using var request = new HttpRequestMessage(HttpMethod.Get, _options.UsageUri);
+            NativeHttp.SetBearer(request, credentials.AccessToken);
+            request.Headers.Accept.ParseAdd("application/json");
+            request.Headers.TryAddWithoutValidation("anthropic-beta", BetaHeader);
+            NativeHttp.SetUserAgent(request, "claude-code/" + _options.ClaudeCodeVersion);
             using var deadline = NativeHttp.Deadline(ct, _options.RequestTimeout);
             using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, deadline.Token).ConfigureAwait(false);
             var status = (int)response.StatusCode;
@@ -244,7 +244,8 @@ public sealed class ClaudeNativeClient : INativeUsageClient
             _logger.LogWarning("Claude usage request timed out");
             return FromCacheOr(lastGood, Fail(NativeUsageStatus.Failed, null, "Claude usage request timed out.") with { NetworkCalls = 1 });
         }
-        catch (Exception ex) when (ex is HttpRequestException or JsonException or IOException)
+        catch (Exception ex) when (ex is HttpRequestException or JsonException or IOException
+            or FormatException or ArgumentException or InvalidOperationException or NotSupportedException)
         {
             _logger.LogWarning("Claude usage request failed ({Type})", ex.GetType().Name);
             return FromCacheOr(lastGood, Fail(NativeUsageStatus.Failed, null, "Claude usage request failed (network or response error).") with { NetworkCalls = 1 });
@@ -330,8 +331,9 @@ public sealed class ClaudeNativeClient : INativeUsageClient
                 // An object or array value (of a known field too) is stepped over whole; a plain value needs nothing.
                 reader.Skip();
             }
-            token = token?.Trim();
-            return string.IsNullOrEmpty(token) ? null : new ClaudeCredentials(token, expires, subscription, tier);
+            if (string.IsNullOrEmpty(token)) return null;
+            NativeHttp.ValidateBearerToken(token);
+            return new ClaudeCredentials(token, expires, subscription, tier);
         }
         return null;
     }

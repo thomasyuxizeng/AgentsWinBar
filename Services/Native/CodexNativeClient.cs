@@ -90,13 +90,13 @@ public sealed class CodexNativeClient : INativeUsageClient
                 $"Codex sign-in expired {NativeParse.Ago(ago)} ago. Run Codex on Windows to renew it.") with { ExpiredFor = ago };
         }
 
-        using var request = new HttpRequestMessage(HttpMethod.Get, _options.UsageUri);
-        NativeHttp.SetBearer(request, credentials.AccessToken);
-        request.Headers.Accept.ParseAdd("application/json");
-        NativeHttp.SetUserAgent(request, _options.UserAgent);
-        if (!string.IsNullOrEmpty(credentials.AccountId)) request.Headers.TryAddWithoutValidation("ChatGPT-Account-Id", credentials.AccountId);
         try
         {
+            using var request = new HttpRequestMessage(HttpMethod.Get, _options.UsageUri);
+            NativeHttp.SetBearer(request, credentials.AccessToken);
+            request.Headers.Accept.ParseAdd("application/json");
+            NativeHttp.SetUserAgent(request, _options.UserAgent);
+            if (!string.IsNullOrEmpty(credentials.AccountId)) request.Headers.TryAddWithoutValidation("ChatGPT-Account-Id", credentials.AccountId);
             using var deadline = NativeHttp.Deadline(ct, _options.RequestTimeout);
             using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, deadline.Token).ConfigureAwait(false);
             var status = (int)response.StatusCode;
@@ -123,7 +123,8 @@ public sealed class CodexNativeClient : INativeUsageClient
             _logger.LogWarning("Codex usage request timed out");
             return Fail(NativeUsageStatus.Failed, null, "Codex usage request timed out.") with { NetworkCalls = 1 };
         }
-        catch (Exception ex) when (ex is HttpRequestException or JsonException or IOException)
+        catch (Exception ex) when (ex is HttpRequestException or JsonException or IOException
+            or FormatException or ArgumentException or InvalidOperationException or NotSupportedException)
         {
             _logger.LogWarning("Codex usage request failed ({Type})", ex.GetType().Name);
             return Fail(NativeUsageStatus.Failed, null, "Codex usage request failed (network or response error).") with { NetworkCalls = 1 };
@@ -172,8 +173,8 @@ public sealed class CodexNativeClient : INativeUsageClient
             }
             else { reader.Read(); reader.Skip(); }
         }
-        access = access?.Trim();
         if (string.IsNullOrEmpty(access)) return (hasApiKey ? CodexCredentialKind.ApiKeyOnly : CodexCredentialKind.Missing, null);
+        NativeHttp.ValidateBearerToken(access);
         accountId = NativeParse.NonEmpty(accountId) ?? NativeJwt.ReadChatGptAccountId(idToken) ?? NativeJwt.ReadChatGptAccountId(access);
         return (CodexCredentialKind.ChatGpt, new CodexCredentials(access, accountId, NativeJwt.ReadExpiry(access), lastRefresh));
 

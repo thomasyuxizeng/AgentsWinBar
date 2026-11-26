@@ -107,7 +107,7 @@ public sealed class AntigravityNativeClient : INativeUsageClient
         {
             return ReadCredentials();
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or JsonException)
         {
             _logger.LogWarning("Antigravity sign-in could not be read after renewal ({Type})", ex.GetType().Name);
             return null;
@@ -146,7 +146,7 @@ public sealed class AntigravityNativeClient : INativeUsageClient
         {
             credentials = ReadCredentials();
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or JsonException)
         {
             // A corrupt credential is a read failure (last good reading kept), not a sign-out.
             _logger.LogWarning("Antigravity credential could not be read ({Type})", ex.GetType().Name);
@@ -224,7 +224,8 @@ public sealed class AntigravityNativeClient : INativeUsageClient
             _logger.LogWarning("Antigravity request timed out");
             return Fail(NativeUsageStatus.Failed, null, "Antigravity usage request timed out.") with { NetworkCalls = calls };
         }
-        catch (Exception ex) when (ex is HttpRequestException or JsonException or IOException)
+        catch (Exception ex) when (ex is HttpRequestException or JsonException or IOException
+            or FormatException or ArgumentException or InvalidOperationException or NotSupportedException)
         {
             _logger.LogWarning("Antigravity request failed ({Type})", ex.GetType().Name);
             return Fail(NativeUsageStatus.Failed, null, "Antigravity usage request failed (network or response error).") with { NetworkCalls = calls };

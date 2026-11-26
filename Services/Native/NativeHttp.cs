@@ -95,6 +95,12 @@ public static class NativeHttp
         return await JsonSerializer.DeserializeAsync(limited, type, ct).ConfigureAwait(false);
     }
 
+    internal static void ValidateBearerToken(string token)
+    {
+        if (token.AsSpan().ContainsAnyExceptInRange('!', '~'))
+            throw new InvalidDataException("The sign-in contains a malformed access token.");
+    }
+
     internal static void SetBearer(HttpRequestMessage request, string token) =>
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
 
