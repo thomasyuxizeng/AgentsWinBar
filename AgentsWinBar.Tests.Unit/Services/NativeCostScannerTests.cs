@@ -378,6 +378,29 @@ public sealed partial class NativeCostScannerTests
         daily.Select(day => day.TotalTokens).Should().Equal(10, 20);
     }
 
+    [TestMethod]
+    public void UpdateAndReadReports_WhenRestartedInAnotherZone_RebucketsWithoutReadingLogs()
+    {
+        var korea = Scanner(TimeZoneInfo.FindSystemTimeZoneById("Korea Standard Time"));
+        var australia = Scanner(TimeZoneInfo.FindSystemTimeZoneById("AUS Eastern Standard Time"));
+        IReadOnlyList<CostLogRoot> roots = [new(CostProvider.Claude, Claude)];
+        File.WriteAllLines(Path.Combine(Claude, "travel.jsonl"),
+        [
+            ClaudeLine("1", 10, "2026-11-24T12:59:59Z"),
+            ClaudeLine("2", 20, "2026-11-24T13:00:00Z")
+        ]);
+        korea.Update(roots);
+
+        var result = australia.UpdateAndReadReports(
+            roots, 1, [CostProvider.Claude], null, Today, 30, CancellationToken.None, changedPaths: []);
+
+        result.ScanResult.DiscoveredFiles.Should().Be(0);
+        result.ScanResult.FilesRead.Should().Be(0);
+        var daily = result.Reports[CostProvider.Claude].Daily!;
+        daily.Select(day => day.Date).Should().Equal(new DateOnly(2026, 11, 24), new DateOnly(2026, 11, 25));
+        daily.Select(day => day.TotalTokens).Should().Equal(10, 20);
+    }
+
     // Review finding 13: winsqlite3 uses the stdcall convention on x86 (the same as cdecl on x64 and ARM64).
     [TestMethod]
     public void CostIndexDatabase_NativeImports_UseStdCallForWinSqlite3()

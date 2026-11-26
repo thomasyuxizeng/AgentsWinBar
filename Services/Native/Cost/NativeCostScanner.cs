@@ -32,7 +32,6 @@ public sealed partial class NativeCostScanner
     private readonly TimeZoneInfo? _zone;
     private readonly ILogger<NativeCostScanner> _logger;
     /// <summary>The zone the index was last bucketed in by this instance (null before the first update).</summary>
-    private volatile string? _appliedZoneId;
 
     public NativeCostScanner(string indexDirectory, ILogger<NativeCostScanner> logger, TimeZoneInfo? zone = null)
     {
@@ -93,10 +92,9 @@ public sealed partial class NativeCostScanner
         if (changedPaths is not null)
         {
             changedPaths = RelevantPaths(roots, changedPaths);
-            var applied = _appliedZoneId;
-            if (changedPaths.Count == 0 && (applied is null || applied == zone.Id))
+            if (changedPaths.Count == 0 &&
+                ReadReportsFromDisk(reportProviders, pricing, asOf, historyDays, zone, cancellationToken) is { } skippedReports)
             {
-                var skippedReports = ReadReportsFromDisk(reportProviders, pricing, asOf, historyDays, zone, cancellationToken);
                 return (new(0, 0, 0, 0, 0, 0, 0), skippedReports);
             }
         }
@@ -117,9 +115,7 @@ public sealed partial class NativeCostScanner
 
         try
         {
-            var outcome = UpdateIndexCore(roots, workers, zone, changedPaths, reportProviders, pricing, asOf, historyDays, cancellationToken);
-            _appliedZoneId = zone.Id;
-            return outcome;
+            return UpdateIndexCore(roots, workers, zone, changedPaths, reportProviders, pricing, asOf, historyDays, cancellationToken);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -471,7 +467,7 @@ public sealed partial class NativeCostScanner
         return BuildReport(provider, rows, pricing, today, historyDays);
     }
 
-    private IReadOnlyDictionary<CostProvider, CostDataDto> ReadReportsFromDisk(
+    private IReadOnlyDictionary<CostProvider, CostDataDto>? ReadReportsFromDisk(
         IReadOnlyList<CostProvider>? reportProviders,
         CostPricing? pricing,
         DateTimeOffset? asOf,
@@ -479,15 +475,6 @@ public sealed partial class NativeCostScanner
         TimeZoneInfo zone,
         CancellationToken cancellationToken)
     {
-        if (reportProviders is null || reportProviders.Count == 0)
-            return new Dictionary<CostProvider, CostDataDto>();
-
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(historyDays);
-        pricing ??= new CostPricing();
-        var today = CostIndex.LocalDay(asOf ?? DateTimeOffset.UtcNow, zone);
-        var first = Math.Max(0, today.DayNumber - historyDays + 1);
-        var reports = new Dictionary<CostProvider, CostDataDto>(reportProviders.Count);
-
         if (File.Exists(_indexPath))
         {
             using var database = new CostIndexDatabase(_indexPath, readOnly: true);
@@ -495,16 +482,18 @@ public sealed partial class NativeCostScanner
             if (CostIndex.ReadVersion(database) == CostIndex.SchemaVersion)
             {
                 using var index = new CostIndex(database);
-                foreach (var provider in reportProviders)
-                {
-                    if (reports.ContainsKey(provider)) continue;
-                    var rows = index.ReadDays(provider, first, today.DayNumber, cancellationToken);
-                    reports[provider] = BuildReport(provider, rows, pricing, today, historyDays);
-                }
-                return reports;
+                if (index.ReadZone() != zone.Id) return null;
+                return ReadReportsFromIndex(index, reportProviders, pricing, asOf, historyDays, zone, cancellationToken);
             }
         }
 
+        if (reportProviders is null || reportProviders.Count == 0)
+            return new Dictionary<CostProvider, CostDataDto>();
+
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(historyDays);
+        pricing ??= new CostPricing();
+        var today = CostIndex.LocalDay(asOf ?? DateTimeOffset.UtcNow, zone);
+        var reports = new Dictionary<CostProvider, CostDataDto>(reportProviders.Count);
         foreach (var provider in reportProviders)
         {
             if (!reports.ContainsKey(provider))
