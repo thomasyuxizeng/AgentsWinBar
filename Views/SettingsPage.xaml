@@ -213,41 +213,113 @@
                                   MinWidth="0" VerticalAlignment="Center"/>
                 </Grid>
 
-                <!-- Claude API credit pool (spend itself is read automatically) -->
-                <Grid Padding="16,12" Margin="0,8,0,0" CornerRadius="8"
+                <!-- Anthropic API credits: the Admin key (applied at once, never through Save) and the budget (saved with Save).
+                     Controls are stacked, as the window is only ~350 DIP wide on a 150% display. -->
+                <Grid x:Name="ApiCreditsCard" Padding="16,12" Margin="0,8,0,0" CornerRadius="8"
                       Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                       BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*"/>
-                        <ColumnDefinition Width="Auto"/>
-                    </Grid.ColumnDefinitions>
-                    <StackPanel VerticalAlignment="Center" Margin="0,0,12,0">
-                        <TextBlock Text="Monthly API budget (USD)" TextWrapping="Wrap"/>
-                        <TextBlock Text="Spend is read automatically with your Anthropic Admin key."
+                    <StackPanel>
+                        <TextBlock Text="Anthropic API credits" TextWrapping="Wrap"/>
+                        <TextBlock Text="Shows your organization's API spend against a monthly budget on the dashboard, and who used it."
                                    TextWrapping="Wrap" Style="{StaticResource CaptionTextBlockStyle}"
                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
-                    </StackPanel>
-                    <NumberBox Grid.Column="1" x:Name="ApiCreditsMonthlyBox" AutomationProperties.Name="Monthly API budget (USD)"
-                               Minimum="1" Maximum="100000" SmallChange="10" LargeChange="50"
-                               SpinButtonPlacementMode="Compact" Width="110" VerticalAlignment="Center"/>
-                </Grid>
+                        <TextBlock Text="Needs an Anthropic Admin key. It stays in your Windows user environment (ANTHROPIC_ADMIN_KEY) and is used only to read, never to change anything."
+                                   TextWrapping="Wrap" Style="{StaticResource CaptionTextBlockStyle}"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
 
-                <Grid Padding="16,12" Margin="0,8,0,0" CornerRadius="8"
-                      Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                      BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*"/>
-                        <ColumnDefinition Width="Auto"/>
-                    </Grid.ColumnDefinitions>
-                    <StackPanel VerticalAlignment="Center" Margin="0,0,12,0">
-                        <TextBlock Text="Credit renewal day" TextWrapping="Wrap"/>
-                        <TextBlock Text="Day of the month credits renew (UTC)."
-                                   TextWrapping="Wrap" Style="{StaticResource CaptionTextBlockStyle}"
+                        <!-- Status: not set up / checking / connected / rejected / could not be checked -->
+                        <Grid Margin="0,12,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <ProgressRing x:Name="ApiKeyProgress" IsActive="False" Visibility="Collapsed"
+                                          Width="16" Height="16" Margin="0,0,8,0" VerticalAlignment="Center"/>
+                            <TextBlock Grid.Column="1" x:Name="ApiKeyStatusText" Text="Status: Not set up" TextWrapping="Wrap"
+                                       Style="{StaticResource BodyTextBlockStyle}" VerticalAlignment="Center"
+                                       AutomationProperties.LiveSetting="Polite"/>
+                        </Grid>
+
+                        <!-- Setup steps: shown without a key, or after "Replace key" -->
+                        <StackPanel x:Name="ApiKeySetupPanel" Margin="0,8,0,0" Spacing="8">
+                            <TextBlock Text="1. Create an Admin key on the Claude Platform. Only organization admins can create Admin keys."
+                                       TextWrapping="Wrap" Style="{StaticResource CaptionTextBlockStyle}"
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                            <Button x:Name="ApiKeyCreateButton" Content="Create an Admin key" Padding="10,4"
+                                    Click="OnCreateAdminKeyClicked"
+                                    ToolTipService.ToolTip="Opens platform.claude.com/settings/admin-keys in your browser"/>
+                            <TextBlock Text="2. Paste the key here, then save it."
+                                       TextWrapping="Wrap" Style="{StaticResource CaptionTextBlockStyle}"
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                            <PasswordBox x:Name="ApiKeyPasswordBox" PasswordRevealMode="Hidden" PlaceholderText="sk-ant-admin..."
+                                         AutomationProperties.Name="Anthropic Admin key" MaxWidth="360" HorizontalAlignment="Stretch"/>
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <Button x:Name="ApiKeySaveButton" Content="Save key" Padding="10,4" Click="OnSaveKeyClicked"
+                                        ToolTipService.ToolTip="Checks the key with Anthropic, then saves it"/>
+                                <Button x:Name="ApiKeyCancelReplaceButton" Content="Cancel" Padding="10,4" Visibility="Collapsed"
+                                        Click="OnCancelReplaceKeyClicked"/>
+                            </StackPanel>
+                        </StackPanel>
+
+                        <!-- With a key set -->
+                        <StackPanel x:Name="ApiKeyManagePanel" Orientation="Horizontal" Spacing="8" Margin="0,8,0,0" Visibility="Collapsed">
+                            <Button x:Name="ApiKeyReplaceButton" Content="Replace key" Padding="10,4" Click="OnReplaceKeyClicked"/>
+                            <Button x:Name="ApiKeyRemoveButton" Content="Remove key" Padding="10,4">
+                                <Button.Flyout>
+                                    <Flyout x:Name="ApiKeyRemoveFlyout">
+                                        <StackPanel Spacing="12" MaxWidth="280">
+                                            <TextBlock TextWrapping="Wrap"
+                                                       Text="Remove the Admin key from this PC? The dashboard stops showing API spend. The key stays active at Anthropic until you delete it on the Claude Platform."/>
+                                            <Button Content="Remove key" Padding="10,4" Click="OnRemoveKeyConfirmed"
+                                                    AutomationProperties.Name="Confirm remove key"/>
+                                        </StackPanel>
+                                    </Flyout>
+                                </Button.Flyout>
+                            </Button>
+                        </StackPanel>
+
+                        <!-- The outcome of the last key action; "Save anyway" only after Anthropic could not be reached -->
+                        <TextBlock x:Name="ApiKeyMessageText" Visibility="Collapsed" Margin="0,8,0,0" TextWrapping="Wrap"
+                                   Style="{StaticResource CaptionTextBlockStyle}" AutomationProperties.LiveSetting="Polite"/>
+                        <Button x:Name="ApiKeySaveAnywayButton" Content="Save anyway" Padding="10,4" Margin="0,8,0,0"
+                                Visibility="Collapsed" Click="OnSaveKeyAnywayClicked"
+                                ToolTipService.ToolTip="Saves the key without checking it with Anthropic"/>
+                        <TextBlock Text="Key changes apply right away. The budget and renewal day below are saved with Save."
+                                   Margin="0,8,0,0" TextWrapping="Wrap" Style="{StaticResource CaptionTextBlockStyle}"
                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+
+                        <Grid Margin="0,12,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <StackPanel VerticalAlignment="Center" Margin="0,0,12,0">
+                                <TextBlock Text="Monthly budget (USD)" TextWrapping="Wrap"/>
+                                <TextBlock Text="Your monthly API allowance in US dollars"
+                                           TextWrapping="Wrap" Style="{StaticResource CaptionTextBlockStyle}"
+                                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                            </StackPanel>
+                            <NumberBox Grid.Column="1" x:Name="ApiCreditsMonthlyBox" AutomationProperties.Name="Monthly budget (USD)"
+                                       Minimum="1" Maximum="100000" SmallChange="10" LargeChange="50"
+                                       SpinButtonPlacementMode="Compact" Width="110" VerticalAlignment="Center"/>
+                        </Grid>
+
+                        <Grid Margin="0,12,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <StackPanel VerticalAlignment="Center" Margin="0,0,12,0">
+                                <TextBlock Text="Renewal day" TextWrapping="Wrap"/>
+                                <TextBlock Text="The day of the month your credits renew, in UTC (1 to 28)"
+                                           TextWrapping="Wrap" Style="{StaticResource CaptionTextBlockStyle}"
+                                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                            </StackPanel>
+                            <NumberBox Grid.Column="1" x:Name="ApiCreditsCycleDayBox" AutomationProperties.Name="Renewal day"
+                                       Minimum="1" Maximum="28" SmallChange="1" LargeChange="7"
+                                       SpinButtonPlacementMode="Compact" Width="110" VerticalAlignment="Center"/>
+                        </Grid>
                     </StackPanel>
-                    <NumberBox Grid.Column="1" x:Name="ApiCreditsCycleDayBox" AutomationProperties.Name="Credit renewal day"
-                               Minimum="1" Maximum="28" SmallChange="1" LargeChange="7"
-                               SpinButtonPlacementMode="Compact" Width="110" VerticalAlignment="Center"/>
                 </Grid>
 
                 <!-- Sign-ins Section -->

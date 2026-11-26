@@ -58,6 +58,8 @@
     <Compile Include="..\Helpers\GeminiSpendCalculator.cs" Link="Linked\GeminiSpendCalculator.cs" />
     <Compile Include="..\Services\IApiBillingService.cs" Link="Linked\IApiBillingService.cs" />
     <Compile Include="..\Services\ApiBillingService.cs" Link="Linked\ApiBillingService.cs" />
+    <Compile Include="..\Services\IAdminKeyService.cs" Link="Linked\IAdminKeyService.cs" />
+    <Compile Include="..\Services\AdminKeyService.cs" Link="Linked\AdminKeyService.cs" />
     <Compile Include="..\Services\IGeminiSpendService.cs" Link="Linked\IGeminiSpendService.cs" />
     <Compile Include="..\Services\GeminiSpendService.cs" Link="Linked\GeminiSpendService.cs" />
     <Compile Include="..\ViewModels\SettingsViewModel.cs" Link="Linked\SettingsViewModel.cs" />

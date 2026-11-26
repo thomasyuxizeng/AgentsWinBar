@@ -60,6 +60,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private bool _disposed;
     private bool _refreshPending;
     private readonly ISignInWatcher? _signInWatcher;
+    private readonly IAdminKeyService? _adminKeys;
     private bool _stopped;
     private bool _exiting;
     private int _stopVersion;
@@ -81,6 +82,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private TimeSpan _effectiveRefreshInterval;
 
     public event EventHandler? ExitRequested;
+
+    /// <summary>Raised on the UI thread when an API credits read finished, so a visible dashboard can show it at once.</summary>
+    public event EventHandler? ApiCreditsRefreshed;
 
     [ObservableProperty]
     private ObservableCollection<UsageData> _providers = [];
@@ -113,7 +117,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
         IBatterySaverMonitor? batterySaverMonitor = null,
         IDashboardService? dashboardService = null,
         ResetAnimationVisibility? resetVisibility = null,
-        ISignInWatcher? signInWatcher = null)
+        ISignInWatcher? signInWatcher = null,
+        IAdminKeyService? adminKeys = null)
     {
         _resetVisibility = resetVisibility ?? ResetAnimationVisibility.Shared;
         _codexBarService = codexBarService;
@@ -133,6 +138,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
         if (_batterySaverMonitor != null) _batterySaverMonitor.BatterySaverChanged += OnBatterySaverChanged;
         _signInWatcher = signInWatcher;
         if (_signInWatcher != null) _signInWatcher.RefreshRequested += OnSignInRefreshRequested;
+        _adminKeys = adminKeys;
+        if (_adminKeys != null) _adminKeys.KeyChanged += OnAdminKeyChanged;
 
         _settingsService.SettingsChanged += OnSettingsChanged;
         _sessionState.Locked += OnSessionLocked;
@@ -849,7 +856,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     private async Task RefreshApiCreditsCoreAsync(bool force, CancellationTokenSource cts)
     {
-        try { await _dashboardService!.RefreshApiCreditsAsync(force, cts.Token); }
+        try
+        {
+            await _dashboardService!.RefreshApiCreditsAsync(force, cts.Token);
+            if (!cts.IsCancellationRequested && !_disposed) ApiCreditsRefreshed?.Invoke(this, EventArgs.Empty);
+        }
         finally
         {
             _apiCreditsCts = null;
@@ -860,6 +871,24 @@ public partial class MainViewModel : ObservableObject, IDisposable
             _apiCreditsForcePending = false;
             if (pending) RefreshApiCredits(forcePending);
         }
+    }
+
+    /// <summary>
+    /// The Admin key was saved or removed in Settings: drop any read still using the old key and read again now, even
+    /// without a visible dashboard, so the next dashboard never shows the old key's result.
+    /// </summary>
+    private void OnAdminKeyChanged(object? sender, EventArgs e)
+    {
+        try
+        {
+            OnUiThread(() =>
+            {
+                if (_disposed) return;
+                CancelApiCredits();
+                RefreshApiCredits(true);
+            });
+        }
+        catch (Exception ex) { _logger.LogError("Failed to dispatch the Admin key change ({Type})", ex.GetType().Name); }
     }
 
     private void CancelApiCredits()
@@ -1131,6 +1160,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             _settingsService.SettingsChanged -= OnSettingsChanged;
             if (_batterySaverMonitor != null) _batterySaverMonitor.BatterySaverChanged -= OnBatterySaverChanged;
             if (_signInWatcher != null) _signInWatcher.RefreshRequested -= OnSignInRefreshRequested;
+            if (_adminKeys != null) _adminKeys.KeyChanged -= OnAdminKeyChanged;
             _sessionState.Locked -= OnSessionLocked;
             _sessionState.Unlocked -= OnSessionActivated;
             _sessionState.Resumed -= OnSessionActivated;

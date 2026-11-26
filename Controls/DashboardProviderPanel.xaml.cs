@@ -71,6 +71,7 @@ public sealed partial class DashboardProviderPanel : UserControl
         WindowsHost.SizeChanged -= OnWindowsHostSizeChanged;
         DetailsButton.Click -= OnDetailsClicked;
         SignInButton.Click -= OnSignInClicked;
+        ApiOpenSettingsButton.Click -= OnOpenApiSettingsClicked;
 
         SignedOutBar.IsOpen = false;
         SignedOutBar.Visibility = Visibility.Collapsed;
@@ -127,6 +128,13 @@ public sealed partial class DashboardProviderPanel : UserControl
             if (Data?.Id is { Length: > 0 } id && Models.ProviderConstants.IsValidProvider(id)) SignInAction.Start(id);
         }
         catch (Exception ex) { App.LogHandled("Dashboard sign-in failed", ex); }
+    }
+
+    /// <summary>No key or a rejected key: open Settings at the Anthropic API credits card.</summary>
+    private void OnOpenApiSettingsClicked(object sender, RoutedEventArgs e)
+    {
+        try { SettingsWindow.OpenAtApiCredits(); }
+        catch (Exception ex) { App.LogHandled("Opening Settings at the API credits card failed", ex); }
     }
 
     private void ApplyDetails()

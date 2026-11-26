@@ -1,3 +1,5 @@
+using AgentsWinBar.Helpers;
+using AgentsWinBar.Services;
 using AgentsWinBar.ViewModels;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -47,6 +49,18 @@ public sealed partial class SettingsPage : Page
     private MainViewModel? _mainViewModel;
     private bool _disposed;
 
+    // Anthropic Admin key ("Anthropic API credits" card). Key actions apply at once and never wait for Save.
+    private IAdminKeyService? _adminKeys;
+    private CancellationTokenSource? _keyCheckCts;
+    private int _keyOperation;
+    private bool _keyBusy;
+    private bool _replacingKey;
+    private bool _scrollToApiCredits;
+    /// <summary>The last status line that is not a progress line; a key action that changes nothing goes back to it.</summary>
+    private string _settledKeyStatus = "Status: Not set up";
+    /// <summary>A pasted key, held only between a check that could not reach Anthropic and "Save anyway"; null otherwise.</summary>
+    private string? _unverifiedKey;
+
     public SettingsPage()
     {
         InitializeComponent();
@@ -69,6 +83,12 @@ public sealed partial class SettingsPage : Page
         ProvidersItemsControl.ItemsSource = null;
         SignInsItemsControl.ItemsSource = null;
         SaveErrorBar.IsOpen = false;
+        // An in-flight save or removal still completes (the variable must not be left half written); its result is not shown.
+        _keyCheckCts?.Cancel();
+        _keyCheckCts = null;
+        _unverifiedKey = null;
+        ApiKeyPasswordBox.Password = string.Empty;
+        ApiKeyRemoveFlyout.Hide();
         _viewModel = null;
         DataContext = null;
     }
@@ -87,6 +107,16 @@ public sealed partial class SettingsPage : Page
         {
             App.Services.GetRequiredService<ILogger<SettingsPage>>().LogWarning(ex, "Sign-ins could not be shown");
         }
+        try
+        {
+            if (_adminKeys == null)
+            {
+                _adminKeys = App.Services.GetRequiredService<IAdminKeyService>();
+                ShowSavedKey();
+            }
+            ScrollToApiCreditsIfRequested();
+        }
+        catch (Exception ex) { LogKeyFailure("Admin key status could not be shown", ex); }
     }
 
     private void OnUnloaded(object sender, RoutedEventArgs e)
@@ -187,6 +217,281 @@ public sealed partial class SettingsPage : Page
         ApiCreditsMonthlyBox.Value = (double)ViewModel.ApiCreditsMonthlyUsd;
         ApiCreditsCycleDayBox.Value = ViewModel.ApiCreditsCycleStartDay;
         DeveloperModeToggle.IsOn = ViewModel.DeveloperModeEnabled;
+    }
+
+    /// <summary>Scrolls to the Anthropic API credits card: now when the page is loaded, otherwise once it loads.</summary>
+    public void BringApiCreditsIntoView()
+    {
+        if (_disposed) return;
+        _scrollToApiCredits = true;
+        if (IsLoaded) ScrollToApiCreditsIfRequested();
+    }
+
+    private void ScrollToApiCreditsIfRequested()
+    {
+        if (!_scrollToApiCredits) return;
+        _scrollToApiCredits = false;
+        // Queued behind layout, so the card is measured and in its final place
+        DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
+        {
+            if (_disposed) return;
+            try { ApiCreditsCard.StartBringIntoView(new BringIntoViewOptions { VerticalAlignmentRatio = 0, AnimationDesired = false }); }
+            catch (Exception ex) { LogKeyFailure("Scrolling to the API credits card failed", ex); }
+        });
+    }
+
+    private static Visibility Vis(bool visible) => visible ? Visibility.Visible : Visibility.Collapsed;
+
+    /// <summary>" (key ending in abcd)", or nothing when the service withheld the last 4 characters.</summary>
+    private static string KeyEnding(string? lastFour) => lastFour == null ? string.Empty : $" (key ending in {lastFour})";
+
+    private static string KeyStatusLine(AdminKeyCheck result, string? lastFour) => result switch
+    {
+        AdminKeyCheck.Valid => $"Status: Connected{KeyEnding(lastFour)}",
+        AdminKeyCheck.Rejected => $"Status: Rejected by Anthropic{KeyEnding(lastFour)}",
+        AdminKeyCheck.BadFormat => $"Status: Not an Admin key{KeyEnding(lastFour)}",
+        _ => $"Status: Could not be checked{KeyEnding(lastFour)}"
+    };
+
+    /// <summary>Shows the key that is set now; a set key is checked with Anthropic in the background.</summary>
+    private void ShowSavedKey()
+    {
+        var status = _adminKeys!.GetStatus();
+        ApplyKeyLayout(status);
+        if (!status.IsSet)
+        {
+            ApiKeyStatusText.Text = _settledKeyStatus = "Status: Not set up";
+            return;
+        }
+        // What a failed key action falls back to if it interrupts this check
+        _settledKeyStatus = $"Status: Set up, not checked yet{KeyEnding(status.LastFour)}";
+        // Developer mode shows sample API credits and contacts no one, so the saved key is not checked either
+        if (App.Services.GetRequiredService<ISettingsService>().Settings.DeveloperModeEnabled)
+        {
+            ApiKeyStatusText.Text = _settledKeyStatus;
+            return;
+        }
+        ApiKeyStatusText.Text = $"Status: Checking{KeyEnding(status.LastFour)}…";
+        CheckSavedKeyAsync(status.LastFour).SafeFireAndForget(
+            onError: ex => LogKeyFailure("Checking the saved Admin key failed", ex), continueOnCapturedContext: true);
+    }
+
+    private async Task CheckSavedKeyAsync(string? lastFour)
+    {
+        var operation = ++_keyOperation;
+        _keyCheckCts?.Cancel();
+        var cts = new CancellationTokenSource();
+        _keyCheckCts = cts;
+        try
+        {
+            var result = await _adminKeys!.TestSavedAsync(cts.Token);
+            if (_disposed || operation != _keyOperation) return;
+            ApiKeyStatusText.Text = _settledKeyStatus = KeyStatusLine(result, lastFour);
+        }
+        finally
+        {
+            if (ReferenceEquals(_keyCheckCts, cts)) _keyCheckCts = null;
+            cts.Dispose();
+        }
+    }
+
+    /// <summary>Setup steps without a key (or while replacing one); "Replace key" and "Remove key" with one.</summary>
+    private void ApplyKeyLayout(AdminKeyStatus status)
+    {
+        if (!status.IsSet) _replacingKey = false;
+        ApiKeySetupPanel.Visibility = Vis(!status.IsSet || _replacingKey);
+        ApiKeyCancelReplaceButton.Visibility = Vis(status.IsSet && _replacingKey);
+        ApiKeyManagePanel.Visibility = Vis(status.IsSet && !_replacingKey);
+    }
+
+    private void ShowKeyMessage(string? message, bool offerSaveAnyway = false)
+    {
+        ApiKeyMessageText.Text = message ?? string.Empty;
+        ApiKeyMessageText.Visibility = Vis(!string.IsNullOrEmpty(message));
+        ApiKeySaveAnywayButton.Visibility = Vis(offerSaveAnyway);
+    }
+
+    /// <summary>Starts a key action: stops the background check, shows progress and locks the key controls.</summary>
+    private void BeginKeyAction(string progressStatus)
+    {
+        _keyCheckCts?.Cancel();
+        _keyCheckCts = null;
+        _keyOperation++;
+        _keyBusy = true;
+        ShowKeyMessage(null);
+        ApiKeyStatusText.Text = progressStatus;
+        ApiKeyProgress.IsActive = true;
+        ApiKeyProgress.Visibility = Visibility.Visible;
+        SetKeyControlsEnabled(false);
+    }
+
+    private void EndKeyAction(string status, string message, bool offerSaveAnyway = false)
+    {
+        _keyBusy = false;
+        ApiKeyProgress.IsActive = false;
+        ApiKeyProgress.Visibility = Visibility.Collapsed;
+        SetKeyControlsEnabled(true);
+        ApplyKeyLayout(_adminKeys!.GetStatus());
+        ApiKeyStatusText.Text = _settledKeyStatus = status;
+        ShowKeyMessage(message, offerSaveAnyway);
+    }
+
+    private void SetKeyControlsEnabled(bool enabled)
+    {
+        ApiKeyPasswordBox.IsEnabled = enabled;
+        ApiKeySaveButton.IsEnabled = enabled;
+        ApiKeyCancelReplaceButton.IsEnabled = enabled;
+        ApiKeyReplaceButton.IsEnabled = enabled;
+        ApiKeyRemoveButton.IsEnabled = enabled;
+        ApiKeySaveAnywayButton.IsEnabled = enabled;
+    }
+
+    /// <summary>Logs only the exception type: a message could carry request or key details.</summary>
+    private static void LogKeyFailure(string what, Exception ex)
+    {
+        try { App.Services.GetRequiredService<ILogger<SettingsPage>>().LogWarning("{What} ({Type})", what, ex.GetType().Name); }
+        catch { /* never throw from logging */ }
+    }
+
+    private async void OnCreateAdminKeyClicked(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            if (!await Windows.System.Launcher.LaunchUriAsync(new Uri(Models.ApiCreditsInfo.AdminKeysUrl)) && !_disposed)
+                ShowKeyMessage("The browser did not open. Go to platform.claude.com/settings/admin-keys to create the key.");
+        }
+        catch (Exception ex)
+        {
+            LogKeyFailure("Opening the Admin keys page failed", ex);
+            if (!_disposed) ShowKeyMessage("The browser did not open. Go to platform.claude.com/settings/admin-keys to create the key.");
+        }
+    }
+
+    /// <summary>"Save key": check with Anthropic, then save on Valid; refuse a malformed or rejected key; offer "Save anyway" when unreachable.</summary>
+    private async void OnSaveKeyClicked(object sender, RoutedEventArgs e)
+    {
+        if (_keyBusy || _disposed || _adminKeys == null) return;
+        // The box is cleared on every attempt; only "Save anyway" keeps the key (in _unverifiedKey) any longer.
+        var candidate = ApiKeyPasswordBox.Password;
+        ApiKeyPasswordBox.Password = string.Empty;
+        _unverifiedKey = null;
+        if (string.IsNullOrWhiteSpace(candidate))
+        {
+            ShowKeyMessage("Paste your Admin key into the box first.");
+            return;
+        }
+        var previousStatus = _settledKeyStatus;
+        BeginKeyAction("Status: Checking the key with Anthropic…");
+        try
+        {
+            var result = await _adminKeys.TestAsync(candidate);
+            if (_disposed) return;
+            switch (result)
+            {
+                case AdminKeyCheck.Valid:
+                    await SaveKeyAsync(candidate, AdminKeyCheck.Valid, previousStatus);
+                    break;
+                case AdminKeyCheck.BadFormat:
+                    EndKeyAction(previousStatus, "This is not an Admin key, so it was not saved. Admin keys start with sk-ant-admin. Copy the whole key and paste it again.");
+                    break;
+                case AdminKeyCheck.Rejected:
+                    EndKeyAction(previousStatus, "Anthropic rejected this key, so it was not saved. Check that it is an active Admin key, then paste it again.");
+                    break;
+                default:
+                    _unverifiedKey = candidate;
+                    EndKeyAction(previousStatus, "Anthropic could not be reached to check this key. Try again later, or save it without the check.",
+                        offerSaveAnyway: true);
+                    break;
+            }
+        }
+        catch (Exception ex)
+        {
+            LogKeyFailure("Saving the Admin key failed", ex);
+            if (!_disposed) EndKeyAction(previousStatus, "Something went wrong, so the key was not saved. Try again.");
+        }
+    }
+
+    private async void OnSaveKeyAnywayClicked(object sender, RoutedEventArgs e)
+    {
+        if (_keyBusy || _disposed || _adminKeys == null) return;
+        var candidate = _unverifiedKey;
+        _unverifiedKey = null;
+        if (candidate == null)
+        {
+            ShowKeyMessage(null);
+            return;
+        }
+        var previousStatus = _settledKeyStatus;
+        BeginKeyAction("Status: Saving the key…");
+        try { await SaveKeyAsync(candidate, AdminKeyCheck.Unreachable, previousStatus); }
+        catch (Exception ex)
+        {
+            LogKeyFailure("Saving the Admin key failed", ex);
+            if (!_disposed) EndKeyAction(previousStatus, "Something went wrong, so the key was not saved. Try again.");
+        }
+    }
+
+    /// <summary>Writes the key (off the UI thread, in the service); the dashboard re-reads API credits as soon as it is saved.</summary>
+    private async Task SaveKeyAsync(string candidate, AdminKeyCheck check, string previousStatus)
+    {
+        ApiKeyStatusText.Text = "Status: Saving the key…";
+        var saved = await _adminKeys!.SaveAsync(candidate);
+        if (_disposed) return;
+        if (!saved)
+        {
+            EndKeyAction(previousStatus, "The key could not be saved to your Windows user environment, so nothing changed. Try again.");
+            return;
+        }
+        _replacingKey = false;
+        EndKeyAction(KeyStatusLine(check, _adminKeys.GetStatus().LastFour), check == AdminKeyCheck.Valid
+            ? "Saved and in use now. The dashboard shows your API spend. You don't need to click Save."
+            : "Saved without the check and in use now. The dashboard shows your API spend once Anthropic answers. You don't need to click Save.");
+    }
+
+    private void OnReplaceKeyClicked(object sender, RoutedEventArgs e)
+    {
+        if (_keyBusy || _disposed || _adminKeys == null) return;
+        _replacingKey = true;
+        ShowKeyMessage(null);
+        ApplyKeyLayout(_adminKeys.GetStatus());
+        ApiKeyPasswordBox.Focus(FocusState.Programmatic);
+    }
+
+    private void OnCancelReplaceKeyClicked(object sender, RoutedEventArgs e)
+    {
+        if (_keyBusy || _disposed || _adminKeys == null) return;
+        _replacingKey = false;
+        _unverifiedKey = null;
+        ApiKeyPasswordBox.Password = string.Empty;
+        ShowKeyMessage(null);
+        ApplyKeyLayout(_adminKeys.GetStatus());
+    }
+
+    /// <summary>"Remove key" in the confirmation flyout: deletes the user and process variables at once.</summary>
+    private async void OnRemoveKeyConfirmed(object sender, RoutedEventArgs e)
+    {
+        ApiKeyRemoveFlyout.Hide();
+        if (_keyBusy || _disposed || _adminKeys == null) return;
+        _unverifiedKey = null;
+        var previousStatus = _settledKeyStatus;
+        BeginKeyAction("Status: Removing the key…");
+        try
+        {
+            var removed = await _adminKeys.RemoveAsync();
+            if (_disposed) return;
+            if (removed)
+            {
+                _replacingKey = false;
+                EndKeyAction("Status: Not set up",
+                    "Removed now. The dashboard no longer shows API spend. The key stays active at Anthropic until you delete it on the Claude Platform.");
+            }
+            else EndKeyAction(previousStatus, "The key could not be removed from your Windows user environment. Try again.");
+        }
+        catch (Exception ex)
+        {
+            LogKeyFailure("Removing the Admin key failed", ex);
+            if (!_disposed) EndKeyAction(previousStatus, "Something went wrong, so the key was not removed. Try again.");
+        }
     }
 
     private void OnTestAlertClicked(object sender, RoutedEventArgs e)
