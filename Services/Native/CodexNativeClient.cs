@@ -50,6 +50,7 @@ public sealed class CodexNativeClient : INativeUsageClient
     private readonly CodexNativeOptions _options;
     private readonly TimeProvider _clock;
     private readonly NativeLastGoodStore _lastGood = new();
+    private readonly NativeRateLimitHold _rateLimit = new();
 
     public CodexNativeClient(HttpClient http, ILogger<CodexNativeClient> logger, CodexNativeOptions? options = null, TimeProvider? clock = null)
     {
@@ -67,7 +68,9 @@ public sealed class CodexNativeClient : INativeUsageClient
 
     private async Task<NativeUsageResult> FetchCoreAsync(CancellationToken ct)
     {
+        ct.ThrowIfCancellationRequested();
         var now = _clock.GetUtcNow();
+        if (_rateLimit.Get(now) is { } held) return held;
         (CodexCredentialKind Kind, CodexCredentials? Credentials) read;
         try
         {
@@ -109,12 +112,17 @@ public sealed class CodexNativeClient : INativeUsageClient
                     : result with { NetworkCalls = 1 };
             }
             _logger.LogWarning("Codex usage endpoint answered {Status}", status);
+            if (response.StatusCode == HttpStatusCode.TooManyRequests)
+            {
+                var limitedAt = _clock.GetUtcNow();
+                return _rateLimit.Remember(
+                    Fail(NativeUsageStatus.RateLimited, status, "Codex usage is rate limited right now.") with { NetworkCalls = 1 },
+                    NativeHttp.RetryAfter(response, limitedAt), limitedAt);
+            }
             return (response.StatusCode switch
             {
                 HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden => Fail(NativeUsageStatus.Unauthorized, status,
                     $"Codex rejected the Windows sign-in (HTTP {status}). Run codex login on Windows."),
-                HttpStatusCode.TooManyRequests => Fail(NativeUsageStatus.RateLimited, status, "Codex usage is rate limited right now.")
-                    with { RetryAfter = NativeHttp.RetryAfter(response, _clock.GetUtcNow()) },
                 _ => Fail(NativeUsageStatus.Failed, status, $"Codex usage request failed (HTTP {status}).")
             }) with { NetworkCalls = 1 };
         }

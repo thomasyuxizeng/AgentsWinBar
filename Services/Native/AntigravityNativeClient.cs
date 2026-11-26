@@ -64,6 +64,7 @@ public sealed class AntigravityNativeClient : INativeUsageClient
     private readonly AntigravityNativeOptions _options;
     private readonly TimeProvider _clock;
     private readonly NativeLastGoodStore _lastGood = new();
+    private readonly NativeRateLimitHold _rateLimit = new();
     private readonly IAgySignInRenewer? _renewer;
     private readonly SignInRenewal<AntigravityCredentials> _renewal;
 
@@ -143,7 +144,9 @@ public sealed class AntigravityNativeClient : INativeUsageClient
 
     private async Task<NativeUsageResult> FetchCoreAsync(CancellationToken ct)
     {
+        ct.ThrowIfCancellationRequested();
         var now = _clock.GetUtcNow();
+        if (_rateLimit.Get(now) is { } held) return held;
         AntigravityCredentials? credentials;
         try
         {
@@ -184,9 +187,9 @@ public sealed class AntigravityNativeClient : INativeUsageClient
         {
             // 1. loadCodeAssist: plan and Cloud Code project.
             calls++;
-            var (codeStatus, codeAssist) = await PostAsync(_options.LoadCodeAssistUri, accessToken, LoadCodeAssistBody,
+            var (codeStatus, codeAssist, codeRetryAfter) = await PostAsync(_options.LoadCodeAssistUri, accessToken, LoadCodeAssistBody,
                 _options.RequestTimeout, NativeJsonContext.Default.CodeAssistResponse, ct).ConfigureAwait(false);
-            if (codeStatus != HttpStatusCode.OK || codeAssist == null) return HttpFailure(codeStatus, calls, "loadCodeAssist");
+            if (codeStatus != HttpStatusCode.OK || codeAssist == null) return HttpFailure(codeStatus, calls, "loadCodeAssist", codeRetryAfter);
             var projectId = credentials.ProjectId ?? codeAssist.ProjectId;
             if (projectId == null && codeAssist.RejectsClientForConsumerTier)
                 return Fail(NativeUsageStatus.Unauthorized, 403,
@@ -201,9 +204,10 @@ public sealed class AntigravityNativeClient : INativeUsageClient
             try
             {
                 calls++;
-                var (summaryStatus, summary) = await PostAsync(_options.QuotaSummaryUri, accessToken, body,
+                var (summaryStatus, summary, summaryRetryAfter) = await PostAsync(_options.QuotaSummaryUri, accessToken, body,
                     _options.QuotaSummaryTimeout, NativeJsonContext.Default.QuotaSummaryResponse, ct).ConfigureAwait(false);
-                if (summaryStatus == HttpStatusCode.Unauthorized) return HttpFailure(summaryStatus, calls, "retrieveUserQuotaSummary");
+                if (summaryStatus is HttpStatusCode.Unauthorized or HttpStatusCode.TooManyRequests)
+                    return HttpFailure(summaryStatus, calls, "retrieveUserQuotaSummary", summaryRetryAfter);
                 if (summaryStatus == HttpStatusCode.OK && summary is { CodeIsError: false } &&
                     MapQuotaSummary(summary, plan, _clock.GetUtcNow()) is { } mapped)
                     return mapped with { NetworkCalls = calls };
@@ -216,9 +220,9 @@ public sealed class AntigravityNativeClient : INativeUsageClient
 
             // 3. Fallback: per-model quotas.
             calls++;
-            var (modelsStatus, models) = await PostAsync(_options.AvailableModelsUri, accessToken, body,
+            var (modelsStatus, models, modelsRetryAfter) = await PostAsync(_options.AvailableModelsUri, accessToken, body,
                 _options.RequestTimeout, NativeJsonContext.Default.AvailableModelsResponse, ct).ConfigureAwait(false);
-            if (modelsStatus != HttpStatusCode.OK || models == null) return HttpFailure(modelsStatus, calls, "fetchAvailableModels");
+            if (modelsStatus != HttpStatusCode.OK || models == null) return HttpFailure(modelsStatus, calls, "fetchAvailableModels", modelsRetryAfter);
             return (MapAvailableModels(models, plan, _clock.GetUtcNow())
                     ?? Fail(NativeUsageStatus.Failed, 200, "Antigravity reported no usable quota.")) with { NetworkCalls = calls };
         }
@@ -235,7 +239,7 @@ public sealed class AntigravityNativeClient : INativeUsageClient
         }
     }
 
-    private async Task<(HttpStatusCode Status, T? Body)> PostAsync<T>(Uri uri, string token, byte[] body, TimeSpan timeout,
+    private async Task<(HttpStatusCode Status, T? Body, DateTimeOffset? RetryAfter)> PostAsync<T>(Uri uri, string token, byte[] body, TimeSpan timeout,
         JsonTypeInfo<T> type, CancellationToken ct) where T : class
     {
         using var request = new HttpRequestMessage(HttpMethod.Post, uri) { Content = new ByteArrayContent(body) };
@@ -244,19 +248,24 @@ public sealed class AntigravityNativeClient : INativeUsageClient
         NativeHttp.SetUserAgent(request, _options.UserAgent);
         using var deadline = NativeHttp.Deadline(ct, timeout);
         using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, deadline.Token).ConfigureAwait(false);
-        if (response.StatusCode != HttpStatusCode.OK) return (response.StatusCode, null);
-        return (response.StatusCode, await NativeHttp.ReadJsonAsync(response, type, deadline.Token).ConfigureAwait(false));
+        if (response.StatusCode != HttpStatusCode.OK)
+            return (response.StatusCode, null, response.StatusCode == HttpStatusCode.TooManyRequests
+                ? NativeHttp.RetryAfter(response, _clock.GetUtcNow()) : null);
+        return (response.StatusCode, await NativeHttp.ReadJsonAsync(response, type, deadline.Token).ConfigureAwait(false), null);
     }
 
-    private NativeUsageResult HttpFailure(HttpStatusCode status, int calls, string step)
+    private NativeUsageResult HttpFailure(HttpStatusCode status, int calls, string step, DateTimeOffset? retryAfter)
     {
         var code = (int)status;
         _logger.LogWarning("Antigravity {Step} answered {Status}", step, code);
+        if (status == HttpStatusCode.TooManyRequests)
+            return _rateLimit.Remember(
+                Fail(NativeUsageStatus.RateLimited, code, "Antigravity quota is rate limited right now.") with { NetworkCalls = calls },
+                retryAfter, _clock.GetUtcNow());
         return (status switch
         {
             HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden => Fail(NativeUsageStatus.Unauthorized, code,
                 $"Antigravity rejected the Windows sign-in (HTTP {code}). Sign in with agy on Windows again."),
-            HttpStatusCode.TooManyRequests => Fail(NativeUsageStatus.RateLimited, code, "Antigravity quota is rate limited right now."),
             _ => Fail(NativeUsageStatus.Failed, code, $"Antigravity {step} failed (HTTP {code}).")
         }) with { NetworkCalls = calls };
     }

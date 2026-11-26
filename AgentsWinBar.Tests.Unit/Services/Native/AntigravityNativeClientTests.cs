@@ -183,6 +183,46 @@ public class AntigravityNativeClientTests
     }
 
     [TestMethod]
+    [DataRow("loadCodeAssist", 1)]
+    [DataRow("retrieveUserQuotaSummary", 2)]
+    [DataRow("fetchAvailableModels", 3)]
+    public async Task FetchAsync_WhenAnyEndpointRateLimits_HoldsAllRequests(string step, int calls)
+    {
+        var clock = new TestClock(Now);
+        var limited = false;
+        var (client, handler) = Create(Blob(Now.AddHours(12)), request =>
+        {
+            var path = request.RequestUri!.AbsolutePath;
+            if (limited && path.EndsWith(":" + step, StringComparison.Ordinal))
+            {
+                var response = new HttpResponseMessage(HttpStatusCode.TooManyRequests);
+                response.Headers.TryAddWithoutValidation("Retry-After", "120");
+                return response;
+            }
+            return limited && calls == 3 && path.EndsWith(":retrieveUserQuotaSummary", StringComparison.Ordinal)
+                ? new HttpResponseMessage(HttpStatusCode.NotFound) : Default(request);
+        }, clock: clock);
+        var good = await client.FetchAsync();
+        limited = true;
+        var rateLimited = await client.FetchAsync();
+
+        rateLimited.NetworkCalls.Should().Be(calls);
+        clock.Now = Now.AddSeconds(119);
+        limited = false;
+        var held = await client.FetchAsync();
+
+        held.NetworkCalls.Should().Be(0);
+        handler.Requests.Should().HaveCount(2 + calls);
+        held.Cached.Should().BeTrue();
+        held.Primary!.UsedPercent.Should().Be(good.Primary!.UsedPercent);
+        held.RetryAfter.Should().Be(Now.AddSeconds(120));
+        rateLimited.RetryAfter.Should().Be(held.RetryAfter);
+        clock.Now = Now.AddSeconds(120);
+        (await client.FetchAsync()).Status.Should().Be(NativeUsageStatus.Ok);
+        handler.Requests.Should().HaveCount(4 + calls);
+    }
+
+    [TestMethod]
     public async Task FetchAsync_WhenNetworkErrorAfterGoodReading_ServesLastGoodReadingAsCached()
     {
         var failing = false;
