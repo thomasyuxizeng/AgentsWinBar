@@ -12,11 +12,63 @@ namespace AgentsWinBar.Services.Native.Cost;
 /// An existing index failed validation (damaged, or of another version) and was replaced by an empty one. Every log
 /// was then listed, whatever the caller asked for, because only a full listing can fill a new index.
 /// </param>
+/// <param name="RecheckPaths">
+/// Antigravity databases that were read while their writer had them open (through the write-ahead log). They are
+/// looked at again on the next update, in case a change notification for the log is late. Null when there were none.
+/// </param>
+/// <param name="Gemini">What the Antigravity databases read by this update held (aggregates only), or null.</param>
 public sealed record CostScanResult(long FilesRead, long BytesRead, long MalformedLines, long OversizedLines,
     long UnavailableFiles, int DiscoveredFiles, long DiscoveredBytes, IReadOnlyList<string>? SkippedPaths = null,
-    bool IndexRebuilt = false)
+    bool IndexRebuilt = false, IReadOnlyList<string>? RecheckPaths = null, AntigravityScanStatistics? Gemini = null)
 {
     public long SkippedFiles => UnavailableFiles;
+}
+
+/// <summary>Aggregate counts of the Antigravity databases one update read. Nothing here names a conversation.</summary>
+public sealed class AntigravityScanStatistics
+{
+    public int Databases { get; private set; }
+    public int HistoryDatabases { get; private set; }
+    public long Rows { get; private set; }
+    public long InvalidRows { get; private set; }
+    public long Calls { get; private set; }
+    public long DatedByOwnTime { get; private set; }
+    public long DatedByBotId { get; private set; }
+    public long DatedByPosition { get; private set; }
+    /// <summary>Calls without an established time. They are not counted anywhere.</summary>
+    public long Undated { get; private set; }
+
+    internal void Add(AntigravityScanStatistics other)
+    {
+        Databases += other.Databases;
+        HistoryDatabases += other.HistoryDatabases;
+        Rows += other.Rows;
+        InvalidRows += other.InvalidRows;
+        Calls += other.Calls;
+        DatedByOwnTime += other.DatedByOwnTime;
+        DatedByBotId += other.DatedByBotId;
+        DatedByPosition += other.DatedByPosition;
+        Undated += other.Undated;
+    }
+
+    internal void Add(AntigravityReadResult result)
+    {
+        Databases++;
+        if (result.IsHistory) HistoryDatabases++;
+        Rows += result.Rows;
+        InvalidRows += result.InvalidRows;
+        Undated += result.Undated;
+        foreach (var call in result.Calls)
+        {
+            Calls++;
+            switch (call.Dating)
+            {
+                case AntigravityDating.Embedded: DatedByOwnTime++; break;
+                case AntigravityDating.BotId: DatedByBotId++; break;
+                default: DatedByPosition++; break;
+            }
+        }
+    }
 }
 
 public readonly record struct CostLogRoot(CostProvider Provider, string Directory);
@@ -143,7 +195,11 @@ public sealed partial class NativeCostScanner
             foreach (var (provider, prefix) in prefixes)
             {
                 if (!full.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) continue;
-                if (IsLog(full, provider) ? File.Exists(full) : Directory.Exists(full))
+                // Antigravity databases count only directly inside their root ("antigravity" holds another root).
+                var found = provider == CostProvider.Gemini
+                    ? IsDirectChild(full, prefix) && IsLog(full, provider) && File.Exists(full)
+                    : IsLog(full, provider) ? File.Exists(full) : Directory.Exists(full);
+                if (found)
                 {
                     relevant.Add(full);
                     break;
@@ -183,12 +239,13 @@ public sealed partial class NativeCostScanner
         var candidates = new Dictionary<(CostProvider, CostKey), Discovered>();
         foreach (var (provider, root) in roots)
         {
-            if (provider is not (CostProvider.Claude or CostProvider.Codex))
+            if (provider is not (CostProvider.Claude or CostProvider.Codex or CostProvider.Gemini))
                 throw new ArgumentOutOfRangeException(nameof(roots));
             var directory = Path.GetFullPath(root);
             if (changedPaths is null)
             {
-                if (Directory.Exists(directory)) Offer(provider, EnumerateLogs(directory, provider));
+                if (Directory.Exists(directory))
+                    Offer(provider, provider == CostProvider.Gemini ? EnumerateConversations(directory) : EnumerateLogs(directory, provider));
                 continue;
             }
 
@@ -202,7 +259,12 @@ public sealed partial class NativeCostScanner
                 var path = string.Concat(prefix, changed.AsSpan(prefix.Length));
                 try
                 {
-                    if (IsLog(path, provider))
+                    if (provider == CostProvider.Gemini)
+                    {
+                        if (IsDirectChild(path, prefix) && IsLog(path, provider) && Conversation(path) is { } conversation)
+                            Offer(provider, [conversation]);
+                    }
+                    else if (IsLog(path, provider))
                     {
                         // The plain log wins over its archive, also when only the archive was named.
                         if (IsCompressed(path) && File.Exists(path[..^CompressedSuffix.Length]))
@@ -236,8 +298,10 @@ public sealed partial class NativeCostScanner
             var state = previous is not null
                 ? (previous.TryGetValue((provider, key), out var found) ? found : null)
                 : index.ReadFile(provider, key);
+            // An Antigravity database is also new when its write-ahead log changed (agy writes there first).
             if (state is null || state.Length != entry.Length || state.WriteTime != entry.WriteTime ||
-                state.Created != entry.Created)
+                state.Created != entry.Created || provider == CostProvider.Gemini &&
+                (state.Offset != entry.WalLength || state.Generation != entry.WalWriteTime))
                 inputs.Add(new(provider, key, entry, state));
         }
 
@@ -259,6 +323,8 @@ public sealed partial class NativeCostScanner
         }
 
         long opened = 0, bytes = 0, malformed = 0, oversized = 0, unavailable = 0;
+        AntigravityScanStatistics? gemini = null;
+        List<string>? recheck = null;
         var batch = new List<Input>(BatchFiles);
         long batchBytes = 0;
         foreach (var input in inputs)
@@ -268,6 +334,8 @@ public sealed partial class NativeCostScanner
             if (input.Entry.Compressed || input.State is { } state &&
                 (input.Entry.Length < state.Length || input.Entry.Created != state.Created))
                 unread = input.Entry.Length;
+            // A changed database is read whole, with its log.
+            if (input.Provider == CostProvider.Gemini) unread = input.Entry.Length + Math.Max(0, input.Entry.WalLength);
             batchBytes += unread;
             batch.Add(input);
             if (batch.Count >= BatchFiles || batchBytes >= BatchBytes) CommitBatch();
@@ -281,7 +349,7 @@ public sealed partial class NativeCostScanner
         foreach (var input in inputs)
             if (input.Skipped) (skippedPaths ??= []).Add(input.Entry.Path);
         var scanResult = new CostScanResult(opened, bytes, malformed, oversized, unavailable, files, size, skippedPaths,
-            indexRebuilt);
+            indexRebuilt, recheck, gemini);
         var reports = ReadReportsFromIndex(index, reportProviders, pricing, asOf, historyDays, zone, cancellationToken);
         return (scanResult, reports);
 
@@ -293,6 +361,9 @@ public sealed partial class NativeCostScanner
                 database.Execute("BEGIN IMMEDIATE");
                 long batchOpened = 0, bytesRead = 0, badLines = 0, oversizedLines = 0;
                 var retry = 0;
+                // Per attempt, so a batch that is rolled back and replayed does not count its databases twice.
+                AntigravityScanStatistics? batchGemini = null;
+                List<string>? batchRecheck = null;
 
                 void Read(Input input, byte[] buffer)
                 {
@@ -302,6 +373,13 @@ public sealed partial class NativeCostScanner
                     try
                     {
                         ReadHook?.Invoke(input.Entry.Path);
+                        if (input.Provider == CostProvider.Gemini)
+                        {
+                            ReadConversation(input, ref modified);
+                            Interlocked.Increment(ref batchOpened);
+                            Interlocked.Add(ref bytesRead, input.Entry.Length + Math.Max(0, input.Entry.WalLength));
+                            return;
+                        }
                         using var stream = new FileStream(input.Entry.Path, FileMode.Open, FileAccess.Read,
                             FileShare.ReadWrite | FileShare.Delete, 1, FileOptions.SequentialScan);
                         var length = stream.Length;
@@ -392,6 +470,29 @@ public sealed partial class NativeCostScanner
                     }
                 }
 
+                // A conversation database is decoded whole before anything is written: a database that cannot be read
+                // (AntigravityDatabaseUnavailableException, an IOException) changes nothing and is tried again later.
+                void ReadConversation(Input input, ref bool modified)
+                {
+                    var conversation = AntigravityConversationReader.Read(input.Entry.Path, cancellationToken);
+                    lock (index)
+                    {
+                        modified = true;
+                        foreach (var call in conversation.Calls)
+                        {
+                            var time = DateTimeOffset.FromUnixTimeMilliseconds(call.TimestampMs);
+                            index.Add(CostProvider.Gemini, input.Key, 0, 0, CostIndex.LocalDay(time, zone),
+                                new CostEvent(call.Key, time, call.Model, call.Tokens, 0, 0, false));
+                        }
+                        // The log's size and time sit in the offset and generation columns, which a database does not use.
+                        index.Save(CostProvider.Gemini, input.Key, new(input.Entry.Length, input.Entry.WriteTime,
+                            input.Entry.Created, input.Entry.WalLength, input.Entry.WalWriteTime, default,
+                            new CodexCursor { HasRequest = conversation.IsHistory }));
+                        (batchGemini ??= new()).Add(conversation);
+                        if (conversation.ReadThroughWal) (batchRecheck ??= []).Add(input.Entry.Path);
+                    }
+                }
+
                 ScanBatch(batch, workers, Read, cancellationToken);
                 cancellationToken.ThrowIfCancellationRequested();
                 if (retry != 0)
@@ -402,6 +503,8 @@ public sealed partial class NativeCostScanner
                 }
 
                 database.Execute("COMMIT");
+                if (batchGemini is not null) (gemini ??= new()).Add(batchGemini);
+                if (batchRecheck is not null) (recheck ??= []).AddRange(batchRecheck);
                 opened += batchOpened;
                 bytes += bytesRead;
                 malformed += badLines;
@@ -515,6 +618,8 @@ public sealed partial class NativeCostScanner
         foreach (var provider in reportProviders)
         {
             if (reports.ContainsKey(provider)) continue;
+            // Without a single Antigravity database there is no Gemini history at all: no report, not a report of $0.
+            if (provider == CostProvider.Gemini && !index.HasHistory(provider)) continue;
             var rows = index.ReadDays(provider, first, today.DayNumber, cancellationToken);
             reports[provider] = BuildReport(provider, rows, pricing, today, historyDays);
         }
@@ -528,6 +633,8 @@ public sealed partial class NativeCostScanner
         {
             CostProvider.Claude => "claude",
             CostProvider.Codex => "codex",
+            // The CodexBar CLI's name for the Gemini provider; the service matches reports on it.
+            CostProvider.Gemini => "antigravity",
             _ => throw new ArgumentOutOfRangeException(nameof(provider))
         };
         long priced = 0, unpriced = 0, unpricedTokens = 0;
@@ -545,6 +652,13 @@ public sealed partial class NativeCostScanner
             while (index < rows.Count && rows[index].Day == currentDay)
             {
                 var currentModel = rows[index].Model;
+                if (currentModel == AntigravityConversationReader.ModelLessZeroUsage)
+                {
+                    // Upstream: a call with no model and no tokens counts for its day at $0, without a model row.
+                    while (index < rows.Count && rows[index].Day == currentDay && rows[index].Model == currentModel)
+                        priced += rows[index++].Count;
+                    continue;
+                }
                 decimal? cost = null;
                 var modelTokens = new CostTokens();
 
@@ -598,7 +712,7 @@ public sealed partial class NativeCostScanner
         return new CostDataDto
         {
             Provider = providerName, CurrencyCode = "USD", HistoryDays = historyDays, Source = "local",
-            Provenance = "native-jsonl",
+            Provenance = provider == CostProvider.Gemini ? "native-sqlite" : "native-jsonl",
             Coverage = new() { Priced = (int)Math.Min(int.MaxValue, priced), Unpriced = (int)Math.Min(int.MaxValue, unpriced) },
             SessionCostUSD = days.Count > 0 && days[^1].Date == today ? days[^1].TotalCost : 0,
             SessionTokens = days.Count > 0 && days[^1].Date == today ? days[^1].TotalTokens : 0,
@@ -762,9 +876,48 @@ public sealed partial class NativeCostScanner
     internal static bool IsCompressed(ReadOnlySpan<char> path) =>
         path.EndsWith(".jsonl.zst", StringComparison.OrdinalIgnoreCase);
 
-    internal static bool IsLog(ReadOnlySpan<char> path, CostProvider provider) =>
-        path.EndsWith(".jsonl", StringComparison.OrdinalIgnoreCase) ||
-        provider == CostProvider.Codex && IsCompressed(path);
+    internal static bool IsLog(ReadOnlySpan<char> path, CostProvider provider) => provider == CostProvider.Gemini
+        ? path.EndsWith(".db", StringComparison.OrdinalIgnoreCase) && !Path.GetFileName(path).StartsWith('.')
+        : path.EndsWith(".jsonl", StringComparison.OrdinalIgnoreCase) || provider == CostProvider.Codex && IsCompressed(path);
+
+    private static bool IsDirectChild(string path, string prefix) =>
+        path.Length > prefix.Length && path.AsSpan(prefix.Length).IndexOfAny('\\', '/') < 0;
+
+    /// <summary>
+    /// The Antigravity databases directly inside <paramref name="directory"/> (upstream reads only the immediate
+    /// entries of its roots). Hidden names are skipped, as upstream does, and so are links, as for every other log.
+    /// </summary>
+    private static IEnumerable<Discovered> EnumerateConversations(string directory)
+    {
+        var paths = new FileSystemEnumerable<string>(directory, (ref FileSystemEntry entry) => entry.ToFullPath(),
+            new EnumerationOptions { RecurseSubdirectories = false, IgnoreInaccessible = true, AttributesToSkip = FileAttributes.ReparsePoint })
+        {
+            ShouldIncludePredicate = (ref FileSystemEntry entry) => !entry.IsDirectory && IsLog(entry.FileName, CostProvider.Gemini)
+        };
+        foreach (var path in paths)
+            if (Conversation(path) is { } database) yield return database;
+    }
+
+    /// <summary>
+    /// A database's state from the file itself, not from the listing (a directory listing can lag behind a file its
+    /// writer keeps open), with its write-ahead log's size and time. Null when it is gone or is a link.
+    /// </summary>
+    private static Discovered? Conversation(string path)
+    {
+        try
+        {
+            var info = new FileInfo(path);
+            if (!info.Exists || (info.Attributes & (FileAttributes.ReparsePoint | FileAttributes.Directory)) != 0) return null;
+            var wal = new FileInfo(path + "-wal");
+            var walExists = wal.Exists;
+            return new(path, info.Length, info.LastWriteTimeUtc.Ticks, info.CreationTimeUtc.Ticks, false,
+                walExists ? wal.Length : -1, walExists ? wal.LastWriteTimeUtc.Ticks : 0);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
 
     private static FileSystemEnumerable<Discovered> EnumerateLogs(string directory, CostProvider provider) =>
         new(directory,
@@ -792,8 +945,10 @@ public sealed partial class NativeCostScanner
         internal uint Volume, SizeHigh, SizeLow, Links, IndexHigh, IndexLow;
     }
 
+    /// <param name="WalLength">For an Antigravity database: its write-ahead log's size, or -1 without one.</param>
+    /// <param name="WalWriteTime">For an Antigravity database: its write-ahead log's write time, or 0 without one.</param>
     private readonly record struct Discovered(string Path, long Length, long WriteTime, long Created,
-        bool Compressed = false);
+        bool Compressed = false, long WalLength = -1, long WalWriteTime = 0);
     private sealed record Input(CostProvider Provider, CostKey Key, Discovered Entry, IndexedFile? State)
     {
         internal bool Skipped { get; set; }

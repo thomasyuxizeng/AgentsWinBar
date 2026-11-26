@@ -18,6 +18,7 @@ public sealed class NativeCostServiceTests
     private string Codex => Path.Combine(_directory, "codex");
     private string Archived => Path.Combine(_directory, "archived");
     private string Data => Path.Combine(_directory, "data");
+    private string Gemini => Path.Combine(_directory, "gemini");
 
     [TestInitialize]
     public void Initialize()
@@ -32,7 +33,8 @@ public sealed class NativeCostServiceTests
     public void Cleanup() => Directory.Delete(_directory, recursive: true);
 
     private NativeCostService Service(bool watch = false) => new(Data,
-        [new(CostProvider.Claude, Claude), new(CostProvider.Codex, Codex), new(CostProvider.Codex, Archived)],
+        [new(CostProvider.Claude, Claude), new(CostProvider.Codex, Codex), new(CostProvider.Codex, Archived),
+            new(CostProvider.Gemini, Gemini)],
         NullLoggerFactory.Instance, new ManualClock(Now), TimeZoneInfo.Utc, watch, refreshPrices: false);
 
     private static CostDataDto Read(string? json) =>
@@ -81,8 +83,22 @@ public sealed class NativeCostServiceTests
     }
 
     [TestMethod]
-    public async Task FetchCostJsonAsync_WhenProviderIsGemini_ReturnsTheCliEmptyReading()
+    public async Task FetchCostJsonAsync_WhenNoAntigravityDatabaseExists_ReturnsNoGeminiReport()
     {
+        using var service = Service();
+
+        var reports = await service.FetchCostJsonAsync(["gemini"], Now);
+
+        reports.Should().ContainKey("gemini");
+        reports["gemini"].Should().BeNull("without local history there is no cost to show, which is not a failure");
+    }
+
+    [TestMethod]
+    public async Task FetchCostJsonAsync_WhenAntigravityDatabaseExists_ReturnsItsTokensAndCost()
+    {
+        Directory.CreateDirectory(Gemini);
+        AntigravityFixtures.Create(Path.Combine(Gemini, "conversation.db"),
+            [new AntigravityFixtures.Call { Input = 1_000_000, Model = "gemini-4-neon", Time = Now.AddHours(-1) }]);
         using var service = Service();
 
         var reports = await service.FetchCostJsonAsync(["gemini"], Now);
@@ -90,8 +106,29 @@ public sealed class NativeCostServiceTests
         var gemini = Read(reports["gemini"]);
         gemini.Provider.Should().Be("antigravity");
         gemini.HasReading.Should().BeTrue();
-        gemini.SessionTokens.Should().Be(0);
-        gemini.Daily.Should().BeEmpty();
+        gemini.Provenance.Should().Be("native-sqlite");
+        gemini.SessionTokens.Should().Be(1_000_000);
+        gemini.SessionCostUSD.Should().Be(new CostPricing().GetRates(CostProvider.Gemini, "gemini-4-neon", false, false, false, 0)!.Value.Input);
+    }
+
+    [TestMethod]
+    public async Task FetchCostJsonAsync_WhenTheOnlyAntigravityDatabaseIsLocked_ReturnsAnErrorThenTheReading()
+    {
+        Directory.CreateDirectory(Gemini);
+        var path = Path.Combine(Gemini, "conversation.db");
+        AntigravityFixtures.Create(path,
+            [new AntigravityFixtures.Call { Input = 500, Model = "gemini-4-neon", Time = Now.AddHours(-1) }]);
+        using var service = Service();
+
+        CostDataDto whileLocked;
+        using (new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+            whileLocked = Read((await service.FetchCostJsonAsync(["gemini"], Now))["gemini"]);
+        var afterUnlock = Read((await service.FetchCostJsonAsync(["gemini"], Now))["gemini"]);
+
+        whileLocked.HasReading.Should().BeFalse("history that exists but cannot be read yet is a failed reading, not zero");
+        whileLocked.Error.Should().NotBeNullOrEmpty();
+        afterUnlock.HasReading.Should().BeTrue("the skipped database is queued again without a new write");
+        afterUnlock.SessionTokens.Should().Be(500);
     }
 
     [TestMethod]
@@ -288,14 +325,31 @@ public sealed class NativeCostServiceTests
     }
 
     [TestMethod]
-    public void DefaultRoots_WhenGivenAProfile_CoversClaudeProjectsAndBothCodexFolders()
+    public void DefaultRoots_WhenGivenAProfile_CoversClaudeCodexAndAntigravityFolders()
     {
         var roots = NativeCostService.DefaultRoots(@"C:\Users\someone");
 
         roots.Should().Equal(
             new CostLogRoot(CostProvider.Claude, @"C:\Users\someone\.claude\projects"),
             new CostLogRoot(CostProvider.Codex, @"C:\Users\someone\.codex\sessions"),
-            new CostLogRoot(CostProvider.Codex, @"C:\Users\someone\.codex\archived_sessions"));
+            new CostLogRoot(CostProvider.Codex, @"C:\Users\someone\.codex\archived_sessions"),
+            new CostLogRoot(CostProvider.Gemini, @"C:\Users\someone\.gemini\antigravity-cli\conversations"),
+            new CostLogRoot(CostProvider.Gemini, @"C:\Users\someone\.gemini\antigravity"),
+            new CostLogRoot(CostProvider.Gemini, @"C:\Users\someone\.gemini\antigravity\conversations"));
+    }
+
+    [TestMethod]
+    [DataRow(@"D:\agy-home", @"D:\agy-home")]
+    [DataRow(@"  D:\agy-home  ", @"D:\agy-home")]
+    [DataRow(@"relative\home", @"C:\Users\someone\.gemini")]
+    [DataRow("", @"C:\Users\someone\.gemini")]
+    [DataRow(null, @"C:\Users\someone\.gemini")]
+    public void DefaultRoots_WhenGeminiHomeIsGiven_UsesItOnlyWhenAbsolute(string? geminiHome, string expected)
+    {
+        var roots = NativeCostService.DefaultRoots(@"C:\Users\someone", geminiHome);
+
+        roots.Where(root => root.Provider == CostProvider.Gemini).Should().Equal(NativeCostService.GeminiRoots(expected));
+        roots.Should().HaveCount(6);
     }
 
     [TestMethod]
@@ -308,6 +362,22 @@ public sealed class NativeCostServiceTests
         var jsonReports = await service.FetchCostJsonAsync(["Claude", "gemini"], Now);
 
         dtos["claude"].Should().BeEquivalentTo(Read(jsonReports["claude"]));
+        dtos["gemini"].Should().BeNull();
+        jsonReports["gemini"].Should().BeNull();
+    }
+
+    [TestMethod]
+    public async Task FetchCostDtosAsync_WhenAntigravityHistoryExists_MatchesJsonReportDtos()
+    {
+        Directory.CreateDirectory(Gemini);
+        AntigravityFixtures.Create(Path.Combine(Gemini, "conversation.db"),
+            [new AntigravityFixtures.Call { Input = 10, Output = 5, Thinking = 2, CacheRead = 3, Time = Now.AddHours(-1) }]);
+        using var service = Service();
+
+        var dtos = await service.FetchCostDtosAsync(["gemini"], Now);
+        var jsonReports = await service.FetchCostJsonAsync(["gemini"], Now);
+
+        dtos["gemini"].Should().NotBeNull();
         dtos["gemini"].Should().BeEquivalentTo(Read(jsonReports["gemini"]));
     }
 }

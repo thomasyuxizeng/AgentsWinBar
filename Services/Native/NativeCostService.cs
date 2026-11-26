@@ -6,12 +6,16 @@ using Microsoft.Extensions.Logging;
 
 namespace AgentsWinBar.Services.Native;
 
-/// <summary>Scans the local Claude and Codex logs natively and returns costs as the JSON the CodexBar CLI prints.</summary>
+/// <summary>
+/// Scans the local Claude and Codex logs and Antigravity's conversation databases natively and returns costs as the
+/// JSON the CodexBar CLI prints.
+/// </summary>
 public interface INativeCostService
 {
     /// <summary>
     /// Brings the cost index up to date once, then returns one report per requested provider in the shape of
-    /// <c>codexbar cost --format json</c>. Gemini has no local logs and gets the CLI's empty reading.
+    /// <c>codexbar cost --format json</c>. A provider without any local history (Gemini before agy wrote its first
+    /// conversation) maps to null: it has no cost to show, which is not a failure.
     /// </summary>
     /// <exception cref="ArgumentException">A provider id is not an allowed provider.</exception>
     Task<IReadOnlyDictionary<string, string?>> FetchCostJsonAsync(IReadOnlyList<string> providers,
@@ -52,7 +56,8 @@ public sealed class NativeCostService : INativeTypedCostService, IDisposable
     /// </summary>
     public NativeCostService(ISettingsService settings, ILoggerFactory loggerFactory, NativeTestOverrides? testOverrides = null)
         : this(Path.GetDirectoryName(Path.GetFullPath(settings.SettingsFilePath))!,
-            DefaultRoots(testOverrides?.ProfileRoot ?? Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)), loggerFactory)
+            DefaultRoots(testOverrides?.ProfileRoot ?? Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                testOverrides is null ? Environment.GetEnvironmentVariable(GeminiHomeVariable) : null), loggerFactory)
     {
     }
 
@@ -71,15 +76,32 @@ public sealed class NativeCostService : INativeTypedCostService, IDisposable
         _refreshPrices = refreshPrices;
     }
 
+    /// <summary>Replaces <c>%USERPROFILE%\.gemini</c> as the Gemini home, as in upstream (and the Gemini CLI).</summary>
+    internal const string GeminiHomeVariable = "GEMINI_CLI_HOME";
+
     /// <summary>
-    /// The Windows log folders: Claude Code's projects, and Codex's sessions plus archived sessions (upstream scans
-    /// both). Logs inside WSL are out of scope.
+    /// The Windows log folders: Claude Code's projects, Codex's sessions plus archived sessions (upstream scans both),
+    /// and Antigravity's conversation databases (<see cref="GeminiRoots"/>). Logs inside WSL are out of scope.
     /// </summary>
-    public static IReadOnlyList<CostLogRoot> DefaultRoots(string userProfile) =>
+    /// <param name="geminiHome">An absolute Gemini home that replaces <c>.gemini</c> in the profile; anything else is ignored.</param>
+    public static IReadOnlyList<CostLogRoot> DefaultRoots(string userProfile, string? geminiHome = null) =>
     [
         new(CostProvider.Claude, Path.Combine(userProfile, ".claude", "projects")),
         new(CostProvider.Codex, Path.Combine(userProfile, ".codex", "sessions")),
-        new(CostProvider.Codex, Path.Combine(userProfile, ".codex", "archived_sessions"))
+        new(CostProvider.Codex, Path.Combine(userProfile, ".codex", "archived_sessions")),
+        .. GeminiRoots(geminiHome?.Trim() is { Length: > 0 } home && Path.IsPathFullyQualified(home) && !home.Contains('\0')
+            ? home : Path.Combine(userProfile, ".gemini"))
+    ];
+
+    /// <summary>
+    /// Upstream's three recognized Antigravity roots in a Gemini home (AntigravityLocalScan.swift at a26ca57): the CLI's
+    /// conversations, and the app data folder and its conversations. Each is read without its subfolders.
+    /// </summary>
+    public static IReadOnlyList<CostLogRoot> GeminiRoots(string geminiHome) =>
+    [
+        new(CostProvider.Gemini, Path.Combine(geminiHome, "antigravity-cli", "conversations")),
+        new(CostProvider.Gemini, Path.Combine(geminiHome, "antigravity")),
+        new(CostProvider.Gemini, Path.Combine(geminiHome, "antigravity", "conversations"))
     ];
 
     public async Task<IReadOnlyDictionary<string, string?>> FetchCostJsonAsync(IReadOnlyList<string> providers,
@@ -150,15 +172,10 @@ public sealed class NativeCostService : INativeTypedCostService, IDisposable
         DateTimeOffset asOf,
         CancellationToken ct)
     {
-        var reportProviders = new List<CostProvider>(2);
+        var reportProviders = new List<CostProvider>(3);
         foreach (var provider in providers)
         {
-            CostProvider? source = provider switch
-            {
-                "claude" => CostProvider.Claude,
-                "codex" => CostProvider.Codex,
-                _ => null
-            };
+            var source = Source(provider);
             if (source is { } known && !reportProviders.Contains(known))
             {
                 reportProviders.Add(known);
@@ -202,30 +219,39 @@ public sealed class NativeCostService : INativeTypedCostService, IDisposable
             _watcher.Retry(path);
         }
         _skipRetries = retries;
+        // A database read while agy had it open is looked at again next time, in case its log's notification is late.
+        foreach (var path in result.RecheckPaths ?? []) _watcher.Retry(path);
+        if (result.Gemini is { } gemini)
+            _logger.LogDebug("Antigravity databases: read {Databases}, {Calls} calls, {Undated} without a time",
+                gemini.Databases, gemini.Calls, gemini.Undated);
 
         var reports = new Dictionary<string, CostDataDto?>(providers.Length, StringComparer.Ordinal);
         foreach (var provider in providers)
         {
             ct.ThrowIfCancellationRequested();
-            CostProvider? source = provider switch
-            {
-                "claude" => CostProvider.Claude,
-                "codex" => CostProvider.Codex,
-                _ => null
-            };
-            // The CLI reports Gemini (its "antigravity" provider) as a successful reading without any usage; there
-            // are no local Gemini logs to scan, so the native report says the same.
-            reports[provider] = source is { } known
-                ? scanned[known]
-                : provider == "gemini" ? EmptyReport("antigravity") : null;
+            if (Source(provider) is not { } known) reports[provider] = null;
+            else if (scanned.TryGetValue(known, out var report)) reports[provider] = report;
+            // No history yet. Databases that exist but could not be read yet are a failed reading (the last good one
+            // stays); with none at all there is simply nothing to show.
+            else reports[provider] = retries.Keys.Any(path => NativeCostScanner.IsLog(path, known))
+                ? Unreadable(known)
+                : null;
         }
         return reports;
     }
 
-    private static CostDataDto EmptyReport(string cliProvider) => new()
+    private static CostProvider? Source(string provider) => provider switch
     {
-        Provider = cliProvider, CurrencyCode = "USD", HistoryDays = HistoryDays, Source = "local", Provenance = "unknown",
-        Coverage = new(), SessionCostUSD = 0, SessionTokens = 0, Last30DaysCostUSD = 0, Last30DaysTokens = 0, Daily = []
+        "claude" => CostProvider.Claude,
+        "codex" => CostProvider.Codex,
+        "gemini" => CostProvider.Gemini,
+        _ => null
+    };
+
+    private static CostDataDto Unreadable(CostProvider provider) => new()
+    {
+        Provider = provider == CostProvider.Gemini ? "antigravity" : provider.ToString().ToLowerInvariant(),
+        Source = "local", HistoryDays = HistoryDays, Error = "The local history could not be read yet."
     };
 
     /// <summary>The change notifications (tests feed them directly when OS watching is off).</summary>

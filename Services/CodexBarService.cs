@@ -253,6 +253,29 @@ public class CodexBarService : ICodexBarService
                 var data = costsEnabled && dto != null ? InterpretCostDto(due[index], dto, now, ledgerScans) : null;
                 FinalizeCostCompletion(index, data, failure.ExitCode, failure.Error, costsEnabled);
             }
+            // The native scanner found no local history for this provider at all (Gemini before agy wrote its first
+            // conversation). That is no cost to show, not a failure: nothing is marked stale, and a reading kept from
+            // before (such as the $0 the scanner used to report for Gemini) is dropped so the cost section hides.
+            void CompleteWithoutHistory(int index)
+            {
+                ct.ThrowIfCancellationRequested();
+                if (completed[index]) return;
+                completed[index] = true;
+                if (CostsEnabled)
+                {
+                    lock (_costCache)
+                    {
+                        var provider = due[index];
+                        _costTimeouts.Remove(provider);
+                        _costTimedOut.Remove(provider);
+                        _costFailures.Remove(provider);
+                        _restoredCost.Remove(provider);
+                        if (_lastGoodCost.Remove(provider)) _costStoreDirty = true;
+                        completedProviders.Add(provider);
+                    }
+                }
+                onCompleted(due[index], null);
+            }
             void FinalizeCostCompletion(int index, CostData? data, int exitCode, string error, bool costsEnabled)
             {
                 if (costsEnabled)
@@ -340,10 +363,15 @@ public class CodexBarService : ICodexBarService
                 }
                 for (var i = 0; i < due.Count; i++)
                 {
+                    // A provider the scan answered with null has no local history (see INativeCostService).
                     if (dtoReports != null)
                     {
-                        dtoReports.TryGetValue(due[i], out var dto);
-                        CompleteDto(i, dto, failure);
+                        if (dtoReports.TryGetValue(due[i], out var dto) && dto is null) CompleteWithoutHistory(i);
+                        else CompleteDto(i, dto, failure);
+                    }
+                    else if (reports != null && reports.TryGetValue(due[i], out var absent) && absent is null)
+                    {
+                        CompleteWithoutHistory(i);
                     }
                     else
                     {

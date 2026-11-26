@@ -282,6 +282,46 @@ public sealed class CodexBarServiceNativeCostTests
         typed.VerifyNoOtherCalls();
     }
 
+    [TestMethod]
+    public async Task GetCostAsync_WhenNativeScanHasNoGeminiHistory_ReturnsNothingAndDropsTheLastGoodReading()
+    {
+        string? gemini = Report("antigravity", 0, 0);
+        var fail = false;
+        var native = new FakeNativeCost(provider => fail ? throw new IOException("index locked")
+            : provider == "gemini" ? gemini : Report(provider, 1, 0.1m));
+        var service = Create(NoWsl(), native);
+        (await service.GetCostAsync("gemini")).Should().NotBeNull("earlier builds reported $0 for Gemini");
+
+        gemini = null;
+        var withoutHistory = await service.GetCostAsync("gemini", forceRefresh: true);
+        fail = true;
+        var afterFailure = await service.GetCostAsync("gemini", forceRefresh: true);
+
+        withoutHistory.Should().BeNull("no local history is no cost to show, not a stale reading");
+        afterFailure.Should().BeNull("the $0 reading was dropped, so a later failure has nothing stale to serve");
+    }
+
+    [TestMethod]
+    public async Task GetCostsAsync_WithTypedCostServiceAndNoGeminiHistory_HidesOnlyGemini()
+    {
+        var typed = new Mock<INativeTypedCostService>(MockBehavior.Strict);
+        var claudeDto = new CostDataDto
+        {
+            Provider = "claude", CurrencyCode = "USD", Source = "local", Provenance = "native-jsonl",
+            SessionTokens = 1234, SessionCostUSD = 0.75m, Last30DaysTokens = 2000, Last30DaysCostUSD = 1.5m
+        };
+        typed.Setup(n => n.FetchCostDtosAsync(It.IsAny<IReadOnlyList<string>>(), Now, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Dictionary<string, CostDataDto?>(StringComparer.Ordinal) { ["claude"] = claudeDto, ["gemini"] = null });
+        var results = new Dictionary<string, CostData?>();
+
+        await foreach (var (provider, cost) in Create(NoWsl(), typed.Object).GetCostsAsync(["claude", "gemini"]))
+            results[provider] = cost;
+
+        results["claude"]!.TodayTokens.Should().Be(1234);
+        results["claude"]!.IsStale.Should().BeFalse();
+        results.GetValueOrDefault("gemini").Should().BeNull();
+    }
+
     private sealed class FakeNativeCost(Func<string, string?> report) : INativeCostService
     {
         public List<string[]> Calls { get; } = [];

@@ -222,6 +222,11 @@ internal sealed class CostIndex(CostIndexDatabase database) : IDisposable
         row.Write();
     }
 
+    /// <summary>
+    /// Adds one usage row. A row with its own key is counted once however many files hold it: Claude keeps the best
+    /// ranked copy, Codex and Gemini the first, and a Gemini database may update the rows it added itself (a
+    /// conversation is read whole again whenever it changes).
+    /// </summary>
     internal void Add(CostProvider provider, CostKey path, long generation, long offset, DateOnly day, CostEvent evt)
     {
         var row = _add ??= database.Prepare("""
@@ -231,10 +236,14 @@ internal sealed class CostIndex(CostIndexDatabase database) : IDisposable
                 day=excluded.day,model=excluded.model,band=excluded.band,input=excluded.input,output=excluded.output,
                 read=excluded.read,written=excluded.written,one_hour=excluded.one_hour,reasoning=excluded.reasoning,
                 utc_seconds=excluded.utc_seconds,offset_generation=excluded.offset_generation
-            WHERE excluded.provider=0 AND (
+            WHERE (excluded.provider=0 AND (
                 (excluded.path1=usage.path1 AND excluded.path2=usage.path2 AND excluded.incomplete<=usage.incomplete)
                 OR excluded.rank>usage.rank
-                OR (excluded.rank=usage.rank AND (excluded.path1,excluded.path2)<(usage.path1,usage.path2)))
+                OR (excluded.rank=usage.rank AND (excluded.path1,excluded.path2)<(usage.path1,usage.path2))))
+            OR (excluded.provider=2 AND excluded.path1=usage.path1 AND excluded.path2=usage.path2 AND
+                (excluded.day,excluded.model,excluded.band,excluded.input,excluded.output,excluded.read,excluded.reasoning,
+                    excluded.utc_seconds)
+                IS NOT (usage.day,usage.model,usage.band,usage.input,usage.output,usage.read,usage.reasoning,usage.utc_seconds))
             """);
         var count = evt.Tokens;
         var seconds = evt.Time.ToUnixTimeSeconds();
@@ -263,6 +272,17 @@ internal sealed class CostIndex(CostIndexDatabase database) : IDisposable
         if (evt.Key == default) row.Bind(18, generation);
         else row.BindNull(18);
         row.Write();
+    }
+
+    /// <summary>
+    /// True when at least one history file of <paramref name="provider"/> was indexed. For Gemini that is an Antigravity
+    /// database with a gen_metadata table (its has_request column), so a folder of unrelated databases is no history.
+    /// </summary>
+    internal bool HasHistory(CostProvider provider)
+    {
+        using var row = database.Prepare("SELECT EXISTS (SELECT 1 FROM files WHERE provider=? AND has_request<>0)");
+        row.Bind(1, (int)provider);
+        return row.Step() && row.Number(0) != 0;
     }
 
     internal static CostIndexDatabase.Statement PrepareReadDays(CostIndexDatabase database) =>

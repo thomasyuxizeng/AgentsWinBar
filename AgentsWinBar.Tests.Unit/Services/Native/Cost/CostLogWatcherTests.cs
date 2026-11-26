@@ -106,6 +106,71 @@ public sealed class CostLogWatcherTests
     }
 
     [TestMethod]
+    public void NotifyChanged_WhenAgyWritesADatabaseOrItsLog_QueuesTheDatabaseOnce()
+    {
+        using var watcher = Settled();
+        var database = Path.Combine(_directory, "gemini", "conversation.db");
+
+        watcher.NotifyChanged(CostProvider.Gemini, database + "-wal", created: true);
+        watcher.NotifyChanged(CostProvider.Gemini, database + "-wal", created: false);
+        watcher.NotifyChanged(CostProvider.Gemini, database, created: false);
+
+        watcher.TakePlan().ChangedPaths.Should().BeEquivalentTo([database]);
+    }
+
+    [TestMethod]
+    public void NotifyChanged_WhenAgyTouchesSharedMemoryOrOtherFiles_IsIgnored()
+    {
+        using var watcher = Settled();
+        var database = Path.Combine(_directory, "gemini", "conversation.db");
+        Directory.CreateDirectory(Path.Combine(_directory, "gemini", "folder"));
+
+        watcher.NotifyChanged(CostProvider.Gemini, database + "-shm", created: false);
+        watcher.NotifyChanged(CostProvider.Gemini, database + "-journal", created: true);
+        watcher.NotifyChanged(CostProvider.Gemini, Path.Combine(_directory, "gemini", "settings.json"), created: false);
+        watcher.NotifyChanged(CostProvider.Gemini, Path.Combine(_directory, "gemini", "folder"), created: true);
+
+        watcher.TakePlan().ChangedPaths.Should().BeEmpty();
+    }
+
+    [TestMethod]
+    public void NotifyRenamed_WhenADatabaseIsRenamedIntoPlace_QueuesIt()
+    {
+        using var watcher = Settled();
+        var database = Path.Combine(_directory, "gemini", "conversation.db");
+
+        watcher.NotifyRenamed(database);
+
+        watcher.TakePlan().ChangedPaths.Should().BeEquivalentTo([database]);
+    }
+
+    [TestMethod]
+    public void TakePlan_WhenAgyAppendsToAWatchedConversation_NamesTheDatabase()
+    {
+        var root = Path.Combine(_directory, "gemini");
+        Directory.CreateDirectory(root);
+        var database = Path.Combine(root, "conversation.db");
+        using var writer = AntigravityFixtures.Open(database);
+        AntigravityFixtures.Execute(writer, "PRAGMA wal_autocheckpoint=0");
+        AntigravityFixtures.CreateSchema(writer);
+        using var watcher = new CostLogWatcher([new(CostProvider.Gemini, root)], NullLogger<CostLogWatcher>.Instance, _clock, watch: true);
+        watcher.Complete(watcher.TakePlan(), succeeded: true);
+
+        AntigravityFixtures.Insert(writer, [(0, new AntigravityFixtures.Call { Input = 1, Time = Start })], []);
+        var changed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var timer = Stopwatch.StartNew();
+        while (!changed.Contains(database) && timer.Elapsed < TimeSpan.FromSeconds(20))
+        {
+            var plan = watcher.TakePlan();
+            plan.FullListing.Should().BeFalse();
+            changed.UnionWith(plan.ChangedPaths);
+            if (!changed.Contains(database)) Thread.Sleep(50);
+        }
+
+        changed.Should().Equal(database);
+    }
+
+    [TestMethod]
     public void NotifyRenamed_WhenFileIsRenamedToALog_QueuesIt()
     {
         using var watcher = Settled();

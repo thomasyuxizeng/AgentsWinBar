@@ -124,6 +124,14 @@ public sealed class CostLogWatcher : IDisposable
     /// <summary>A file or directory was created, or a log was written to.</summary>
     internal void NotifyChanged(CostProvider provider, string path, bool created)
     {
+        if (provider == CostProvider.Gemini)
+        {
+            // agy writes new calls to a database's write-ahead log first, so a write there is a change of the database.
+            // The shared-memory file changes on every read and the roots are watched one by one, so nothing else counts.
+            if (path.EndsWith(".db-wal", StringComparison.OrdinalIgnoreCase)) path = path[..^4];
+            if (NativeCostScanner.IsLog(path, provider)) Mark(path);
+            return;
+        }
         // A new directory can arrive with logs already inside (a move), so it is listed on the next update.
         // A write to a directory only says that something inside it changed, which has its own notification.
         // Other new files (notes, temporary files) are not logs and are not queued.
@@ -134,7 +142,8 @@ public sealed class CostLogWatcher : IDisposable
     internal void NotifyRenamed(string newPath)
     {
         // Any provider's log name counts here; the scanner checks the name against the root's provider.
-        if (NativeCostScanner.IsLog(newPath, CostProvider.Codex) || Directory.Exists(newPath)) Mark(newPath);
+        if (NativeCostScanner.IsLog(newPath, CostProvider.Codex) || NativeCostScanner.IsLog(newPath, CostProvider.Gemini) ||
+            Directory.Exists(newPath)) Mark(newPath);
     }
 
     /// <summary>A log that could not be read (locked, for example) is looked at again on the next update.</summary>
@@ -180,7 +189,8 @@ public sealed class CostLogWatcher : IDisposable
                 var slot = i;
                 watcher = new FileSystemWatcher(directory)
                 {
-                    IncludeSubdirectories = true,
+                    // Antigravity's databases sit directly in their roots; the folders around them see unrelated churn.
+                    IncludeSubdirectories = provider != CostProvider.Gemini,
                     InternalBufferSize = NotificationBufferBytes,
                     NotifyFilter = NotifyFilters.FileName | NotifyFilters.DirectoryName | NotifyFilters.LastWrite |
                                    NotifyFilters.Size
