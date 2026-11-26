@@ -123,6 +123,37 @@ public class DashboardClockUpdaterTests
     }
 
     [TestMethod]
+    public void TryRefreshClock_UsedPercentUnknown_KeepsPaceUnknownAndSummaryEmpty()
+    {
+        // The builder shows a NaN percent as 0% with no pace; the tick must not project a pace from that 0%
+        var snap = SampleSnapshot();
+        var window = snap.Providers[0].Windows[0] with
+        {
+            UsedPercent = 0, UsedPercentKnown = false, Pace = new PaceProjection(PaceKind.Unknown), PaceSummary = string.Empty
+        };
+        snap = snap with { Providers = [snap.Providers[0] with { Windows = [window] }] };
+
+        var ok = DashboardClockUpdater.TryRefreshClock(snap, BaseUtc.AddMinutes(2), TimeZoneInfo.Utc, out var updated);
+
+        ok.Should().BeTrue();
+        updated.Providers[0].Windows[0].Pace.Kind.Should().Be(PaceKind.Unknown);
+        updated.Providers[0].Windows[0].PaceSummary.Should().BeEmpty();
+        updated.Providers[0].Windows[0].ResetText.Should().Be("Resets in 2h 58m");
+    }
+
+    [TestMethod]
+    public void TryRefreshClock_UsedPercentKnownAtZero_ProjectsPace()
+    {
+        var snap = SampleSnapshot();
+        var window = snap.Providers[0].Windows[0] with { UsedPercent = 0 };
+        snap = snap with { Providers = [snap.Providers[0] with { Windows = [window] }] };
+
+        DashboardClockUpdater.TryRefreshClock(snap, BaseUtc.AddMinutes(2), TimeZoneInfo.Utc, out var updated).Should().BeTrue();
+
+        updated.Providers[0].Windows[0].Pace.Kind.Should().Be(PaceKind.NotStarted);
+    }
+
+    [TestMethod]
     public void TryRefreshClock_CostOlderThanSevenDays_ReturnsTrue()
     {
         // Cost data has no maximum age, so an old (stale) reading must not force a full snapshot on every tick

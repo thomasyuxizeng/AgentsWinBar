@@ -137,6 +137,12 @@ public sealed record DashboardWindow
 
     public double UsedPercent { get; init; }
 
+    /// <summary>
+    /// False when the provider reported no finite percent (<see cref="UsedPercent"/> is then shown as 0): the pace
+    /// stays unknown, also when the clock tick recomputes it.
+    /// </summary>
+    public bool UsedPercentKnown { get; init; } = true;
+
     /// <summary>How far through the window we are (0-100), or null when unknown.</summary>
     public double? ElapsedPercent { get; init; }
     public int WindowMinutes { get; init; }

@@ -68,7 +68,8 @@ public static class DashboardClockUpdater
                     if (prev < resetUtc && now >= resetUtc) return false;
                 }
 
-                var pace = double.IsFinite(w.UsedPercent)
+                // The same rule as the snapshot builder: no pace for a window whose reported percent was not a number
+                var pace = w.UsedPercentKnown && double.IsFinite(w.UsedPercent)
                     ? PaceCalculator.Project(w.UsedPercent, w.WindowMinutes, w.ResetsAtUtc, now)
                     : new PaceProjection(PaceKind.Unknown);
                 updatedWindows[j] = w with

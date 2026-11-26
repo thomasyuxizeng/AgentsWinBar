@@ -88,6 +88,19 @@ public class DashboardSnapshotBuilderTests
     private static DashboardInputs Inputs(params UsageData[] providers) => new() { Providers = providers, NowUtc = Now };
 
     [TestMethod]
+    public void Build_NaNPercent_MarksPercentUnknownWithNoPace()
+    {
+        var snapshot = DashboardSnapshotBuilder.Build(Inputs(Provider() with { Session = Window(double.NaN), Weekly = Window(40) }));
+
+        var session = snapshot.Providers.Single().Windows[0];
+        session.UsedPercent.Should().Be(0);
+        session.UsedPercentKnown.Should().BeFalse();
+        session.Pace.Kind.Should().Be(PaceKind.Unknown);
+        session.PaceSummary.Should().BeEmpty();
+        snapshot.Providers.Single().Windows[1].UsedPercentKnown.Should().BeTrue();
+    }
+
+    [TestMethod]
     [DataRow(true)]
     [DataRow(false)]
     public void Build_ApiCreditsInput_AttachesOnlyToClaudeRegardlessOfCostVisibility(bool showCosts)

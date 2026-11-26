@@ -111,7 +111,7 @@ public static class DashboardSnapshotBuilder
                     Key = key, Kind = kind, Title = title,
                     Accent = kind is DashboardWindowKind.Session or DashboardWindowKind.Weekly
                         ? WindowAccent.None : WindowAccents.FromTitle(title),
-                    UsedPercent = percent,
+                    UsedPercent = percent, UsedPercentKnown = double.IsFinite(window.Percent),
                     ElapsedPercent = ResetTimeFormatter.ElapsedPercent(window.ResetAt, window.WindowMinutes, now),
                     WindowMinutes = window.WindowMinutes, ResetsAtUtc = Utc(window.ResetAt),
                     ResetText = ResetTimeFormatter.Format(window.ResetAt, now) ?? window.ResetIn?.Trim() ?? string.Empty,
