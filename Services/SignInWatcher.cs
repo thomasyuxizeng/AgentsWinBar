@@ -40,10 +40,10 @@ public interface ISignInSignals
 /// <summary>
 /// After "Sign in" is clicked, picks up the new sign-in without a restart and without network polling:
 /// Claude and Codex: a file watcher on the credential file (plus a 10 s check of its timestamp in case the folder did
-/// not exist yet); the first change asks for one refresh, 2 s later so the tool has finished writing.
+/// not exist yet); file events request a refresh after a 2 s settle delay.
 /// Gemini: a 10 s check of the Credential Manager entry's timestamp, and, since the Antigravity app may keep its
 /// sign-in elsewhere, one refresh a minute while the provider still shows signed out.
-/// Watching ends after the first refresh for a changed sign-in, when <see cref="Cancel"/> is called, or after
+/// Watching ends when <see cref="Cancel"/> is called or after
 /// <see cref="FileWindow"/> (Claude, Codex) / <see cref="GeminiWindow"/>. Nothing runs while no sign-in is pending.
 /// </summary>
 public sealed class SignInWatcher(ISignInSignals signals, ILogger<SignInWatcher> logger) : ISignInWatcher, IDisposable
@@ -58,7 +58,7 @@ public sealed class SignInWatcher(ISignInSignals signals, ILogger<SignInWatcher>
     private sealed class Pending
     {
         public required DateTime Deadline { get; init; }
-        public required DateTime? StartStamp { get; init; }
+        public DateTime? LastStamp { get; set; }
         public DateTime NextRecheck { get; set; }
         public IDisposable? Watch { get; set; }
         public IDisposable? Settle { get; set; }
@@ -90,7 +90,7 @@ public sealed class SignInWatcher(ISignInSignals signals, ILogger<SignInWatcher>
                 var pending = new Pending
                 {
                     Deadline = now + (id == "gemini" ? GeminiWindow : FileWindow),
-                    StartStamp = Stamp(id),
+                    LastStamp = Stamp(id),
                     NextRecheck = now + GeminiRecheckInterval
                 };
                 _pending[id] = pending;
@@ -160,9 +160,10 @@ public sealed class SignInWatcher(ISignInSignals signals, ILogger<SignInWatcher>
                     End(id);
                     logger.LogInformation("No new {Provider} sign-in seen; stopped watching", id);
                 }
-                else if (pending.Settle == null && Stamp(id) is { } stamp && stamp != pending.StartStamp)
+                else if (pending.Settle == null && Stamp(id) is { } stamp && stamp != pending.LastStamp)
                 {
-                    End(id);
+                    pending.LastStamp = stamp;
+                    pending.NextRecheck = now + GeminiRecheckInterval;
                     requests.Add(new(id, true));
                 }
                 else if (id == "gemini" && now >= pending.NextRecheck)
@@ -179,9 +180,16 @@ public sealed class SignInWatcher(ISignInSignals signals, ILogger<SignInWatcher>
     {
         lock (_gate)
         {
-            // A later Begin replaced this sign-in, or it already ended
             if (!_pending.TryGetValue(id, out var current) || !ReferenceEquals(current, pending)) return;
-            End(id);
+            if (signals.UtcNow >= pending.Deadline)
+            {
+                End(id);
+                return;
+            }
+            // Consume this stamp so the poll does not repeat the file watcher's refresh.
+            pending.LastStamp = Stamp(id);
+            pending.Settle?.Dispose();
+            pending.Settle = null;
         }
         Raise(new(id, true));
     }
