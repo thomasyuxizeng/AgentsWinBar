@@ -66,7 +66,7 @@
                     <RowDefinition Height="Auto"/>
                 </Grid.RowDefinitions>
                 <Viewbox Grid.RowSpan="2" Width="24" Height="24" VerticalAlignment="Center">
-                    <PathIcon Data="{x:Bind views:DashboardFormat.Icon(Data.Id), Mode=OneWay}"
+                    <PathIcon x:Name="ProviderIcon"
                               Foreground="{ThemeResource TextFillColorPrimaryBrush}"/>
                 </Viewbox>
                 <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
@@ -79,27 +79,24 @@
                 </StackPanel>
 
                 <!-- Freshness and source, said once; amber with a warning glyph when the numbers are last-known -->
-                <Grid Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="2" HorizontalAlignment="Left" Background="Transparent"
-                      ToolTipService.ToolTip="{x:Bind views:DashboardFormat.FreshnessTip(Data), Mode=OneWay}">
-                    <TextBlock Style="{StaticResource Caption}" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"
+                <Grid x:Name="FreshnessGrid" Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="2" HorizontalAlignment="Left" Background="Transparent">
+                    <TextBlock x:Name="FreshnessFreshText" Style="{StaticResource Caption}" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"
                                Text="{x:Bind views:DashboardFormat.FreshnessLine(Data), Mode=OneWay}"
                                Visibility="{x:Bind views:DashboardFormat.VisFresh(Data), Mode=OneWay}"/>
                     <StackPanel Orientation="Horizontal" Spacing="6"
                                 Visibility="{x:Bind views:DashboardFormat.VisStale(Data), Mode=OneWay}">
                         <FontIcon FontFamily="Segoe Fluent Icons" Glyph="&#xE7BA;" FontSize="12" VerticalAlignment="Center"
                                   Foreground="{ThemeResource SystemFillColorCautionBrush}"/>
-                        <TextBlock FontSize="12" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"
+                        <TextBlock x:Name="FreshnessStaleText" FontSize="12" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"
                                    Foreground="{ThemeResource SystemFillColorCautionBrush}"
                                    Text="{x:Bind views:DashboardFormat.FreshnessLine(Data), Mode=OneWay}"/>
                     </StackPanel>
                 </Grid>
 
                 <!-- One service status indicator: dot and description, a link to the status page when there is one -->
-                <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="6" HorizontalAlignment="Right" VerticalAlignment="Center"
-                            ToolTipService.ToolTip="{x:Bind views:DashboardFormat.StatusHeaderTip(Data), Mode=OneWay}"
+                <StackPanel x:Name="StatusHeaderPanel" Grid.Column="2" Orientation="Horizontal" Spacing="6" HorizontalAlignment="Right" VerticalAlignment="Center"
                             Visibility="{x:Bind views:DashboardFormat.VisStatus(Data.ServiceStatus), Mode=OneWay}">
-                    <Ellipse Width="8" Height="8" VerticalAlignment="Center"
-                             Fill="{x:Bind views:DashboardFormat.StatusBrush(Data.ServiceStatus), Mode=OneWay}"/>
+                    <Ellipse x:Name="StatusDot" Width="8" Height="8" VerticalAlignment="Center"/>
                     <HyperlinkButton Padding="0" FontSize="12" MaxWidth="240"
                                      Foreground="{ThemeResource TextFillColorPrimaryBrush}"
                                      ToolTipService.ToolTip="Open the status page"
@@ -145,7 +142,7 @@
                                ToolTipService.ToolTip="{x:Bind views:DashboardFormat.IncidentBody(Data), Mode=OneWay}"
                                Visibility="{x:Bind views:DashboardFormat.VisIncidentBody(Data), Mode=OneWay}"/>
                     <StackPanel Orientation="Horizontal" Spacing="12">
-                        <TextBlock Style="{StaticResource Caption}" VerticalAlignment="Center"
+                        <TextBlock x:Name="IncidentAgeText" Style="{StaticResource Caption}" VerticalAlignment="Center"
                                    Text="{x:Bind views:DashboardFormat.IncidentAge(Data), Mode=OneWay}"
                                    Visibility="{x:Bind views:DashboardFormat.VisIncidentAge(Data), Mode=OneWay}"/>
                         <HyperlinkButton Content="Open status page" Padding="0" FontSize="12"
@@ -161,7 +158,7 @@
                      Severity="Error" Title="Last fetch failed">
                 <StackPanel Spacing="4" Margin="0,-8,0,12">
                     <TextBlock Text="{x:Bind Data.Error, Mode=OneWay}" TextWrapping="Wrap" FontSize="12" IsTextSelectionEnabled="True"/>
-                    <TextBlock Style="{StaticResource Caption}" Text="{x:Bind views:DashboardFormat.LastKnownData(Data), Mode=OneWay}"
+                    <TextBlock x:Name="LastKnownDataText" Style="{StaticResource Caption}" Text="{x:Bind views:DashboardFormat.LastKnownData(Data), Mode=OneWay}"
                                Visibility="{x:Bind views:DashboardFormat.VisLastKnownData(Data), Mode=OneWay}"/>
                 </StackPanel>
             </InfoBar>
@@ -221,13 +218,13 @@
                                          Percent="{x:Bind Data.ApiCredits.PercentUsed, Mode=OneWay}"
                                          TimePercent="{x:Bind views:DashboardFormat.ApiTime(Data.ApiCredits), Mode=OneWay}"
                                          AutomationProperties.Name="{x:Bind views:DashboardFormat.ApiAutomationName(Data.ApiCredits), Mode=OneWay}"/>
-                    <TextBlock Style="{StaticResource Caption}"
+                    <TextBlock x:Name="ApiCaptionText" Style="{StaticResource Caption}"
                                Text="{x:Bind views:DashboardFormat.ApiCaption(Data.ApiCredits), Mode=OneWay}"/>
                     <StackPanel Orientation="Horizontal" Spacing="6"
                                 Visibility="{x:Bind views:DashboardFormat.VisApiStale(Data.ApiCredits), Mode=OneWay}">
                         <FontIcon FontFamily="Segoe Fluent Icons" Glyph="&#xE7BA;" FontSize="12" VerticalAlignment="Center"
                                   Foreground="{ThemeResource SystemFillColorCautionBrush}"/>
-                        <TextBlock FontSize="12" TextWrapping="Wrap" Foreground="{ThemeResource SystemFillColorCautionBrush}"
+                        <TextBlock x:Name="ApiStaleTextBlock" FontSize="12" TextWrapping="Wrap" Foreground="{ThemeResource SystemFillColorCautionBrush}"
                                    Text="{x:Bind views:DashboardFormat.ApiStaleText(Data.ApiCredits), Mode=OneWay}"/>
                     </StackPanel>
 
@@ -392,7 +389,7 @@
                         </ItemsControl>
                     </StackPanel>
 
-                    <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap"
+                    <TextBlock x:Name="GeminiCaptionText" Style="{StaticResource Caption}" TextWrapping="Wrap"
                                Text="{x:Bind views:DashboardFormat.GeminiCaption(Data.GeminiApi), Mode=OneWay}"/>
                 </StackPanel>
 
@@ -412,7 +409,7 @@
                             Visibility="{x:Bind views:DashboardFormat.VisCostStale(Data.Cost), Mode=OneWay}">
                     <FontIcon FontFamily="Segoe Fluent Icons" Glyph="&#xE7BA;" FontSize="12" VerticalAlignment="Center"
                               Foreground="{ThemeResource SystemFillColorCautionBrush}"/>
-                    <TextBlock FontSize="12" TextWrapping="Wrap" Foreground="{ThemeResource SystemFillColorCautionBrush}"
+                    <TextBlock x:Name="CostStaleText" FontSize="12" TextWrapping="Wrap" Foreground="{ThemeResource SystemFillColorCautionBrush}"
                                Text="{x:Bind views:DashboardFormat.CostStale(Data.Cost), Mode=OneWay}"/>
                 </StackPanel>
 

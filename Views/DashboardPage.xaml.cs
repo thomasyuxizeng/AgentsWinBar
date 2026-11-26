@@ -34,6 +34,8 @@ public sealed partial class DashboardPage : Page
     private string _graphsArranged = string.Empty;
     private DashboardSnapshot? _snapshot;
     private IReadOnlyList<AttentionItem> _attention = [];
+    private DashboardDiagnostics? _pendingDiagnostics;
+    private string _summaryLayout = string.Empty;
     private int _arrangedColumns = -1;
     private string _arrangedOrder = string.Empty;
     private bool _disposed;
@@ -44,11 +46,14 @@ public sealed partial class DashboardPage : Page
     public event EventHandler<bool>? FullScreenChanged;
     public event EventHandler<GraphVisibilityChange>? GraphVisibilityChanged;
 
+    public DashboardSnapshot? CurrentSnapshot => _snapshot;
+
     public DashboardPage()
     {
         InitializeComponent();
         AttentionRepeater.ElementPrepared += OnAttentionElementPrepared;
         AttentionRepeater.ElementClearing += OnAttentionElementClearing;
+        DiagnosticsExpander.Expanding += OnDiagnosticsExpanding;
     }
 
     private void OnAttentionElementPrepared(ItemsRepeater sender, ItemsRepeaterElementPreparedEventArgs args)
@@ -114,7 +119,9 @@ public sealed partial class DashboardPage : Page
         GraphsGrid.ColumnDefinitions.Clear();
         GraphsGrid.RowDefinitions.Clear();
 
+        DiagnosticsExpander.Expanding -= OnDiagnosticsExpanding;
         DiagnosticsExpander.IsExpanded = false;
+        _pendingDiagnostics = null;
         Diagnostics.Cleanup();
         DiagnosticsExpander.Content = null;
         DiagnosticsExpander.Header = null;
@@ -141,11 +148,45 @@ public sealed partial class DashboardPage : Page
         _snapshot = snapshot;
         UpdateSubtitle(snapshot.Summary);
         UpdateSummary(snapshot);
-        if (!DashboardContent.DiagnosticsEquals(Diagnostics.Data, snapshot.Diagnostics)) Diagnostics.Data = snapshot.Diagnostics;
-        else Diagnostics.RefreshTimes();
+        if (DiagnosticsExpander.IsExpanded)
+        {
+            _pendingDiagnostics = null;
+            if (!DashboardContent.DiagnosticsEquals(Diagnostics.Data, snapshot.Diagnostics)) Diagnostics.Data = snapshot.Diagnostics;
+            else Diagnostics.RefreshTimes();
+        }
+        else
+        {
+            _pendingDiagnostics = snapshot.Diagnostics;
+        }
         UpdateDiagnosticsSummary(snapshot.Diagnostics);
         UpdateProviders(snapshot.Providers);
         UpdateGraphs(snapshot.Providers);
+    }
+
+    public void ApplyClockTick(DashboardSnapshot updated)
+    {
+        if (_disposed) return;
+        _snapshot = updated;
+        UpdateSubtitle(updated.Summary);
+        UpdateSummary(updated);
+        foreach (var provider in updated.Providers)
+        {
+            if (_panels.TryGetValue(provider.Id, out var panel))
+                panel.ApplyClockTick(provider);
+        }
+        if (DiagnosticsExpander.IsExpanded) Diagnostics.RefreshTimes();
+    }
+
+    private void OnDiagnosticsExpanding(Expander sender, ExpanderExpandingEventArgs args)
+    {
+        if (_disposed || _pendingDiagnostics is not { } pending) return;
+        _pendingDiagnostics = null;
+        try
+        {
+            if (!DashboardContent.DiagnosticsEquals(Diagnostics.Data, pending)) Diagnostics.Data = pending;
+            else Diagnostics.RefreshTimes();
+        }
+        catch (Exception ex) { App.LogHandled("Dashboard diagnostics expand failed", ex); }
     }
 
     /// <summary>The providers whose graphs the user switched off (from settings); redraws the graphs section when it changed.</summary>
@@ -164,7 +205,7 @@ public sealed partial class DashboardPage : Page
         if (_disposed || _snapshot == null) return;
         UpdateSubtitle(_snapshot.Summary);
         foreach (var panel in _panels.Values) panel.RefreshTimes();
-        Diagnostics.RefreshTimes();
+        if (DiagnosticsExpander.IsExpanded) Diagnostics.RefreshTimes();
     }
 
     /// <summary>
@@ -211,16 +252,24 @@ public sealed partial class DashboardPage : Page
         if (spend)
         {
             var s = snapshot.Summary;
-            SpendToday.Text = DashboardFormat.Money(s.TotalCostToday, s.CostCurrency);
-            SpendMonth.Text = $"{DashboardFormat.Money(s.TotalCost30Days, s.CostCurrency)} in the last 30 days · " +
-                              $"{DashboardFormat.Tokens(s.TotalTokens30Days)} tokens";
+            var today = DashboardFormat.Money(s.TotalCostToday, s.CostCurrency);
+            if (!string.Equals(SpendToday.Text, today, StringComparison.Ordinal))
+                SpendToday.Text = today;
+            var month = $"{DashboardFormat.Money(s.TotalCost30Days, s.CostCurrency)} in the last 30 days · " +
+                        $"{DashboardFormat.Tokens(s.TotalTokens30Days)} tokens";
+            if (!string.Equals(SpendMonth.Text, month, StringComparison.Ordinal))
+                SpendMonth.Text = month;
         }
 
-        AttentionPanel.Visibility = attention.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
-        SpendPanel.Visibility = spend ? Visibility.Visible : Visibility.Collapsed;
-        SummaryCard.Visibility = attention.Count > 0 || spend ? Visibility.Visible : Visibility.Collapsed;
-        AllClear.Visibility = attention.Count == 0 && snapshot.Providers.Count > 0 && snapshot.Summary.LastRefreshUtc.HasValue
+        var attentionVis = attention.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+        if (AttentionPanel.Visibility != attentionVis) AttentionPanel.Visibility = attentionVis;
+        var spendVis = spend ? Visibility.Visible : Visibility.Collapsed;
+        if (SpendPanel.Visibility != spendVis) SpendPanel.Visibility = spendVis;
+        var cardVis = attention.Count > 0 || spend ? Visibility.Visible : Visibility.Collapsed;
+        if (SummaryCard.Visibility != cardVis) SummaryCard.Visibility = cardVis;
+        var allClearVis = attention.Count == 0 && snapshot.Providers.Count > 0 && snapshot.Summary.LastRefreshUtc.HasValue
             ? Visibility.Visible : Visibility.Collapsed;
+        if (AllClear.Visibility != allClearVis) AllClear.Visibility = allClearVis;
         ArrangeSummary();
     }
 
@@ -230,13 +279,17 @@ public sealed partial class DashboardPage : Page
         var alone = AttentionPanel.Visibility != Visibility.Visible;
         // Alone, the spend reads as one line instead of a three-line block in an otherwise empty card
         var oneLine = alone && MainScroll.ActualWidth >= SpendOneLineWidth;
+        var sideBySide = alone || MainScroll.ActualWidth >= SummarySideBySideWidth;
+        var spendVis = SpendPanel.Visibility;
+        var key = $"{alone}|{oneLine}|{sideBySide}|{spendVis}";
+        if (string.Equals(_summaryLayout, key, StringComparison.Ordinal)) return;
+        _summaryLayout = key;
         SpendPanel.Orientation = oneLine ? Orientation.Horizontal : Orientation.Vertical;
         SpendPanel.Spacing = oneLine ? 16 : 2;
-        var sideBySide = alone || MainScroll.ActualWidth >= SummarySideBySideWidth;
         SummaryGrid.RowSpacing = sideBySide ? 0 : 12;
         Grid.SetColumn(SpendPanel, sideBySide && !alone ? 1 : 0);
         Grid.SetRow(SpendPanel, sideBySide ? 0 : 1);
-        Grid.SetColumnSpan(AttentionPanel, sideBySide && SpendPanel.Visibility == Visibility.Visible ? 1 : 2);
+        Grid.SetColumnSpan(AttentionPanel, sideBySide && spendVis == Visibility.Visible ? 1 : 2);
     }
 
     private void UpdateDiagnosticsSummary(DashboardDiagnostics d)
@@ -252,7 +305,9 @@ public sealed partial class DashboardPage : Page
             d.RecentAlerts.Count == 0 ? "no alerts this session" : DashboardFormat.Plural(d.RecentAlerts.Count, "alert") + " this session",
             "system, settings in effect, history store, refresh log"
         };
-        DiagnosticsSummary.Text = string.Join(" · ", parts.Where(p => !string.IsNullOrWhiteSpace(p)));
+        var text = string.Join(" · ", parts.Where(p => !string.IsNullOrWhiteSpace(p)));
+        if (!string.Equals(DiagnosticsSummary.Text, text, StringComparison.Ordinal))
+            DiagnosticsSummary.Text = text;
     }
 
     private void UpdateProviders(IReadOnlyList<DashboardProvider> providers)
@@ -318,11 +373,14 @@ public sealed partial class DashboardPage : Page
                 toggle.Click += OnGraphToggleClicked;
                 _graphToggles[provider.Id] = toggle;
             }
-            toggle.Content = provider.DisplayName;
             var shown = !_hiddenGraphs.Contains(provider.Id);
-            if (toggle.IsChecked != shown) toggle.IsChecked = shown;
-            Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(toggle, $"{provider.DisplayName} graphs");
-            ToolTipService.SetToolTip(toggle, shown ? $"Hide {provider.DisplayName} graphs" : $"Show {provider.DisplayName} graphs");
+            if (!string.Equals(toggle.Content as string, provider.DisplayName, StringComparison.Ordinal) || toggle.IsChecked != shown)
+            {
+                toggle.Content = provider.DisplayName;
+                if (toggle.IsChecked != shown) toggle.IsChecked = shown;
+                Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(toggle, $"{provider.DisplayName} graphs");
+                ToolTipService.SetToolTip(toggle, shown ? $"Hide {provider.DisplayName} graphs" : $"Show {provider.DisplayName} graphs");
+            }
 
             if (shown)
             {

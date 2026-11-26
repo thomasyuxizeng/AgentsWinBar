@@ -83,11 +83,11 @@ public sealed partial class DashboardAppWindow : Window
         _redrawTimer = queue.CreateTimer();
         _redrawTimer.Interval = TimeSpan.FromMilliseconds(250);
         _redrawTimer.IsRepeating = false;
-        _redrawTimer.Tick += OnTimerTick;
+        _redrawTimer.Tick += OnRedrawTimerTick;
         _clockTimer = queue.CreateTimer();
         _clockTimer.Interval = TimeSpan.FromSeconds(30);
         _clockTimer.IsRepeating = true;
-        _clockTimer.Tick += OnTimerTick;
+        _clockTimer.Tick += OnClockTimerTick;
 
         Closed += OnClosed;
         Activated += OnActivated;
@@ -358,7 +358,31 @@ public sealed partial class DashboardAppWindow : Window
         catch (Exception ex) { _logger.LogError(ex, "Dashboard event failed"); }
     }
 
-    private void OnTimerTick(DispatcherQueueTimer sender, object args) => Redraw();
+    private void OnRedrawTimerTick(DispatcherQueueTimer sender, object args) => Redraw();
+
+    private void OnClockTimerTick(DispatcherQueueTimer sender, object args) => RefreshClock();
+
+    private void RefreshClock()
+    {
+        if (_closed || _redrawing || _hidden || _page == null || SessionStateNative.IsCurrentSessionLocked()) return;
+        _redrawing = true;
+        try
+        {
+            if (_page.CurrentSnapshot is { } current &&
+                DashboardClockUpdater.TryRefreshClock(current, DateTime.UtcNow, TimeZoneInfo.Local, out var updated))
+            {
+                _page.ApplyClockTick(updated);
+                return;
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Dashboard clock refresh failed");
+            return;
+        }
+        finally { _redrawing = false; }
+        Redraw();
+    }
 
     private void OnF11Invoked(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args) => HandleEvent(() =>
     {
@@ -452,8 +476,8 @@ public sealed partial class DashboardAppWindow : Window
         Activated -= OnActivated;
         try { EndSession(); }
         catch (Exception ex) { _logger.LogError(ex, "Dashboard session cleanup failed"); }
-        _redrawTimer.Tick -= OnTimerTick;
-        _clockTimer.Tick -= OnTimerTick;
+        _redrawTimer.Tick -= OnRedrawTimerTick;
+        _clockTimer.Tick -= OnClockTimerTick;
         foreach (var accelerator in _accelerators)
         {
             accelerator.Invoked -= OnF11Invoked;

@@ -30,6 +30,11 @@ public static class DashboardContent
         a with { Daily = b.Daily, TopModels = b.TopModels, PeakDay = b.PeakDay } == b &&
         SequenceEquals(a.Daily, b.Daily, DailyEquals) && a.TopModels.SequenceEqual(b.TopModels) && DailyEquals(a.PeakDay, b.PeakDay);
 
+    public static bool CostContentEquals(DashboardCost? a, DashboardCost? b) =>
+        ReferenceEquals(a, b) || a != null && b != null &&
+        a with { StaleAge = b.StaleAge, Daily = b.Daily, TopModels = b.TopModels, PeakDay = b.PeakDay } == b &&
+        SequenceEquals(a.Daily, b.Daily, DailyEquals) && a.TopModels.SequenceEqual(b.TopModels) && DailyEquals(a.PeakDay, b.PeakDay);
+
     public static bool DailyEquals(DailyCost? a, DailyCost? b) =>
         ReferenceEquals(a, b) || a != null && b != null &&
         a with { ModelBreakdowns = b.ModelBreakdowns } == b && a.ModelBreakdowns.SequenceEqual(b.ModelBreakdowns);

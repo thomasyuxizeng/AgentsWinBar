@@ -32,11 +32,9 @@
             </Grid.ColumnDefinitions>
             <StackPanel Orientation="Horizontal" Spacing="8">
                 <TextBlock Text="{x:Bind Data.Title, Mode=OneWay}" FontWeight="SemiBold" FontSize="14" TextTrimming="CharacterEllipsis"/>
-                <Border Style="{StaticResource Badge}"
-                        Background="{x:Bind views:DashboardFormat.LimitBrush(Data.UsedPercent), Mode=OneWay}"
+                <Border x:Name="LimitBadge" Style="{StaticResource Badge}"
                         Visibility="{x:Bind views:DashboardFormat.LimitVis(Data.UsedPercent), Mode=OneWay}">
-                    <TextBlock Text="{x:Bind views:DashboardFormat.LimitLabel(Data.UsedPercent), Mode=OneWay}" FontSize="11" FontWeight="SemiBold"
-                               Foreground="{x:Bind views:DashboardFormat.LimitForeground(Data.UsedPercent), Mode=OneWay}"/>
+                    <TextBlock x:Name="LimitLabelText" Text="{x:Bind views:DashboardFormat.LimitLabel(Data.UsedPercent), Mode=OneWay}" FontSize="11" FontWeight="SemiBold"/>
                 </Border>
                 <Border Style="{StaticResource Badge}" Background="{x:Bind views:DashboardFormat.EarlyBrush()}"
                         Visibility="{x:Bind views:DashboardFormat.EarlyVis(Data), Mode=OneWay}">
@@ -56,27 +54,27 @@
             ResetDetectedAtUtc="{x:Bind Data.ResetDetectedAtUtc, Mode=OneWay}"/>
 
         <!-- One reset caption; in a group sharing a reset only the last row shows it -->
-        <TextBlock Style="{StaticResource Caption}"
+        <TextBlock x:Name="ResetCaptionText" Style="{StaticResource Caption}"
                    Text="{x:Bind views:DashboardFormat.ResetCaption(Data, GroupSize), Mode=OneWay}"
                    Visibility="{x:Bind views:DashboardFormat.Vis(ShowReset), Mode=OneWay}"/>
-        <TextBlock Style="{StaticResource Caption}"
+        <TextBlock x:Name="EarlyDetailText" Style="{StaticResource Caption}"
                    Text="{x:Bind views:DashboardFormat.EarlyDetail(Data), Mode=OneWay}"
                    Visibility="{x:Bind views:DashboardFormat.VisEarlyDetail(Data), Mode=OneWay}"/>
         <!-- Up front only when the window is on course to run out -->
-        <StackPanel Orientation="Horizontal" Spacing="6"
+        <StackPanel x:Name="PaceAlertPanel" Orientation="Horizontal" Spacing="6"
                     Visibility="{x:Bind views:DashboardFormat.VisPaceAlert(Data), Mode=OneWay}">
             <FontIcon FontFamily="Segoe Fluent Icons" Glyph="&#xE7BA;" FontSize="12" VerticalAlignment="Top" Margin="0,2,0,0"
                       Foreground="{ThemeResource SystemFillColorCautionBrush}"/>
-            <TextBlock FontSize="12" TextWrapping="Wrap" Foreground="{ThemeResource SystemFillColorCautionBrush}"
+            <TextBlock x:Name="PaceAlertText" FontSize="12" TextWrapping="Wrap" Foreground="{ThemeResource SystemFillColorCautionBrush}"
                        Text="{x:Bind Data.PaceSummary, Mode=OneWay}"/>
         </StackPanel>
 
         <!-- Details on demand -->
         <StackPanel Spacing="4" Margin="0,2,0,0" Visibility="{x:Bind views:DashboardFormat.Vis(ShowDetails), Mode=OneWay}">
-            <TextBlock FontSize="12" TextWrapping="Wrap"
+            <TextBlock x:Name="PaceDetailText" FontSize="12" TextWrapping="Wrap"
                        Text="{x:Bind Data.PaceSummary, Mode=OneWay}"
                        Visibility="{x:Bind views:DashboardFormat.VisPaceDetail(Data, ShowDetails), Mode=OneWay}"/>
-            <TextBlock Style="{StaticResource Caption}"
+            <TextBlock x:Name="WindowDetailText" Style="{StaticResource Caption}"
                        Text="{x:Bind views:DashboardFormat.WindowDetail(Data), Mode=OneWay}"/>
         </StackPanel>
     </StackPanel>

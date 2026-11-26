@@ -290,8 +290,6 @@ public sealed partial class UsageMeter : UserControl
     private Brush BarBrushFor(double honestPercent)
     {
         var key = (Accent, UsageThresholds.Level(honestPercent));
-        if (Accent == WindowAccent.ClaudeAndOpenAi && honestPercent < UsageThresholds.Warning)
-            return ClaudeToOpenAiGradient();
         if (!_barBrushes.TryGetValue(key, out var barBrush))
             _barBrushes[key] = barBrush = CreateBarBrush(honestPercent, Accent);
         return barBrush;
@@ -313,30 +311,33 @@ public sealed partial class UsageMeter : UserControl
             _previousFillBrush = UsageBar.Fill;
         }
         _fillWidth = newFill;
-        UsageBar.Width = newFill;
+        if (!UsageBar.Width.Equals(newFill)) UsageBar.Width = newFill;
         var barBrush = BarBrushFor(honestPercent);
         if (!ReferenceEquals(UsageBar.Fill, barBrush)) UsageBar.Fill = barBrush;
 
         if (!double.IsFinite(TimePercent) || TimePercent < 0)
         {
-            TimeBar.Visibility = Visibility.Collapsed;
-            TimeMarker.Visibility = Visibility.Collapsed;
+            if (TimeBar.Visibility != Visibility.Collapsed) TimeBar.Visibility = Visibility.Collapsed;
+            if (TimeMarker.Visibility != Visibility.Collapsed) TimeMarker.Visibility = Visibility.Collapsed;
             SetTooltip(string.IsNullOrEmpty(PaceText) ? null : PaceText);
             return;
         }
 
         var time = Math.Clamp(TimePercent, 0, 100);
-        TimeBar.Visibility = Visibility.Visible;
-        TimeBar.Width = ActualWidth * (time / 100.0);
+        if (TimeBar.Visibility != Visibility.Visible) TimeBar.Visibility = Visibility.Visible;
+        var timeWidth = ActualWidth * (time / 100.0);
+        if (!TimeBar.Width.Equals(timeWidth)) TimeBar.Width = timeWidth;
         var timeBrush = TimeBrushFor(Accent);
         if (!ReferenceEquals(TimeBar.Fill, timeBrush)) TimeBar.Fill = timeBrush;
 
         // The marker only appears when usage is outpacing the schedule (the blue has run past the time
         // position, so the violet layer is hidden). Otherwise the violet layer already shows the headroom.
         // Keep it fully inside the bar, even at 0% and 100%.
-        TimeMarker.Visibility = honestPercent > time && ActualWidth > TimeMarker.Width ? Visibility.Visible : Visibility.Collapsed;
+        var markerVis = honestPercent > time && ActualWidth > TimeMarker.Width ? Visibility.Visible : Visibility.Collapsed;
+        if (TimeMarker.Visibility != markerVis) TimeMarker.Visibility = markerVis;
         var markerX = Math.Clamp(ActualWidth * (time / 100.0) - TimeMarker.Width / 2, 0, Math.Max(0, ActualWidth - TimeMarker.Width));
-        TimeMarker.Margin = new Thickness(markerX, 0, 0, 0);
+        var markerMargin = new Thickness(markerX, 0, 0, 0);
+        if (TimeMarker.Margin != markerMargin) TimeMarker.Margin = markerMargin;
 
         var pace = honestPercent > time + 5 ? "ahead of time: using it fast"
             : honestPercent < time - 5 ? "behind time: using it slowly"
@@ -356,7 +357,6 @@ public sealed partial class UsageMeter : UserControl
 
     private Brush TimeBrushFor(WindowAccent accent)
     {
-        if (accent == WindowAccent.ClaudeAndOpenAi) return ClaudeToOpenAiGradient(0x88);
         if (!_timeBrushes.TryGetValue(accent, out var brush)) _timeBrushes[accent] = brush = CreateTimeBrush(accent);
         return brush;
     }

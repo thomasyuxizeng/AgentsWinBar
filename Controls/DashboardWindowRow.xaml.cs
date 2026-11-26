@@ -1,4 +1,6 @@
+using AgentsWinBar.Helpers;
 using AgentsWinBar.Models;
+using AgentsWinBar.Views;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 
@@ -36,6 +38,8 @@ public sealed partial class DashboardWindowRow : UserControl
     }
 
     private bool _disposed;
+    private bool _suppressFullRefresh;
+    private int _limitBand = -1;
 
     private static void OnResetFromPercentChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
     {
@@ -60,6 +64,9 @@ public sealed partial class DashboardWindowRow : UserControl
         if (_disposed) return;
         _disposed = true;
         Meter.Cleanup();
+        LimitBadge.Background = null;
+        LimitLabelText.Foreground = null;
+        _limitBand = -1;
         Bindings?.StopTracking();
         SetValue(DataProperty, null);
         DataContext = null;
@@ -85,16 +92,89 @@ public sealed partial class DashboardWindowRow : UserControl
         Bindings.Update();
     }
 
+    public void ApplyClockTick(DashboardWindow updated)
+    {
+        if (_disposed) return;
+        _suppressFullRefresh = true;
+        try
+        {
+            Data = updated;
+        }
+        finally
+        {
+            _suppressFullRefresh = false;
+        }
+        RefreshTimesCore(updated);
+    }
+
     public void RefreshTimes()
     {
-        if (!_disposed) Bindings.Update();
+        if (_disposed || Data is not { } data) return;
+        RefreshTimesCore(data);
+    }
+
+    private void RefreshTimesCore(DashboardWindow data)
+    {
+        var time = DashboardFormat.Time(data.ElapsedPercent);
+        if (!Meter.TimePercent.Equals(time)) Meter.TimePercent = time;
+        if (!string.Equals(Meter.PaceText, data.PaceSummary, StringComparison.Ordinal))
+            Meter.PaceText = data.PaceSummary;
+
+        if (ShowReset)
+        {
+            var reset = DashboardFormat.ResetCaption(data, GroupSize);
+            if (!string.Equals(ResetCaptionText.Text, reset, StringComparison.Ordinal))
+                ResetCaptionText.Text = reset;
+        }
+
+        if (data.EarlyResetAtUtc != null || EarlyDetailText.Visibility == Visibility.Visible)
+        {
+            var early = DashboardFormat.EarlyDetail(data);
+            var earlyVis = DashboardFormat.VisText(early);
+            if (EarlyDetailText.Visibility != earlyVis) EarlyDetailText.Visibility = earlyVis;
+            if (!string.Equals(EarlyDetailText.Text, early, StringComparison.Ordinal))
+                EarlyDetailText.Text = early;
+        }
+
+        var alertVis = DashboardFormat.VisPaceAlert(data);
+        if (PaceAlertPanel.Visibility != alertVis) PaceAlertPanel.Visibility = alertVis;
+        if (alertVis == Visibility.Visible && !string.Equals(PaceAlertText.Text, data.PaceSummary, StringComparison.Ordinal))
+            PaceAlertText.Text = data.PaceSummary;
+
+        if (ShowDetails)
+        {
+            var detailVis = DashboardFormat.VisPaceDetail(data, ShowDetails);
+            if (PaceDetailText.Visibility != detailVis) PaceDetailText.Visibility = detailVis;
+            if (detailVis == Visibility.Visible && !string.Equals(PaceDetailText.Text, data.PaceSummary, StringComparison.Ordinal))
+                PaceDetailText.Text = data.PaceSummary;
+            var windowDetail = DashboardFormat.WindowDetail(data);
+            if (!string.Equals(WindowDetailText.Text, windowDetail, StringComparison.Ordinal))
+                WindowDetailText.Text = windowDetail;
+        }
+    }
+
+    private void UpdateLimitBrushes(double percent)
+    {
+        var band = percent >= UsageThresholds.Critical ? 2
+            : percent >= UsageThresholds.Warning ? 1 : 0;
+        if (band == _limitBand) return;
+        _limitBand = band;
+        if (band == 0)
+        {
+            LimitBadge.Background = null;
+            LimitLabelText.Foreground = null;
+            return;
+        }
+        LimitBadge.Background = DashboardFormat.LimitBrush(percent);
+        LimitLabelText.Foreground = DashboardFormat.LimitForeground(percent);
     }
 
     private static void OnDataChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
     {
         var control = (DashboardWindowRow)d;
-        if (control._disposed) return;
+        if (control._disposed || control._suppressFullRefresh) return;
         if (control.Content is UIElement content) content.Visibility = control.Data == null ? Visibility.Collapsed : Visibility.Visible;
+        control.UpdateLimitBrushes(control.Data?.UsedPercent ?? 0);
         control.Bindings.Update();
     }
 }

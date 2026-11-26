@@ -56,6 +56,12 @@ public sealed partial class DashboardProviderPanel : UserControl
     private string _windowsLayout = string.Empty;
     private bool _stacked;
     private bool _disposed;
+    private bool _suppressFullRefresh;
+    private string? _iconProviderId;
+    private string? _statusColorHex;
+    private string? _freshnessTip;
+    private string? _statusHeaderTip;
+    private string? _lastScannedText;
 
     public DashboardProviderPanel()
     {
@@ -104,6 +110,16 @@ public sealed partial class DashboardProviderPanel : UserControl
         CostFacts = [];
         ApiUseRows = GeminiUseRows = [];
         _costRowsData = null;
+        _costRowsBuilt = false;
+        ProviderIcon.Data = null;
+        StatusDot.Fill = null;
+        ToolTipService.SetToolTip(FreshnessGrid, null);
+        ToolTipService.SetToolTip(StatusHeaderPanel, null);
+        _iconProviderId = null;
+        _statusColorHex = null;
+        _freshnessTip = null;
+        _statusHeaderTip = null;
+        _lastScannedText = null;
 
         Bindings?.StopTracking();
         SetValue(DataProperty, null);
@@ -141,6 +157,7 @@ public sealed partial class DashboardProviderPanel : UserControl
     {
         UpdateDetailsButton();
         BuildWindows(Data);
+        if (ShowDetails) BuildCostRows(Data?.Cost);
         Bindings.Update();
     }
 
@@ -172,22 +189,162 @@ public sealed partial class DashboardProviderPanel : UserControl
     private static void OnDataChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
     {
         var panel = (DashboardProviderPanel)d;
-        if (!panel._disposed) panel.Refresh();
+        if (!panel._disposed && !panel._suppressFullRefresh) panel.Refresh();
+    }
+
+    public void ApplyClockTick(DashboardProvider updated)
+    {
+        if (_disposed) return;
+        _suppressFullRefresh = true;
+        try
+        {
+            Data = updated;
+        }
+        finally
+        {
+            _suppressFullRefresh = false;
+        }
+        RefreshTimesCore(updated, updated.Windows);
     }
 
     public void RefreshTimes()
     {
-        if (_disposed) return;
-        Bindings.Update();
-        foreach (var row in _rows.Values) row.RefreshTimes();
-        DashboardTemplateBindings.Update(CostSection, item => item is DashboardFact { Label: "Scanned" } fact && Data?.Cost is { } cost
-            ? fact with { Value = $"{DashboardFormat.Local(cost.CapturedAtUtc)} · {DashboardFormat.Ago(cost.CapturedAtUtc)}" } : item);
+        if (_disposed || Data is not { } data) return;
+        RefreshTimesCore(data, null);
+    }
+
+    private void RefreshTimesCore(DashboardProvider data, IReadOnlyList<DashboardWindow>? updatedWindows)
+    {
+        var freshness = DashboardFormat.FreshnessLine(data);
+        if (FreshnessFreshText.Visibility == Visibility.Visible &&
+            !string.Equals(FreshnessFreshText.Text, freshness, StringComparison.Ordinal))
+            FreshnessFreshText.Text = freshness;
+        if (FreshnessStaleText.Visibility == Visibility.Visible &&
+            !string.Equals(FreshnessStaleText.Text, freshness, StringComparison.Ordinal))
+            FreshnessStaleText.Text = freshness;
+
+        if (data.StatusIsStale)
+        {
+            var freshnessTip = DashboardFormat.FreshnessTip(data);
+            if (!string.Equals(_freshnessTip, freshnessTip, StringComparison.Ordinal))
+            {
+                _freshnessTip = freshnessTip;
+                ToolTipService.SetToolTip(FreshnessGrid, string.IsNullOrEmpty(freshnessTip) ? null : freshnessTip);
+            }
+        }
+
+        if (StatusHeaderPanel.Visibility == Visibility.Visible)
+        {
+            var statusTip = DashboardFormat.StatusHeaderTip(data);
+            if (!string.Equals(_statusHeaderTip, statusTip, StringComparison.Ordinal))
+            {
+                _statusHeaderTip = statusTip;
+                ToolTipService.SetToolTip(StatusHeaderPanel, string.IsNullOrEmpty(statusTip) ? null : statusTip);
+            }
+        }
+
+        if (DashboardFormat.HasIncident(data))
+        {
+            var age = DashboardFormat.IncidentAge(data);
+            var ageVis = DashboardFormat.VisText(age);
+            if (IncidentAgeText.Visibility != ageVis) IncidentAgeText.Visibility = ageVis;
+            if (!string.Equals(IncidentAgeText.Text, age, StringComparison.Ordinal))
+                IncidentAgeText.Text = age;
+        }
+
+        if (DashboardFormat.HasFetchError(data))
+        {
+            var lastKnown = DashboardFormat.LastKnownData(data);
+            var lastKnownVis = DashboardFormat.VisText(lastKnown);
+            if (LastKnownDataText.Visibility != lastKnownVis) LastKnownDataText.Visibility = lastKnownVis;
+            if (!string.Equals(LastKnownDataText.Text, lastKnown, StringComparison.Ordinal))
+                LastKnownDataText.Text = lastKnown;
+        }
+
+        if (data.ApiCredits is { State: ApiCreditsState.Ok } api)
+        {
+            var apiCaption = DashboardFormat.ApiCaption(api);
+            if (!string.Equals(ApiCaptionText.Text, apiCaption, StringComparison.Ordinal))
+                ApiCaptionText.Text = apiCaption;
+            if (api.IsStale)
+            {
+                var apiStale = DashboardFormat.ApiStaleText(api);
+                if (!string.Equals(ApiStaleTextBlock.Text, apiStale, StringComparison.Ordinal))
+                    ApiStaleTextBlock.Text = apiStale;
+            }
+            var apiTime = DashboardFormat.ApiTime(api);
+            if ((ApiMeter.TimePercent < 0 && apiTime >= 0) || Math.Abs(apiTime - ApiMeter.TimePercent) >= 0.05)
+                ApiMeter.TimePercent = apiTime;
+        }
+
+        if (data.GeminiApi is { State: GeminiApiSpendState.Ok })
+        {
+            var geminiCaption = DashboardFormat.GeminiCaption(data.GeminiApi);
+            if (!string.Equals(GeminiCaptionText.Text, geminiCaption, StringComparison.Ordinal))
+                GeminiCaptionText.Text = geminiCaption;
+        }
+
+        if (data.Cost is { IsStale: true })
+        {
+            var costStale = DashboardFormat.CostStale(data.Cost);
+            if (!string.Equals(CostStaleText.Text, costStale, StringComparison.Ordinal))
+                CostStaleText.Text = costStale;
+        }
+
+        if (updatedWindows != null)
+        {
+            foreach (var window in updatedWindows)
+            {
+                if (_rows.TryGetValue(window.Key, out var row))
+                    row.ApplyClockTick(window);
+            }
+        }
+        else
+        {
+            foreach (var row in _rows.Values) row.RefreshTimes();
+        }
+
+        if (ShowDetails && data.Cost is { } cost)
+        {
+            var scanned = $"{DashboardFormat.Local(cost.CapturedAtUtc)} · {DashboardFormat.Ago(cost.CapturedAtUtc)}";
+            if (!string.Equals(_lastScannedText, scanned, StringComparison.Ordinal))
+            {
+                _lastScannedText = scanned;
+                DashboardTemplateBindings.Update(CostSection, item => item is DashboardFact { Label: "Scanned" } fact
+                    ? fact with { Value = scanned } : item);
+            }
+        }
     }
 
     private void Refresh()
     {
         var data = Data;
         if (Content is UIElement content) content.Visibility = data == null ? Visibility.Collapsed : Visibility.Visible;
+        if (data != null && !string.Equals(_iconProviderId, data.Id, StringComparison.Ordinal))
+        {
+            _iconProviderId = data.Id;
+            ProviderIcon.Data = DashboardFormat.Icon(data.Id);
+        }
+        var hex = ProviderStatusPresentation.ColorHex(data?.ServiceStatus);
+        if (!string.Equals(_statusColorHex, hex, StringComparison.Ordinal))
+        {
+            _statusColorHex = hex;
+            StatusDot.Fill = ProviderStatusVisuals.CreateBrush(data?.ServiceStatus);
+        }
+
+        var freshnessTip = DashboardFormat.FreshnessTip(data);
+        if (!string.Equals(_freshnessTip, freshnessTip, StringComparison.Ordinal))
+        {
+            _freshnessTip = freshnessTip;
+            ToolTipService.SetToolTip(FreshnessGrid, string.IsNullOrEmpty(freshnessTip) ? null : freshnessTip);
+        }
+        var statusTip = DashboardFormat.StatusHeaderTip(data);
+        if (!string.Equals(_statusHeaderTip, statusTip, StringComparison.Ordinal))
+        {
+            _statusHeaderTip = statusTip;
+            ToolTipService.SetToolTip(StatusHeaderPanel, string.IsNullOrEmpty(statusTip) ? null : statusTip);
+        }
+
         var details = data?.Id is { Length: > 0 } id && DetailsByProvider.TryGetValue(id, out var open) && open;
         ShowDetails = details;
         UpdateDetailsButton();
@@ -196,13 +353,21 @@ public sealed partial class DashboardProviderPanel : UserControl
         BuildApiUseRows(data?.ApiCredits);
         BuildGeminiUseRows(data?.GeminiApi);
 
-        CreditsText.Text = data?.Credits is { } credits
+        var creditsText = data?.Credits is { } credits
             ? $"Credits: {credits.Used:0.##} of {credits.Limit:0.##} used · {credits.Remaining:0.##} remaining"
             : string.Empty;
+        if (!string.Equals(CreditsText.Text, creditsText, StringComparison.Ordinal))
+            CreditsText.Text = creditsText;
 
-        HistoryText.Text = data is { HistorySampleCount: > 0 }
+        var historyText = data is { HistorySampleCount: > 0 }
             ? $"Usage history: {DashboardFormat.Plural(data.HistorySampleCount, "sample")} since {DashboardFormat.LocalDate(data.HistoryOldestUtc)}"
             : "Usage history: no samples yet";
+        if (!string.Equals(HistoryText.Text, historyText, StringComparison.Ordinal))
+            HistoryText.Text = historyText;
+
+        _lastScannedText = data?.Cost is { } c
+            ? $"{DashboardFormat.Local(c.CapturedAtUtc)} · {DashboardFormat.Ago(c.CapturedAtUtc)}"
+            : null;
 
         Bindings.Update();
     }
@@ -376,7 +541,8 @@ public sealed partial class DashboardProviderPanel : UserControl
 
     private void BuildCostRows(DashboardCost? cost)
     {
-        if (_costRowsBuilt && DashboardContent.CostEquals(_costRowsData, cost)) return;
+        if (!ShowDetails) return;
+        if (_costRowsBuilt && DashboardContent.CostContentEquals(_costRowsData, cost)) return;
         _costRowsBuilt = true;
         _costRowsData = cost;
         if (cost == null)

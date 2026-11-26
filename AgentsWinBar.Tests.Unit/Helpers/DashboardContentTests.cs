@@ -228,4 +228,15 @@ public class DashboardContentTests
         DashboardContent.GraphCostEquals(null, null).Should().BeTrue();
         DashboardContent.GraphCostEquals(Cost(), null).Should().BeFalse();
     }
+
+    [TestMethod]
+    public void CostContentEquals_IgnoresStaleAgeOnly_AndDetectsOtherChanges()
+    {
+        var a = Cost();
+        DashboardContent.CostContentEquals(a, a with { StaleAge = TimeSpan.FromMinutes(12) }).Should().BeTrue();
+        DashboardContent.CostContentEquals(a, a with { TodayCost = 99m }).Should().BeFalse();
+        DashboardContent.CostContentEquals(a, a with { Daily = [Day() with { TotalCost = 3m }] }).Should().BeFalse();
+        DashboardContent.CostContentEquals(a, null).Should().BeFalse();
+        DashboardContent.CostContentEquals(null, null).Should().BeTrue();
+    }
 }
