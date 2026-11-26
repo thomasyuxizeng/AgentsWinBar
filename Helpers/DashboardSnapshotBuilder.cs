@@ -128,7 +128,7 @@ public static class DashboardSnapshotBuilder
             {
                 Id = id, DisplayName = id.ToLowerInvariant() switch
                 { "claude" => "Claude", "codex" => "Codex", "gemini" => "Gemini", _ => id },
-                Plan = data.Plan, Source = data.Status, ServiceStatus = data.ServiceStatus,
+                Plan = PlanNameFormatter.Display(data.Plan), Source = data.Status, ServiceStatus = data.ServiceStatus,
                 IncidentTitle = incidentTitle, IncidentUpdateText = incidentUpdateText,
                 IncidentUpdateAtUtc = incidentUpdateAtUtc,
                 IsLoading = data.IsLoading,

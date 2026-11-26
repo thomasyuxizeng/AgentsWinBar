@@ -19,6 +19,8 @@ namespace AgentsWinBar.Views;
 public sealed class ProviderSlot : InPlaceRow
 {
     public string Provider { get; set; } = string.Empty;
+    /// <summary>The label column width every card shares (the widest any card needs), so all bars end at the same x.</summary>
+    public double LabelWidth { get; set; }
     public UsageData? Data { get; set; }
 
     protected override int UpdateFromCore(InPlaceRow next)
@@ -30,6 +32,13 @@ public sealed class ProviderSlot : InPlaceRow
             Provider = other.Provider;
             changed++;
             RaisePropertyChanged(nameof(Provider));
+        }
+        // Before the data, so a card redrawn for new data already has the width it ends up with
+        if (LabelWidth != other.LabelWidth)
+        {
+            LabelWidth = other.LabelWidth;
+            changed++;
+            RaisePropertyChanged(nameof(LabelWidth));
         }
         if (!EqualityComparer<UsageData?>.Default.Equals(Data, other.Data))
         {
@@ -106,7 +115,11 @@ public sealed partial class MainPage : Page
     {
         try
         {
-            InPlaceRow.Apply(Slots, ViewModel.Providers.Select(p => new ProviderSlot { Provider = p.Provider, Data = p }).ToList(),
+            var providers = ViewModel.Providers.ToList();
+            // One label width for all cards: a card with a long label ("External 5h") no longer has shorter bars
+            var scale = XamlRoot?.RasterizationScale ?? 1.0;
+            var labelWidth = providers.Count == 0 ? 0 : providers.Max(p => ProviderCard.LabelColumnWidthFor(p, scale));
+            InPlaceRow.Apply(Slots, providers.Select(p => new ProviderSlot { Provider = p.Provider, LabelWidth = labelWidth, Data = p }).ToList(),
                 slot => slot.Provider);
         }
         catch (Exception ex)
@@ -140,6 +153,24 @@ public sealed partial class MainPage : Page
 
         // Update last updated text
         LastUpdatedText.Text = ViewModel.LastUpdatedText;
+    }
+
+    /// <summary>Raised after layout when the cards' total height changed (a card added, removed, or grown by new data).</summary>
+    internal event EventHandler? CardsHeightChanged;
+
+    /// <summary>True once the cards have been laid out with content (before that their height says nothing).</summary>
+    internal bool CardsMeasured => ProvidersItemsControl.ActualHeight > 0;
+
+    /// <summary>
+    /// The page height in DIPs that shows every card without scrolling: the cards at their natural height (the scroll
+    /// viewer measures them unconstrained), its padding, and the footer.
+    /// </summary>
+    internal double FullHeight() =>
+        ProvidersScroll.Padding.Top + ProvidersItemsControl.ActualHeight + ProvidersScroll.Padding.Bottom + Footer.ActualHeight;
+
+    private void OnCardsSizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        if (e.NewSize.Height != e.PreviousSize.Height) CardsHeightChanged?.Invoke(this, EventArgs.Empty);
     }
 
     private void OnProviderCardLoaded(object sender, RoutedEventArgs e)

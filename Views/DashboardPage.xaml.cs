@@ -166,16 +166,32 @@ public sealed partial class DashboardPage : Page
         Diagnostics.RefreshTimes();
     }
 
+    /// <summary>
+    /// The toolbar's "Updated ... · next refresh ... · every ..." line. It is redrawn by the dashboard window's 30-second
+    /// clock (a fresh snapshot each tick, stopped while the window is minimised or closed), so the relative times tick.
+    /// Each part keeps its words together (non-breaking spaces): in a narrow window the line wraps at a separator onto a
+    /// second line, and only beyond two lines is the end trimmed, with the whole line in the tooltip.
+    /// </summary>
     private void UpdateSubtitle(DashboardSummary summary)
     {
-        SubtitleText.Text = summary.LastRefreshUtc.HasValue
-            ? $"Updated {DashboardFormat.LocalTime(summary.LastRefreshUtc.Value)} ({DashboardFormat.Ago(summary.LastRefreshUtc.Value)})" +
-              (summary.NextRefreshUtc.HasValue ? $" · next refresh {DashboardFormat.In(summary.NextRefreshUtc)}" : string.Empty) +
-              (summary.EffectiveRefreshIntervalSeconds > summary.RefreshIntervalSeconds
-                  ? $" · every {DashboardFormat.Seconds(summary.EffectiveRefreshIntervalSeconds)} while usage is idle"
-                  : $" · every {DashboardFormat.Seconds(summary.RefreshIntervalSeconds)}")
-            : "Waiting for the first refresh…";
+        var parts = new List<string>(3);
+        if (summary.LastRefreshUtc is { } last)
+        {
+            parts.Add($"Updated {DashboardFormat.LocalTime(last)} ({DashboardFormat.Ago(last)})");
+            if (summary.NextRefreshUtc.HasValue) parts.Add($"next refresh {DashboardFormat.In(summary.NextRefreshUtc)}");
+            parts.Add(summary.EffectiveRefreshIntervalSeconds > summary.RefreshIntervalSeconds
+                ? $"every {DashboardFormat.Seconds(summary.EffectiveRefreshIntervalSeconds)} while usage is idle"
+                : $"every {DashboardFormat.Seconds(summary.RefreshIntervalSeconds)}");
+        }
+        else parts.Add("Waiting for the first refresh…");
+        var full = string.Join(" · ", parts);
+        if (SubtitleText.Text.Length > 0 && string.Equals(ToolTipService.GetToolTip(SubtitleText) as string, full, StringComparison.Ordinal)) return;
+        // Non-breaking inside a part and before each dot, a normal space after it: lines break only after "·"
+        SubtitleText.Text = string.Join(NoBreakSpace + "· ", parts.Select(p => p.Replace(' ', NoBreakSpace)));
+        ToolTipService.SetToolTip(SubtitleText, full);
     }
+
+    private const char NoBreakSpace = ' ';
 
     /// <summary>
     /// The summary card: what needs attention across providers (each entry scrolls to its provider) and, when two or more
@@ -290,7 +306,14 @@ public sealed partial class DashboardPage : Page
         {
             if (!_graphToggles.TryGetValue(provider.Id, out var toggle))
             {
-                toggle = new ToggleButton { Tag = provider.Id, Padding = new Thickness(10, 4, 10, 4), FontSize = 12 };
+                // A check box per provider, not an accent-filled toggle button: the name stays in primary text on the
+                // page background in both themes, only the small box takes the accent colour, and on or off reads from
+                // the check mark rather than from colour. Text centred on the 32 DIP box row so nothing is clipped.
+                toggle = new CheckBox
+                {
+                    Tag = provider.Id, MinWidth = 0, FontSize = 13, Padding = new Thickness(8, 0, 0, 0),
+                    VerticalContentAlignment = VerticalAlignment.Center
+                };
                 toggle.Click += OnGraphToggleClicked;
                 _graphToggles[provider.Id] = toggle;
             }

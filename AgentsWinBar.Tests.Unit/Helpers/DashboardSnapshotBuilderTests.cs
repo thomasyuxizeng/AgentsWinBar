@@ -480,6 +480,16 @@ public class DashboardSnapshotBuilderTests
     }
 
     [TestMethod]
+    public void Build_WhenPlanIsLowercase_ShowsItInTitleCaseAndLeavesTheReadingAlone()
+    {
+        var codex = Provider("codex") with { Plan = "team" };
+        var snapshot = DashboardSnapshotBuilder.Build(Inputs(codex, Provider() with { Plan = "Claude Max 20x" }));
+        snapshot.Providers.Single(p => p.Id == "codex").Plan.Should().Be("Team");
+        snapshot.Providers.Single(p => p.Id == "claude").Plan.Should().Be("Claude Max 20x");
+        codex.Plan.Should().Be("team");
+    }
+
+    [TestMethod]
     public void Build_NegativeCostTotals_ClampsTotalsConsistentlyWithDailySeries()
     {
         var snapshot = DashboardSnapshotBuilder.Build(Inputs(Provider() with { Cost = new() {
