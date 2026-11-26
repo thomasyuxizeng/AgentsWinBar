@@ -18,8 +18,6 @@ cd AgentsWinBar
 powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1
 ```
 
-For private access, obtain access from the owner, have the human complete `gh auth login`, then use `gh repo clone thomasyuxizeng/AgentsWinBar`. GitHub authentication is separate from setup's UAC prompt.
-
 Preview the install:
 
 ```powershell
@@ -41,7 +39,7 @@ Read the summary, the process exit code, and the last line, `AGENTSWINBAR_SETUP=
 | `0` | `ok` | Setup found a sign-in for every selected provider. For usage marked `none`, allow the app a few minutes to refresh. |
 | `20` | `signin` | Give the human the printed sign-in instructions, then rerun after they finish. |
 | `30` | `uac` | Elevation was declined or an administrator action failed. Read the setup log, resolve the cause, and rerun. |
-| `40` | `access` | Confirm that the release is available. For a private repository, obtain access and have the human complete `gh auth login`, then rerun. |
+| `40` | `access` | Confirm the network connection and that the latest release of the repository passed with `-Repo` (default `thomasyuxizeng/AgentsWinBar`) is reachable, then rerun. |
 | `50` | `failed` | Resolve the reported Windows, hardware, or network precondition and rerun. |
 | `1` | `failed` | Read the phase summary and setup log, fix the reported failure, and rerun. |
 | `3010` | `reboot` | Applies only with `-WithWsl`. Ask the human to reboot, then rerun with `-WithWsl`. |
