@@ -620,6 +620,13 @@ public sealed partial class MainWindow : Window
         _startX = workArea.X + workArea.Width;
         _targetX = finalX;
 
+        // The page is dropped while the flyout is hidden (see ReleaseFlyoutPage): build a fresh one
+        if (ContentFrame.Content is not (MainPage or ProviderDetailPage))
+        {
+            ContentFrame.Navigate(typeof(MainPage), null, new SuppressNavigationTransitionInfo());
+            ContentFrame.BackStack.Clear();
+        }
+
         // Flush any card/status updates deferred while the flyout was hidden before showing
         if (ContentFrame.Content is MainPage mainPage)
         {
@@ -734,8 +741,22 @@ public sealed partial class MainWindow : Window
                 _costDemand = null;
                 _viewModel.SetFlyoutVisible(false);
                 StopFlyoutForegroundWatcher();
+                ReleaseFlyoutPage();
             }
         }
+    }
+
+    /// <summary>
+    /// Drops the flyout's page once the flyout is hidden; ShowWindow builds a fresh one. A completed click on any button
+    /// in the page left the process drawing frames in bursts, 15-30 ms of CPU every second, until it restarted, and only
+    /// discarding the page's element tree stopped it (measured 26 Nov 2026; the cause inside WinUI is not known).
+    /// Navigating away runs the page's OnNavigatedFrom, so it unhooks from the view model and can be collected.
+    /// </summary>
+    private void ReleaseFlyoutPage()
+    {
+        if (ContentFrame.Content is not (MainPage or ProviderDetailPage)) return;
+        ContentFrame.Navigate(typeof(Page), null, new SuppressNavigationTransitionInfo());
+        ContentFrame.BackStack.Clear();
     }
 
     private void StopAnimationTimer()

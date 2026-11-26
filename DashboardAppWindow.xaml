@@ -6,7 +6,7 @@
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     mc:Ignorable="d"
-    Title="CodexBar Dashboard">
+    Title="AgentsWinBar Dashboard">
 
     <Grid>
         <Grid.RowDefinitions>
@@ -18,7 +18,7 @@
         <Grid x:Name="AppTitleBar" Grid.Row="0" Height="40" Background="Transparent">
             <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Center" Margin="16,0,0,0">
                 <Image Source="ms-appx:///Assets/Square44x44Logo.targetsize-24_altform-unplated.png" Width="16" Height="16"/>
-                <TextBlock Text="CodexBar Dashboard" Style="{StaticResource CaptionTextBlockStyle}"
+                <TextBlock Text="AgentsWinBar Dashboard" Style="{StaticResource CaptionTextBlockStyle}"
                            VerticalAlignment="Center"/>
             </StackPanel>
         </Grid>
