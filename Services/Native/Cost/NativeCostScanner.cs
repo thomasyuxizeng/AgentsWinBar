@@ -46,6 +46,17 @@ public sealed partial class NativeCostScanner
     /// <summary>An archive is decompressed up to this many bytes; the rest (a damaged or hostile file) is not counted.</summary>
     internal long MaxArchiveBytes { get; init; } = 1L << 30;
 
+    private int _quickChecks;
+
+    /// <summary>1 while the next open of the index must run the full quick_check (the first open, and after an error).</summary>
+    private int _fullCheckDue = 1;
+
+    /// <summary>How many times PRAGMA quick_check has run over the index (tests watch this).</summary>
+    internal int QuickChecks => Volatile.Read(ref _quickChecks);
+
+    /// <summary>Called with the path of every log about to be read; tests make it throw to simulate a failing worker.</summary>
+    internal Action<string>? ReadHook { get; init; }
+
     /// <summary>True when the index file exists (a missing index needs a full listing to rebuild).</summary>
     internal bool IndexExists => File.Exists(_indexPath);
 
@@ -104,6 +115,12 @@ public sealed partial class NativeCostScanner
             var outcome = UpdateIndexCore(roots, workers, zone, changedPaths, reportProviders, pricing, asOf, historyDays, cancellationToken);
             _appliedZoneId = zone.Id;
             return outcome;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // Whatever failed may have damaged the index: check all of it again at the next open.
+            Volatile.Write(ref _fullCheckDue, 1);
+            throw;
         }
         finally
         {
@@ -275,6 +292,7 @@ public sealed partial class NativeCostScanner
                     var modified = false;
                     try
                     {
+                        ReadHook?.Invoke(input.Entry.Path);
                         using var stream = new FileStream(input.Entry.Path, FileMode.Open, FileAccess.Read,
                             FileShare.ReadWrite | FileShare.Delete, 1, FileOptions.SequentialScan);
                         var length = stream.Length;
@@ -640,7 +658,7 @@ public sealed partial class NativeCostScanner
     private static void ConfigureWriter(CostIndexDatabase database) =>
         database.Execute("PRAGMA busy_timeout=5000; PRAGMA cache_size=-12288; PRAGMA temp_store=FILE");
 
-    private static bool ValidateIndex(CostIndexDatabase database)
+    private bool ValidateIndex(CostIndexDatabase database)
     {
         using var objects = database.Prepare("""
             SELECT COUNT(*) FROM sqlite_master WHERE name IN
@@ -652,8 +670,15 @@ public sealed partial class NativeCostScanner
                 OR EXISTS (SELECT 1 FROM settings WHERE id=1 AND zone<>'')
             """);
         if (!layout.Step() || layout.Number(0) != 1) return false;
+
+        // quick_check reads the whole index, which grows with the lifetime history: run it on the first open of
+        // this scanner (one per process) and again after an update failed, not on every refresh.
+        if (Volatile.Read(ref _fullCheckDue) == 0) return true;
+        Interlocked.Increment(ref _quickChecks);
         using var check = database.Prepare("PRAGMA quick_check(1)");
-        return check.Step() && check.Text(0) == "ok";
+        if (!check.Step() || check.Text(0) != "ok") return false;
+        Volatile.Write(ref _fullCheckDue, 0);
+        return true;
     }
 
     private static (long CompleteOffset, long Bytes, long Oversized) ReadLines(Stream stream, long start, long length,

@@ -251,6 +251,55 @@ public sealed partial class NativeCostScannerTests
         scanner.ReadReport(CostProvider.Claude, asOf: Today).SessionTokens.Should().Be(80);
     }
 
+    [TestMethod]
+    public void Update_WhenIndexIsOpenedAgain_RunsQuickCheckOnlyOnTheFirstOpen()
+    {
+        var path = Path.Combine(Claude, "a.jsonl");
+        File.WriteAllText(path, ClaudeLine("1", 10) + "\n");
+        var scanner = Scanner();
+        IReadOnlyList<CostLogRoot> roots = [new(CostProvider.Claude, Claude)];
+        scanner.Update(roots);
+        scanner.QuickChecks.Should().Be(0, "the first update creates the index");
+
+        for (var i = 2; i <= 4; i++)
+        {
+            File.AppendAllText(path, ClaudeLine(i.ToString(), 10) + "\n");
+            scanner.Update(roots, changedPaths: [path]);
+        }
+
+        scanner.QuickChecks.Should().Be(1, "later updates must not read the whole index again");
+        scanner.ReadReport(CostProvider.Claude, asOf: Today).SessionTokens.Should().Be(40);
+    }
+
+    [TestMethod]
+    public void Update_WhenTheLastUpdateFailed_RunsQuickCheckAgainOnTheNextOpen()
+    {
+        var path = Path.Combine(Claude, "a.jsonl");
+        File.WriteAllText(path, ClaudeLine("1", 10) + "\n");
+        var failing = false;
+        var scanner = new NativeCostScanner(IndexDirectory, Mock.Of<ILogger<NativeCostScanner>>(), TimeZoneInfo.Utc)
+        {
+            ReadHook = _ => { if (failing) throw new CostIndexDatabase.SqliteException(5); }
+        };
+        IReadOnlyList<CostLogRoot> roots = [new(CostProvider.Claude, Claude)];
+        scanner.Update(roots);
+        File.AppendAllText(path, ClaudeLine("2", 10) + "\n");
+        scanner.Update(roots, changedPaths: [path]);
+        scanner.QuickChecks.Should().Be(1);
+
+        failing = true;
+        File.AppendAllText(path, ClaudeLine("3", 10) + "\n");
+        var act = () => scanner.Update(roots, changedPaths: [path]);
+        act.Should().Throw<CostIndexDatabase.SqliteException>();
+        failing = false;
+        scanner.Update(roots, changedPaths: [path]);
+        scanner.QuickChecks.Should().Be(2, "an error may have left the index damaged");
+
+        scanner.Update(roots, changedPaths: [path]);
+        scanner.QuickChecks.Should().Be(2);
+        scanner.ReadReport(CostProvider.Claude, asOf: Today).SessionTokens.Should().Be(30);
+    }
+
     // Review finding 10: a timestamp at the edge of the calendar is skipped instead of failing the whole scan.
     [TestMethod]
     [DataRow(9.0, "9999-12-31T20:00:00Z")]
