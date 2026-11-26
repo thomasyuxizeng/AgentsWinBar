@@ -94,7 +94,7 @@ public sealed class SignInLauncher(ISignInSystem system, ILogger<SignInLauncher>
             system.FindOnPath("wt") is { } wt)
         {
             yield return (SignInRoute.WindowsTerminal,
-                new SignInProcess(wt, $"-w new new-tab --title \"{title}\" --startingDirectory \"{folder}\" \"{cmd}\" {shellArgs}", folder),
+                new SignInProcess(wt, $"-w new new-tab --inheritEnvironment --title \"{title}\" --startingDirectory \"{folder}\" \"{cmd}\" {shellArgs}", folder),
                 $"Windows Terminal: {title}");
         }
         yield return (SignInRoute.CommandPrompt, new SignInProcess(cmd, shellArgs, folder), $"Command Prompt: {title}");
@@ -113,9 +113,11 @@ public sealed class WindowsSignInSystem : ISignInSystem
     public bool FileExists(string path) => File.Exists(path);
 
     public string? FindOnPath(string command) =>
-        FindOnPath(command, Environment.GetEnvironmentVariable("PATH"), Environment.GetEnvironmentVariable("PATHEXT"), FileExists);
+        FindOnPath(command, Environment.GetEnvironmentVariable("PATH"), Environment.GetEnvironmentVariable("PATHEXT"),
+            FileExists, Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), LocalAppData);
 
-    internal static string? FindOnPath(string command, string? path, string? pathExtensions, Func<string, bool> exists)
+    internal static string? FindOnPath(string command, string? path, string? pathExtensions, Func<string, bool> exists,
+        string? userProfile = null, string? localAppData = null)
     {
         var extensions = (pathExtensions ?? ".COM;.EXE;.BAT;.CMD")
             .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
@@ -134,13 +136,32 @@ public sealed class WindowsSignInSystem : ISignInSystem
                 catch (ArgumentException) { break; }   // a malformed PATH entry
             }
         }
-        return null;
+        var fallback = command switch
+        {
+            "claude" when userProfile is not null && Path.IsPathFullyQualified(userProfile) =>
+                Path.Combine(userProfile, ".local", "bin", "claude.exe"),
+            "agy" when localAppData is not null && Path.IsPathFullyQualified(localAppData) =>
+                Path.Combine(localAppData, "Microsoft", "WinGet", "Links", "agy.exe"),
+            _ => null
+        };
+        return fallback is not null && exists(fallback) ? fallback : null;
     }
 
     public void Start(SignInProcess process)
     {
+        using var started = Process.Start(CreateStartInfo(process));
+    }
+
+    internal static ProcessStartInfo CreateStartInfo(SignInProcess process)
+    {
         var info = new ProcessStartInfo(process.FileName, process.Arguments) { UseShellExecute = true };
-        if (process.WorkingDirectory is { Length: > 0 } folder && Directory.Exists(folder)) info.WorkingDirectory = folder;
-        using var started = Process.Start(info);
+        // Only terminal routes supply a working directory. Direct launch lets them inherit this setting.
+        if (process.WorkingDirectory is { Length: > 0 } folder)
+        {
+            info.UseShellExecute = false;
+            info.WorkingDirectory = folder;
+            info.Environment["NoDefaultCurrentDirectoryInExePath"] = "1";
+        }
+        return info;
     }
 }

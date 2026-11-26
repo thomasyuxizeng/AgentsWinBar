@@ -46,6 +46,33 @@ public class SignInLauncherTests
     private SignInLauncher Launcher() => new(_system, NullLogger<SignInLauncher>.Instance);
 
     [TestMethod]
+    [DataRow("claude", @".local\bin\claude.exe")]
+    [DataRow("agy", @"Microsoft\WinGet\Links\agy.exe")]
+    public void FindOnPath_WhenToolUsesKnownInstallFolder_FindsExecutable(string command, string relativePath)
+    {
+        var root = command == "claude" ? @"C:\FakeProfile" : @"C:\FakeLocal";
+        var executable = Path.Combine(root, relativePath);
+
+        WindowsSignInSystem.FindOnPath(command, null, ".CMD", path => path == executable,
+            @"C:\FakeProfile", @"C:\FakeLocal").Should().Be(executable);
+    }
+
+    [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public void Launch_WhenOpeningATerminal_DisablesCurrentDirectorySearch(bool windowsTerminal)
+    {
+        _system.OnPath.Add("claude");
+        if (windowsTerminal) _system.OnPath.Add("wt");
+
+        Launcher().Launch("claude");
+
+        var info = WindowsSignInSystem.CreateStartInfo(_system.Started.Single());
+        info.UseShellExecute.Should().BeFalse();
+        info.Environment["NoDefaultCurrentDirectoryInExePath"].Should().Be("1");
+    }
+
+    [TestMethod]
     public void FindOnPath_WhenRelativeEntriesComeFirst_ReturnsFullyQualifiedShim()
     {
         var candidates = new List<string>();
