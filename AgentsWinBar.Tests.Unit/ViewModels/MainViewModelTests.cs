@@ -1967,6 +1967,23 @@ public class MainViewModelTests
     }
 
     [TestMethod]
+    public async Task StartAsync_FreshCache_KeepsTheProvidersCollectionSubscribersListenTo()
+    {
+        _viewModel.Stop();
+        var providers = _viewModel.Providers;
+        var changes = 0;
+        providers.CollectionChanged += (_, _) => changes++;
+        _cache.Setup(c => c.Get("claude")).Returns(Data(20));
+
+        await _viewModel.StartAsync();
+
+        _viewModel.Providers.Should().BeSameAs(providers, "windows subscribe to this collection when they are created");
+        providers.Should().ContainSingle().Which.Provider.Should().Be("claude");
+        changes.Should().BePositive();
+        _usage.Verify(s => s.GetAllUsageStreamAsync(It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [TestMethod]
     public async Task StartAsync_FreshCacheWithExistingCostDemand_LoadsMissingCosts()
     {
         _viewModel.Stop();

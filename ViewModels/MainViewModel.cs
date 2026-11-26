@@ -208,12 +208,21 @@ public partial class MainViewModel : ObservableObject, IDisposable
             now - CacheTimestampUtc(data.FetchedAt) >= interval))
             return false;
         var oldest = cached.Min(data => CacheTimestampUtc(data!.FetchedAt));
-        Providers = new(cached.Select(data => data! with
+        var restored = cached.Select(data => data! with
         {
             IsLoading = false,
             AuthRequired = false, AuthMessage = null,
             Cost = _settingsService.Settings.ShowCostTotals ? data!.Cost : null
-        }));
+        }).ToList();
+        // Replace the items, never the collection: the flyout page, strip, overlay, dashboard and Settings subscribe to
+        // this collection's CollectionChanged when they are created. A new collection left them listening to the old
+        // one, so after a restart within one refresh interval the first flyout showed no cards until it was rebuilt.
+        for (var i = 0; i < restored.Count; i++)
+        {
+            if (i < Providers.Count) Providers[i] = restored[i];
+            else Providers.Add(restored[i]);
+        }
+        while (Providers.Count > restored.Count) Providers.RemoveAt(Providers.Count - 1);
         ErrorMessage = null;
         _usageFingerprint = UsageFingerprint.Create(Providers);
         LastUpdated = oldest.ToLocalTime();
