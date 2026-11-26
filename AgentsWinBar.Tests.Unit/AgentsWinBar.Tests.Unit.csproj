@@ -103,6 +103,7 @@
     <Compile Include="..\Helpers\BurndownGeometry.cs" Link="Linked\BurndownGeometry.cs" />
     <Compile Include="..\Helpers\PlanNameFormatter.cs" Link="Linked\PlanNameFormatter.cs" />
     <Compile Include="..\Helpers\FlyoutHeight.cs" Link="Linked\FlyoutHeight.cs" />
+    <Compile Include="..\Helpers\ColumnLayoutMath.cs" Link="Linked\ColumnLayoutMath.cs" />
     <Compile Include="..\Services\UsageHistoryStore.cs" Link="Linked\UsageHistoryStore.cs" />
     <Compile Include="..\Services\UsageHistoryPersistence.cs" Link="Linked\UsageHistoryPersistence.cs" />
     <Compile Include="..\Services\UsageChangeTracker.cs" Link="Linked\UsageChangeTracker.cs" />

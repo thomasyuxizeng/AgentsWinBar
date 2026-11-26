@@ -93,9 +93,10 @@
                         <StackPanel x:Name="AttentionPanel" Spacing="6">
                             <TextBlock Text="NEEDS ATTENTION" Style="{StaticResource SectionCaption}"/>
                             <ItemsRepeater x:Name="AttentionRepeater">
+                                <!-- Not UniformGridLayout: its native measure threw DivideByZeroException while the window
+                                     was resized, which crashed the app -->
                                 <ItemsRepeater.Layout>
-                                    <UniformGridLayout MinItemWidth="380" MinItemHeight="24" MinColumnSpacing="16" MinRowSpacing="2"
-                                                       ItemsStretch="Fill"/>
+                                    <controls:ColumnsLayout MinItemWidth="380" ColumnSpacing="16" RowSpacing="2"/>
                                 </ItemsRepeater.Layout>
                                 <ItemsRepeater.ItemTemplate>
                                     <DataTemplate x:DataType="helpers:AttentionItem">

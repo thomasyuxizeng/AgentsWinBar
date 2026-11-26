@@ -52,7 +52,8 @@ The first release as AgentsWinBar, and the first that reads everything natively 
 - The app starts even when the Windows taskbar is not ready yet.
 - An expired sign-in shows the last reading as stale instead of signed out.
 - Failures in the strip's and overlay's background checks are recorded in crash.log instead of being ignored.
-- The tray flyout grows to show every provider card when the screen has room, instead of one and a half cards, and every card's bars end at the same place.
+- Resizing the dashboard window no longer crashes the app. The Needs attention list used a WinUI grid layout whose measure could fail with a division by zero while the window changed size; it now uses the app's own column layout.
+- The tray flyout grows to show every provider card when the screen has room, instead of one and a half cards, and every card's bars end at the same place. After a restart within one refresh interval (every update), its first open no longer shows an empty list.
 - Usage graphs: a projection above 100% stops on the limit line with a dot instead of running off the chart, lines at 0% and 100% are drawn whole, and the chart legend is readable in both themes.
 - Plan names reported in lowercase (Codex "team") show as "Team", and the dashboard header wraps in a narrow window instead of being cut off.
 
