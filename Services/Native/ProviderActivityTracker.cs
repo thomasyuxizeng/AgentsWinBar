@@ -109,9 +109,20 @@ public sealed class ProviderActivityTracker : IProviderActivitySource, IDisposab
             // Keep the newest stamp without a lock. Callbacks of one provider's watchers run concurrently: one that read
             // the clock a moment before another must neither move the stamp back nor look like a new start.
             var previous = Volatile.Read(ref _stamps[slot]);
+            var reread = false;
             while (true)
             {
                 if (previous >= now && previous - now <= ClockStepBack.Ticks) return;
+                if (previous > now && !reread)
+                {
+                    // Far behind the stamp: the clock was set back, or this callback read the clock long ago (its thread
+                    // was suspended, such as across sleep, while a newer write was stamped). Reading the clock once more
+                    // tells them apart: after a real step back it is still behind, after a stall it has caught up.
+                    // Only once, so a clock that moves on every read cannot keep the handler looping.
+                    reread = true;
+                    now = _clock.GetUtcNow().UtcTicks;
+                    continue;
+                }
                 var seen = Interlocked.CompareExchange(ref _stamps[slot], now, previous);
                 if (seen == previous) break;
                 previous = seen;

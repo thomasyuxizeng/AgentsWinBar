@@ -241,4 +241,84 @@ public class ProviderActivityTrackerTests
         _tracker.EnsureWatching();
         _tracker.ActiveWatchers.Should().Be(0);
     }
+
+    [TestMethod]
+    public void NotifyActivity_CallbackThatReadTheClockBeforeASleep_KeepsTheNewerStampAndAnnouncesNothing()
+    {
+        var clock = new ReadingClock(Now);
+        using var tracker = new ProviderActivityTracker([], new ListLogger<ProviderActivityTracker>(), clock, watch: false);
+        var started = 0;
+        tracker.ActivityStarted += (_, _) => started++;
+        tracker.NotifyActivity(CostProvider.Codex);
+        // Ten minutes later, after the laptop woke up, another write is stamped and announced
+        clock.Time = Now.AddMinutes(10).AddSeconds(1);
+        tracker.NotifyActivity(CostProvider.Codex);
+        started.Should().Be(2);
+
+        // A callback whose thread read the clock before the sleep finishes now; reading it again gives the time now
+        clock.Time = Now.AddMinutes(10).AddSeconds(5);
+        clock.Next.Enqueue(Now.AddSeconds(30));
+        tracker.NotifyActivity(CostProvider.Codex);
+
+        started.Should().Be(2, "nothing started: Codex has been writing all along");
+        tracker.LastActivityUtc("codex").Should().BeOnOrAfter(Now.AddMinutes(10).AddSeconds(1).UtcDateTime);
+    }
+
+    [TestMethod]
+    public void NotifyActivity_ClockStillFarBehindWhenReadAgain_CountsAsSetBack()
+    {
+        var clock = new ReadingClock(Now);
+        using var tracker = new ProviderActivityTracker([], new ListLogger<ProviderActivityTracker>(), clock, watch: false);
+        var started = 0;
+        tracker.ActivityStarted += (_, _) => started++;
+        tracker.NotifyActivity(CostProvider.Codex);
+
+        clock.Time = Now.AddHours(-1).AddMilliseconds(5);
+        clock.Next.Enqueue(Now.AddHours(-1));
+        tracker.NotifyActivity(CostProvider.Codex);
+
+        started.Should().Be(2);
+        tracker.LastActivityUtc("codex").Should().Be(Now.AddHours(-1).AddMilliseconds(5).UtcDateTime,
+            "the stamp takes the time read again");
+    }
+
+    [TestMethod]
+    public void NotifyActivity_ClockMovesOnEveryReadWhileFarBehind_ReadsItOnlyOnceMore()
+    {
+        var clock = new ReadingClock(Now);
+        using var tracker = new ProviderActivityTracker([], new ListLogger<ProviderActivityTracker>(), clock, watch: false);
+        tracker.NotifyActivity(CostProvider.Codex);
+        var time = Now.AddHours(-1);
+        clock.Reader = () => time = time.AddTicks(1);
+        var before = clock.Reads;
+
+        tracker.NotifyActivity(CostProvider.Codex);
+
+        (clock.Reads - before).Should().Be(2);
+        tracker.LastActivityUtc("codex").Should().Be(Now.AddHours(-1).AddTicks(2).UtcDateTime);
+    }
+
+    /// <summary>
+    /// A clock that answers the queued times first, then <see cref="Reader"/> (by default <see cref="Time"/>), and
+    /// counts its reads.
+    /// </summary>
+    private sealed class ReadingClock : TimeProvider
+    {
+        public ReadingClock(DateTimeOffset time)
+        {
+            Time = time;
+            Reader = () => Time;
+        }
+
+        public DateTimeOffset Time { get; set; }
+        public Func<DateTimeOffset> Reader { get; set; }
+        public Queue<DateTimeOffset> Next { get; } = new();
+        public int Reads { get; private set; }
+
+        public override DateTimeOffset GetUtcNow()
+        {
+            Reads++;
+            return Next.TryDequeue(out var queued) ? queued : Reader();
+        }
+    }
 }
