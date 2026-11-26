@@ -7,13 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+The first release as AgentsWinBar, and the first that reads everything natively on Windows.
+
 ### Changed
 - Renamed to AgentsWinBar. The package, executable, data folder (`%LOCALAPPDATA%\AgentsWinBar`) and release asset names change with it. On its first start AgentsWinBar copies the settings, caches, history, cost ledger and cost index of an installed CodexBarWin (the old files stay in place), and setup prints the command that removes the old app.
+- Usage is read natively on Windows by default, with no WSL virtual machine during a refresh: Claude from Claude Code's sign-in, Codex from the Codex CLI or app sign-in, and Gemini from the Antigravity (agy) sign-in in Windows Credential Manager. Every sign-in is only read, never written. The WSL route stays available as an opt-in.
+- Costs come from Claude Code and Codex session logs on Windows, including compressed `.jsonl.zst` Codex archives, priced per model (bundled prices, refreshed from models.dev at most once a day, overridable with `custom-pricing.json`). A local index makes later scans incremental, and scans run only while the flyout or a dashboard is open or after Refresh.
+- Setup installs without WSL by default; `-WithWsl` keeps the old route.
+- Much lighter: about 25 MB private working set at idle (was about 94 MB, plus a 1.3-1.7 GB WSL virtual machine during every refresh), and under 0.1 CPU seconds per refresh (was about 10 across Windows and the virtual machine).
 
 ### Added
+- A Sign in button for a signed-out provider, on the dashboard, on the provider page and in Settings > Sign-ins, opening that provider's official sign-in.
+- An expired sign-in is renewed by the provider's own tool: `claude auth status --json` for Claude Code and `agy models` for Antigravity, each at most every 30 minutes, hidden, with its output discarded. `RenewClaudeSignIn` and `RenewGeminiSignIn` in settings.json turn them off.
 - The Gemini provider card on the dashboard shows this month's Gemini API spend, estimated at list prices from token counts in a local spend log, with cached input at the cache rate when the log records it (hidden when no log exists). The spend log path can be overridden through the `CODEXBAR_GEMINI_SPEND_LOG` environment variable.
+- The taskbar strip supports UI Automation's Invoke pattern, so assistive tools can open the flyout.
 
-- Gemini: an expired agy sign-in is renewed by running `agy models`
+### Fixed
+- A click on a flyout button no longer leaves the app drawing frames in the background (15-30 ms of CPU every second until it restarted).
+- A closed dashboard is fully released (page, backdrop and animation listeners), and its refresh spinner stops when it closes mid-refresh.
+- The app starts even when the Windows taskbar is not ready yet.
+- An expired sign-in shows the last reading as stale instead of signed out.
+- Failures in the strip's and overlay's background checks are recorded in crash.log instead of being ignored.
 
 ## [1.5.4] - 2026-11-03
 
