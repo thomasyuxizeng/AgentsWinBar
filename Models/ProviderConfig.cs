@@ -59,8 +59,8 @@ public static class ProviderConstants
     }
 
     /// <summary>
-    /// Gets the source type for fetching usage data.
-    /// This is determined by codexbar CLI requirements and should not be user-configurable.
+    /// Gets the source argument for the WSL CodexBar CLI route.
+    /// Native Windows readers use their own endpoints and do not use this argument.
     /// </summary>
     /// <exception cref="ArgumentException">Thrown when the provider ID is invalid.</exception>
     public static string GetSource(string providerId)
@@ -68,8 +68,8 @@ public static class ProviderConstants
         var normalized = ValidateAndNormalize(providerId);
         return normalized switch
         {
-            // The OAuth usage endpoint is rate limited by Anthropic when polled regularly (exit code 3);
-            // the Claude CLI route is not, at the cost of a slower fetch (covered by the CLI timeouts).
+            // The WSL route selects the Claude CLI source. The default native reader calls Anthropic's
+            // OAuth usage endpoint with the Windows Claude Code sign-in and backs off after HTTP 429.
             "claude" => "cli",
             "codex" => "cli",
             "gemini" => "cli",
