@@ -475,11 +475,22 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     private async Task RefreshBackgroundCostsAsync(IReadOnlyList<string> providers, bool forceRefresh)
     {
+        // Every early return still schedules the idle trim: the usage refresh hands its trim to this method, and
+        // the common case (no window open, so no cost demand) returns here. Without it the app never trimmed after
+        // a refresh and idled at about 75 MB private working set instead of under 20.
         if (_disposed || _stopped || _exiting || !_settingsService.Settings.ShowCostTotals ||
-            _settingsService.Settings.DeveloperModeEnabled) return;
+            _settingsService.Settings.DeveloperModeEnabled)
+        {
+            ScheduleWorkingSetTrim();
+            return;
+        }
         // A window left open behind the lock screen must not boot the WSL VM for a cost scan nobody can see
         if (!forceRefresh && (IsSessionLocked || Volatile.Read(ref _costDemand) == 0 || _costRefreshCts != null ||
-            _backgroundCostRefreshCts != null || _forceCostRefreshPending)) return;
+            _backgroundCostRefreshCts != null || _forceCostRefreshPending))
+        {
+            ScheduleWorkingSetTrim();
+            return;
+        }
 
         var activeDemand = forceRefresh ? _costRefreshCompletion?.Task : null;
         var previousBackground = _backgroundCostRefreshCompletion?.Task;
