@@ -402,6 +402,98 @@ public sealed class CostPricingTests
     }
 
     [TestMethod]
+    [DataRow("claude-sonnet-5-5-high", "claude-sonnet-5-5")]
+    [DataRow("claude-opus-5-5-high", "claude-opus-5-5")]
+    [DataRow("claude-sonnet-5-5-low", "claude-sonnet-5-5")]
+    [DataRow("claude-sonnet-5-5-medium", "claude-sonnet-5-5")]
+    [DataRow("claude-opus-5-5-xhigh", "claude-opus-5-5")]
+    [DataRow("claude-opus-5-5-max", "claude-opus-5-5")]
+    [DataRow("gemini-4-neon-high", "gemini-4-neon")]
+    [DataRow("gemini-4-hydrogen-medium", "gemini-4-hydrogen")]
+    [DataRow("gemini-4-carbon-xhigh", "gemini-4-carbon")]
+    [DataRow("claude-opus-4-6-thinking-high", "claude-opus-4-6")]
+    public void GetRates_WhenAntigravityRecordsAnEffortTier_PricesTheBaseModel(string recorded, string priced)
+    {
+        var pricing = new CostPricing();
+
+        foreach (var (above200K, historical) in new[] { (false, false), (true, false), (false, true) })
+        {
+            var expected = pricing.GetRates(CostProvider.Gemini, priced, above200K, above200K, historical, 0);
+            expected.Should().NotBeNull();
+            pricing.GetRates(CostProvider.Gemini, recorded, above200K, above200K, historical, 0).Should().Be(expected);
+        }
+    }
+
+    [TestMethod]
+    [DataRow("gemini-3.8-flash-n")]
+    [DataRow("gemini-3.8-flash-n-high")]
+    public void GetRates_WhenAgyRecordsGemini38FlashN_EstimatesItAtGemini38FlashRates(string recorded)
+    {
+        var pricing = new CostPricing();
+
+        var flash = pricing.GetRates(CostProvider.Gemini, "gemini-3.8-flash", false, false, false, 0);
+
+        flash.Should().NotBeNull();
+        pricing.GetRates(CostProvider.Gemini, recorded, false, false, false, 0).Should().Be(flash);
+    }
+
+    // Requested check: the effort tiers must not change how "-thinking" ids were priced before they existed.
+    [TestMethod]
+    [DataRow(false, false)]
+    [DataRow(true, false)]
+    [DataRow(false, true)]
+    public void GetRates_WhenAntigravityRecordsClaudeOpus46Thinking_KeepsPricingItAsClaudeOpus46(bool above200K, bool historical)
+    {
+        var pricing = new CostPricing();
+
+        var opus = pricing.GetRates(CostProvider.Gemini, "claude-opus-4-6", above200K, above200K, historical, 0);
+
+        opus.Should().NotBeNull();
+        pricing.GetRates(CostProvider.Gemini, "claude-opus-4-6-thinking", above200K, above200K, historical, 0).Should().Be(opus);
+    }
+
+    [TestMethod]
+    public void GetRates_WhenAnIdWithAnEffortEndingHasItsOwnPrice_UsesThatPrice()
+    {
+        var pricing = Pricing(
+            google: Model("gemini-test", GeminiFlat) + "," + Model("gemini-test-high", "\"input\":5,\"output\":25") + "," +
+                    Model("oss-test", "\"input\":1,\"output\":2"),
+            overlay: "{\"gemini\":{\"oss-test-medium\":{\"input\":0.1,\"output\":0.4}}}");
+
+        pricing.GetRates(CostProvider.Gemini, "gemini-test-high", false, false, false, 0).Should().Be(new CostRates(5, 25, 5, 5, 10));
+        pricing.GetRates(CostProvider.Gemini, "oss-test-medium", false, false, false, 0)
+            .Should().Be(new CostRates(.1m, .4m, .1m, .1m), "an explicit entry wins over the base model");
+        pricing.GetRates(CostProvider.Gemini, "gemini-test-max", false, false, false, 0).Should().Be(new CostRates(3, 15, .15m, 3, 6));
+    }
+
+    [TestMethod]
+    [DataRow("gemini-test-higher")]
+    [DataRow("gemini-testhigh")]
+    [DataRow("gemini-test-maximum")]
+    [DataRow("gemini-test-n")]
+    [DataRow("gemini-test-high-n")]
+    [DataRow("claude-test-1-n")]
+    [DataRow("claude-test-1-ultra")]
+    [DataRow("mystery-model-high")]
+    [DataRow("-high")]
+    public void GetRates_WhenANameOnlyLooksLikeAnAgyVariant_LeavesItUnpriced(string model)
+    {
+        var pricing = Pricing(Model("claude-test-1", Flat), google: Model("gemini-test", GeminiFlat));
+
+        pricing.GetRates(CostProvider.Gemini, model, false, false, false, 0).Should().BeNull();
+    }
+
+    [TestMethod]
+    public void GetRates_WhenClaudeCodeRecordsAnEffortEnding_DoesNotStripIt()
+    {
+        var pricing = Pricing(Model("claude-test-1", Flat));
+
+        pricing.GetRates(CostProvider.Claude, "claude-test-1-high", false, false, false, 0).Should().BeNull(
+            "effort tiers are an Antigravity naming; other tools' ids are priced as recorded");
+        pricing.GetRates(CostProvider.Gemini, "claude-test-1-high", false, false, false, 0).Should().Be(new CostRates(4, 20, .2m, 5, 8));
+    }
+
+    [TestMethod]
     [DataRow(" gemini-4-neon ", "gemini-4-neon")]
     [DataRow("gemini-3.1-pro-2026-01-01", "gemini-3.1-pro-2026-01-01")]
     [DataRow("openai/gpt-oss-120b", "openai/gpt-oss-120b")]

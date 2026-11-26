@@ -289,8 +289,15 @@ public class CostPricing
     /// first-party vendor catalog, then the base model of a routing variant or product alias, then an explicit entry
     /// (Pricing/pricing-overlay.json, "gemini") for a model that no vendor prices. Antigravity records no cache writes,
     /// and a catalog row without cache rates charges cached input at the input rate, as upstream's resolver does.
+    /// Only when all of that finds no price is an agy effort tier taken off the id (<see cref="GeminiEffortBase"/>)
+    /// and the same lookups run once more, so an id any source prices as it stands is never shortened.
     /// </summary>
-    private CostRates? GeminiRates(string model, bool above200K, bool above272K, bool historical)
+    private CostRates? GeminiRates(string model, bool above200K, bool above272K, bool historical) =>
+        RecordedRates(model, above200K, above272K, historical) ??
+        (GeminiEffortBase(model) is { } effortBase ? RecordedRates(effortBase, above200K, above272K, historical) : null);
+
+    /// <summary>Upstream's lookups for one Antigravity model id (see <see cref="GeminiRates"/>).</summary>
+    private CostRates? RecordedRates(string model, bool above200K, bool above272K, bool historical)
     {
         if (model == UnattributedModel) return null;
         if (VendorRates(model, above200K, above272K, historical) is { } exact) return exact;
@@ -365,8 +372,34 @@ public class CostPricing
         ["gemini-3.1-pro"] = "gemini-3.1-pro-preview",
         ["gemini-3.1-pro-high"] = "gemini-3.1-pro-preview",
         ["gemini-3.1-pro-low"] = "gemini-3.1-pro-preview",
-        ["gemini-3.7-flash-safety-le"] = "gemini-3.7-flash"
+        ["gemini-3.7-flash-safety-le"] = "gemini-3.7-flash",
+        // Not upstream: agy records most Gemini 3.8 Flash turns as "gemini-3.8-flash-n", which no catalog lists. What
+        // "-n" stands for is not confirmed, so pricing these turns at Gemini 3.8 Flash list rates is an estimate.
+        ["gemini-3.8-flash-n"] = "gemini-3.8-flash"
     };
+
+    /// <summary>
+    /// Effort tiers agy appends to the model id it records, for Claude and Gemini models alike
+    /// ("claude-sonnet-5-5-high", "gemini-4-neon-xhigh"). Not upstream's: upstream knows only "-low", as a routing
+    /// variant. They bill at the base model's price.
+    /// </summary>
+    private static readonly string[] AntigravityEffortSuffixes = ["-low", "-medium", "-high", "-xhigh", "-max"];
+
+    /// <summary>
+    /// The id without a trailing agy effort tier, or null when it has none. The recorded id stays in the report; this
+    /// only chooses the price, and only for an id that has no price of its own (see <see cref="GeminiRates"/>).
+    /// </summary>
+    internal static string? GeminiEffortBase(string model)
+    {
+        var lowered = model.ToLowerInvariant();
+        foreach (var suffix in AntigravityEffortSuffixes)
+        {
+            if (!lowered.EndsWith(suffix, StringComparison.Ordinal)) continue;
+            var baseModel = model[..^suffix.Length];
+            return baseModel.Length == 0 ? null : baseModel;
+        }
+        return null;
+    }
 
     /// <summary>The id an Antigravity routing variant or product alias is priced as, or null when there is none.</summary>
     internal static string? GeminiBaseModel(string model)

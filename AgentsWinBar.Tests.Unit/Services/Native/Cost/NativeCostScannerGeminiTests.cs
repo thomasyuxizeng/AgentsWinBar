@@ -40,7 +40,8 @@ public sealed class NativeCostScannerGeminiTests
         googleModels: string.Join(",",
             Model("gemini-4-neon", "\"input\":3,\"output\":15,\"cache_read\":0.15"),
             Model("gemini-3.1-pro-preview", "\"input\":2,\"output\":12,\"cache_read\":0.2"),
-            Model("gemini-3.7-flash", "\"input\":0.75,\"output\":3.75")))));
+            Model("gemini-3.7-flash", "\"input\":0.75,\"output\":3.75"),
+            Model("gemini-3.8-flash", "\"input\":0.75,\"output\":3.75,\"cache_read\":0.075")))));
 
     private IReadOnlyDictionary<CostProvider, CostDataDto> Reports(NativeCostScanner scanner) =>
         scanner.UpdateAndReadReports(Roots, 1, [CostProvider.Gemini], Pricing(), Today, 30, CancellationToken.None).Reports;
@@ -135,6 +136,30 @@ public sealed class NativeCostScannerGeminiTests
         report.UnpricedTokens.Should().Be(0);
         report.Provenance.Should().Be("native-sqlite");
         report.Provider.Should().Be("antigravity");
+    }
+
+    [TestMethod]
+    public void ReadReport_WhenAgyRecordsEffortTiersAndFlashN_PricesThemUnderTheRecordedNames()
+    {
+        Create(Path.Combine(Cli, "conversation.db"),
+        [
+            new Call { Input = 1_000_000, Model = "claude-sonnet-5-5-high", Time = Today },
+            new Call { Input = 1_000_000, CacheRead = 1_000_000, Model = "gemini-3.8-flash-n", Time = Today },
+            new Call { Input = 1_000_000, Model = "gemini-4-neon-xhigh", Time = Today }
+        ]);
+        var scanner = Scanner();
+        scanner.Update(Roots);
+
+        var report = scanner.ReadReport(CostProvider.Gemini, Pricing(), asOf: Today);
+
+        var costs = report.Daily!.Single().ModelBreakdowns!.ToDictionary(model => model.ModelName, model => model.Cost);
+        costs.Should().BeEquivalentTo(new Dictionary<string, decimal?>
+        {
+            ["claude-sonnet-5-5-high"] = 2m,
+            ["gemini-3.8-flash-n"] = 0.75m + 0.075m,
+            ["gemini-4-neon-xhigh"] = 3m
+        });
+        report.UnpricedTokens.Should().Be(0);
     }
 
     [TestMethod]
