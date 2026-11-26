@@ -66,6 +66,28 @@ public class SetupCheckerTests
     }
 
     [TestMethod]
+    public async Task CheckAsync_WhenWslNotRunningWithErrorText_LogsErrorKindWithoutText()
+    {
+        const string stderr = @"synthetic localized wsl output C:\Users\synthetic-user";
+        _mockWslService.SetStatusResult(new WslStatusResult
+        {
+            IsInstalled = true,
+            IsRunning = false,
+            Error = WslErrorType.Other,
+            ErrorMessage = stderr
+        });
+
+        await _setupChecker.CheckAsync();
+
+        var messages = _mockLogger.Invocations
+            .Where(i => i.Method.Name == nameof(ILogger.Log) && i.Arguments[0] is LogLevel.Warning)
+            .Select(i => i.Arguments[2]?.ToString() ?? string.Empty)
+            .ToList();
+        messages.Should().ContainSingle().Which.Should().Be("WSL is installed but not running: Other");
+        messages.Should().NotContain(m => m.Contains("synthetic"));
+    }
+
+    [TestMethod]
     public async Task CheckAsync_NoDistros_ReturnsEmptyDistros()
     {
         // Arrange

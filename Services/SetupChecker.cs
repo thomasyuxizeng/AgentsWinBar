@@ -75,7 +75,8 @@ public partial class SetupChecker : ISetupChecker
 
         if (!wslStatus.IsRunning)
         {
-            _logger.LogWarning("WSL is installed but not running: {Error}", wslStatus.ErrorMessage);
+            // The error kind only: the message can hold wsl.exe's own (localized) output.
+            _logger.LogWarning("WSL is installed but not running: {ErrorKind}", wslStatus.Error);
             return new SetupStatus
             {
                 WslInstalled = true,
