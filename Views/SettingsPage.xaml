@@ -476,12 +476,14 @@
                         VerticalAlignment="Center"/>
 
                     <!-- Position: under the toggle row, laid out like the theme card (label, then the dropdown below it),
-                         as the window is too narrow for "Right end, next to the system tray" beside its label -->
+                         as the window is too narrow for the dropdown beside its label. Item text stays short ("Right
+                         end"): a longer one is cut off in the closed dropdown at 150% scale -->
+
                     <StackPanel Grid.Row="1" Grid.ColumnSpan="2" Margin="0,12,0,0">
                         <StackPanel Margin="0,0,0,10">
                             <TextBlock Text="Position" Style="{StaticResource BodyTextBlockStyle}"/>
                             <TextBlock
-                                Text="Automatic uses the right end when Start is at the left end of the taskbar"
+                                Text="Automatic uses the right end, next to the system tray, when Start is at the left end of the taskbar"
                                 Style="{StaticResource CaptionTextBlockStyle}"
                                 Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                 TextWrapping="Wrap"/>
@@ -492,7 +494,7 @@
                             HorizontalAlignment="Left">
                             <ComboBoxItem Content="Automatic" Tag="auto"/>
                             <ComboBoxItem Content="Left end" Tag="left"/>
-                            <ComboBoxItem Content="Right end, next to the system tray" Tag="right"/>
+                            <ComboBoxItem Content="Right end" Tag="right"/>
                         </ComboBox>
                     </StackPanel>
                 </Grid>
