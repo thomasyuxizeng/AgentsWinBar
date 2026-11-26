@@ -24,6 +24,7 @@ public class MainViewModelActivityRefreshTests
     private readonly FakeActivity _activity = new();
     private readonly ListLogger<RefreshScheduleLog> _scheduleLog = new();
     private readonly List<string[]> _subsetReads = [];
+    private readonly HashSet<string> _failing = [];
     private int _allReads;
     private int _reading;
     private AppSettings _values = null!;
@@ -69,11 +70,13 @@ public class MainViewModelActivityRefreshTests
         {
             await Task.Yield();
             ct.ThrowIfCancellationRequested();
-            yield return new UsageData
-            {
-                Provider = provider, FetchedAt = DateTime.UtcNow,
-                Session = new UsageWindow { ReportedPercent = 10 + ++_reading, WindowMinutes = 300, ResetAt = DateTime.UtcNow.AddHours(2) }
-            };
+            yield return _failing.Contains(provider)
+                ? new UsageData { Provider = provider, FetchedAt = DateTime.UtcNow, Error = "Usage fetch unavailable", UsageFetchOutcome = FetchOutcome.Failed }
+                : new UsageData
+                {
+                    Provider = provider, FetchedAt = DateTime.UtcNow,
+                    Session = new UsageWindow { ReportedPercent = 10 + ++_reading, WindowMinutes = 300, ResetAt = DateTime.UtcNow.AddHours(2) }
+                };
         }
     }
 
@@ -220,6 +223,94 @@ public class MainViewModelActivityRefreshTests
 
         _allReads.Should().Be(1);
         _subsetReads.Should().BeEmpty();
+    }
+
+    [TestMethod]
+    public async Task StartAsync_FreshCacheRestored_ShowsTheNewestReading()
+    {
+        var claudeAt = DateTime.UtcNow.AddSeconds(-20);
+        _cache.Setup(c => c.Get("claude")).Returns(Cached("claude", claudeAt));
+        _cache.Setup(c => c.Get("codex")).Returns(Cached("codex", DateTime.UtcNow.AddMinutes(-4)));
+
+        await _viewModel.StartAsync();
+
+        _allReads.Should().Be(0);
+        _viewModel.LastUpdated.Should().Be(claudeAt.ToLocalTime());
+
+        static UsageData Cached(string provider, DateTime fetchedAt) => new()
+        {
+            Provider = provider, FetchedAt = fetchedAt, Session = new UsageWindow { ReportedPercent = 10, WindowMinutes = 300 }
+        };
+    }
+
+    [TestMethod]
+    public async Task RefreshIfStaleAsync_LastUpdatedOldOrAhead_GoesByEachProvidersOwnStamps()
+    {
+        await _viewModel.StartAsync();
+
+        _viewModel.LastUpdated = DateTime.Now.AddHours(-1);
+        await _viewModel.RefreshIfStaleAsync(TimeSpan.FromMinutes(2));
+        // A DST or time zone change moves local times, not the UTC stamps
+        _viewModel.LastUpdated = DateTime.Now.AddHours(1);
+        await _viewModel.RefreshIfStaleAsync(TimeSpan.FromMinutes(2));
+
+        _allReads.Should().Be(1);
+        _subsetReads.Should().BeEmpty();
+    }
+
+    [TestMethod]
+    public async Task RefreshIfStaleAsync_ClaudeWithinItsFloor_ReadsOnlyTheOthers()
+    {
+        // A 1-minute interval and an unlock 95 s after the last read: older than the interval, within Claude's floor
+        _values.RefreshIntervalSeconds = 60;
+        await _viewModel.StartAsync();
+        FetchedAgo("claude", TimeSpan.FromSeconds(95));
+        FetchedAgo("codex", TimeSpan.FromSeconds(95));
+
+        await _viewModel.RefreshIfStaleAsync(TimeSpan.FromSeconds(60));
+
+        _subsetReads.Should().ContainSingle().Which.Should().Equal("codex");
+    }
+
+    [TestMethod]
+    public async Task RefreshIfStaleAsync_ProviderInCooldown_IsNotRead()
+    {
+        await _viewModel.StartAsync();
+        FetchedAgo("claude", TimeSpan.FromMinutes(6));
+        FetchedAgo("codex", TimeSpan.FromMinutes(6));
+        _usage.Setup(s => s.GetRateLimitedUntil("claude")).Returns(DateTime.UtcNow.AddMinutes(4));
+
+        await _viewModel.RefreshIfStaleAsync(TimeSpan.FromMinutes(2));
+
+        _subsetReads.Should().ContainSingle().Which.Should().Equal("codex");
+        _scheduleLog.Messages.Should().NotContain(m => m.StartsWith("OnOpen refresh of claude"));
+    }
+
+    [TestMethod]
+    public async Task RefreshIfStaleAsync_ClockMovedBack_ReadsCodexAndHoldsClaudeToItsFloor()
+    {
+        await _viewModel.StartAsync();
+        // Both stamps an hour ahead of the clock
+        FetchedAgo("claude", TimeSpan.FromHours(-1));
+        FetchedAgo("codex", TimeSpan.FromHours(-1));
+
+        await _viewModel.RefreshIfStaleAsync(TimeSpan.FromMinutes(2));
+
+        _subsetReads.Should().ContainSingle().Which.Should().Equal("codex");
+    }
+
+    [TestMethod]
+    public async Task RefreshIfStaleAsync_LastReadFailed_TriesItAgain()
+    {
+        _failing.Add("codex");
+        await _viewModel.StartAsync();
+        Shown("codex").HasError.Should().BeTrue();
+        _failing.Clear();
+
+        await _viewModel.RefreshIfStaleAsync(TimeSpan.FromMinutes(2));
+
+        _subsetReads.Should().ContainSingle().Which.Should().Equal("codex");
+        Shown("codex").HasError.Should().BeFalse();
     }
 
     [TestMethod]

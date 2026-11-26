@@ -104,6 +104,21 @@ public class MainViewModelTests
 
     private static TaskCompletionSource Signal() => new(TaskCreationOptions.RunContinuationsAsynchronously);
 
+    /// <summary>
+    /// Makes the shown readings <paramref name="ago"/> old: LastUpdated for today's schedule, and each provider's own
+    /// fetch and answer stamps, which the per-provider schedule goes by.
+    /// </summary>
+    private void AgeReadings(TimeSpan ago)
+    {
+        _viewModel.LastUpdated = DateTime.Now - ago;
+        foreach (var field in new[] { "_lastFetchUtc", "_lastResultUtc" })
+        {
+            var stamps = (Dictionary<string, DateTime>)typeof(MainViewModel)
+                .GetField(field, BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(_viewModel)!;
+            foreach (var provider in stamps.Keys.ToList()) stamps[provider] = DateTime.UtcNow - ago;
+        }
+    }
+
     private void UseDashboard(IDashboardService dashboard)
     {
         _viewModel.Dispose();
@@ -974,7 +989,7 @@ public class MainViewModelTests
         SetupImmediateUsage();
         await _viewModel.StartAsync();
         _viewModel.EffectiveRefreshInterval.Should().Be(TimeSpan.FromMinutes(30));
-        _viewModel.LastUpdated = DateTime.Now.AddMinutes(-10);
+        AgeReadings(TimeSpan.FromMinutes(10));
         _session.QueryLocked = false; // no Unlocked event is raised
         var deadline = DateTime.UtcNow.AddSeconds(5);
         while (_viewModel.EffectiveRefreshInterval != TimeSpan.FromMinutes(5) && DateTime.UtcNow < deadline) await Task.Delay(20);
@@ -1063,7 +1078,7 @@ public class MainViewModelTests
         await PeriodicRefreshAsync();
         await PeriodicRefreshAsync();
         _session.Lock();
-        if (stale) _viewModel.LastUpdated = DateTime.Now.AddMinutes(-6);
+        if (stale) AgeReadings(TimeSpan.FromMinutes(6));
         _session.Unlock();
         await WaitForRefreshAsync();
         _usage.Verify(s => s.GetAllUsageStreamAsync(It.IsAny<CancellationToken>()), Times.Exactly(stale ? 4 : 3));
@@ -1622,7 +1637,7 @@ public class MainViewModelTests
         await PeriodicRefreshAsync();
         await PeriodicRefreshAsync();
         _viewModel.EffectiveRefreshInterval.Should().Be(TimeSpan.FromMinutes(10));
-        _viewModel.LastUpdated = DateTime.Now.AddMinutes(-6);
+        AgeReadings(TimeSpan.FromMinutes(6));
         await _viewModel.RefreshIfStaleAsync(TimeSpan.FromMinutes(2));
         _viewModel.EffectiveRefreshInterval.Should().Be(TimeSpan.FromMinutes(5));
         _viewModel.NextRefreshUtc.Should().BeCloseTo(DateTime.UtcNow.AddMinutes(5), TimeSpan.FromSeconds(2));
@@ -2093,6 +2108,8 @@ public class MainViewModelTests
     [TestMethod]
     public async Task RefreshIfStaleAsync_LastUpdatedInFuture_RefreshesAfterClockMovesBackward()
     {
+        // Today's schedule; per provider, Claude waits its floor after the clock moves back (MainViewModelActivityRefreshTests)
+        _values.ActivityRefreshEnabled = false;
         SetupImmediateUsage();
         await _viewModel.StartAsync();
         _viewModel.LastUpdated = DateTime.Now.AddHours(1);

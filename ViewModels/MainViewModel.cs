@@ -252,7 +252,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
             _lastFetchUtc[provider] = _lastResultUtc[provider] = CacheTimestampUtc(data.FetchedAt);
             _providerFingerprints[provider] = UsageFingerprint.Create([data]);
         }
-        LastUpdated = oldest.ToLocalTime();
+        // Per provider the header shows the newest reading, as after any refresh (each provider's own stamp decides when
+        // it is read again); today's single schedule keeps the oldest, which decides its next refresh.
+        LastUpdated = (ActivityRefreshOn ? cached.Max(data => CacheTimestampUtc(data!.FetchedAt)) : oldest).ToLocalTime();
         UpdateLastUpdatedText();
         // Per provider, each cached reading's own age decides when it is due; otherwise the oldest one does.
         if (ActivityRefreshOn) RecreateTimer();
@@ -312,18 +314,18 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     /// <summary>
     /// Refresh-on-open under the per-provider schedule: providers refresh at different times, so each one's own last
-    /// fetch decides, and only the providers older than <paramref name="maxAge"/> are read.
+    /// good answer decides, and only the providers older than <paramref name="maxAge"/> are read. Ages are UTC stamps, so
+    /// a DST or time zone change makes nothing look stale. A provider is never read before its floor since its last
+    /// attempt (Claude's 2 minutes) or during its 429 cooldown, however old its reading.
     /// </summary>
     private Task RefreshStaleProvidersAsync(TimeSpan maxAge)
     {
         if (_disposed || _stopped || _exiting) return Task.CompletedTask;
         var now = DateTime.UtcNow;
-        // LastUpdated is the newest reading of any provider: when even that is old (or ahead of the clock), all are.
-        var age = DateTime.Now - LastUpdated;
-        var allStale = age < TimeSpan.Zero || age > maxAge;
         // A provider's last answer, not its last attempt: a refresh that failed is tried again when a window opens
-        var stale = EnabledProviderIds().Where(provider => allStale || !_lastResultUtc.TryGetValue(provider, out var last) ||
-            now < last || now - last > maxAge).ToList();
+        var stale = BuildPlan(now).Where(due => ProviderRefreshPlanner.MayReadNow(due, now) &&
+                (!_lastResultUtc.TryGetValue(due.Provider, out var last) || now < last || now - last > maxAge))
+            .Select(due => due.Provider).ToList();
         if (stale.Count == 0) return Task.CompletedTask;
         ResetAdaptiveRefresh();
         if (IsLoading) return _refreshCompletion?.Task ?? Task.CompletedTask;
@@ -855,7 +857,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     var key = ProviderConstants.ValidateAndNormalize(data.Provider);
                     stamped.Add(key);
                     _lastFetchUtc[key] = resultAtUtc;
-                    _lastResultUtc[key] = resultAtUtc;
+                    // Only a good answer: a failed read (or a missing sign-in) is tried again when a window opens
+                    if (!data.HasError && !data.AuthRequired && data.UsageFetchOutcome != FetchOutcome.Failed)
+                        _lastResultUtc[key] = resultAtUtc;
                     var providerFingerprint = UsageFingerprint.Create(index >= 0 ? [Providers[index]] : [data]);
                     _providerStreaks[key] = resetAdaptiveStreak || resetVersion != _adaptiveResetVersion || forceCostRefresh ||
                         providerFingerprint.HasChangedFrom(_providerFingerprints.GetValueOrDefault(key))
