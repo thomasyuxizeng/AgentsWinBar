@@ -5,6 +5,7 @@ using AgentsWinBar.Helpers;
 using AgentsWinBar.Models;
 using AgentsWinBar.Services;
 using AgentsWinBar.Services.Native;
+using AgentsWinBar.Tests.Unit.Mocks;
 using AgentsWinBar.Tests.Unit.Services.Native;
 using AgentsWinBar.ViewModels;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -52,11 +53,16 @@ public class MainViewModelActivityRefreshTests
                 _subsetReads.Add([.. providers]);
                 return Read(providers, ct);
             });
+        _viewModel = CreateViewModel(_usage.Object);
+    }
+
+    private MainViewModel CreateViewModel(ICodexBarService usage, IDashboardService? dashboard = null)
+    {
         var history = new UsageHistoryStore();
         var persistence = new UsageHistoryPersistence(history, _settings.Object, NullLogger<UsageHistoryPersistence>.Instance);
-        _viewModel = new(_usage.Object, _settings.Object, new UsageAlertEvaluator(), new Mock<IToastNotifier>().Object,
+        return new(usage, _settings.Object, new UsageAlertEvaluator(), new Mock<IToastNotifier>().Object,
             NullLogger<MainViewModel>.Instance, history, persistence, new ActivityLog(), _session, _cache.Object, _memo.Object,
-            toolActivity: _activity, scheduleLog: _scheduleLog);
+            dashboardService: dashboard, toolActivity: _activity, scheduleLog: _scheduleLog);
     }
 
     [TestCleanup]
@@ -360,6 +366,42 @@ public class MainViewModelActivityRefreshTests
     }
 
     [TestMethod]
+    [DataRow(NativeUsageStatus.Failed)]
+    [DataRow(NativeUsageStatus.SignInExpired)]
+    [DataRow(NativeUsageStatus.RateLimited)]
+    public async Task RefreshIfStaleAsync_LastReadAnsweredWithTheLastGoodReading_TriesItAgain(NativeUsageStatus failure)
+    {
+        // Through the real CodexBarService and native last-good store: after a good read, a failed one is answered with
+        // that reading, cached and without an error
+        var codex = new ScriptedNativeClient("codex");
+        var native = new NativeUsageService([new ScriptedNativeClient("claude"), codex], NullLogger<NativeUsageService>.Instance);
+        var service = new CodexBarService(new Mock<IWslService>(MockBehavior.Strict).Object, new MockCacheService(), _settings.Object,
+            new MockSampleDataLoader(), NullLogger<CodexBarService>.Instance, userProfile: () => _directory,
+            directoryExists: _ => false, nativeUsage: native);
+        _viewModel.Dispose();
+        _viewModel = CreateViewModel(service);
+        await _viewModel.StartAsync();
+        Stamps("_lastFetchUtc")["codex"] = Stamps("_lastResultUtc")["codex"] = DateTime.UtcNow.AddMinutes(-6);
+        codex.Failure = failure;
+
+        await TimerFiresAsync();
+
+        Shown("codex").UsageIsCached.Should().BeTrue();
+        Shown("codex").HasError.Should().BeFalse();
+        Stamps("_lastFetchUtc")["codex"].Should().BeCloseTo(DateTime.UtcNow, TimeSpan.FromSeconds(5), "the read was a try");
+        Stamps("_lastResultUtc")["codex"].Should().BeCloseTo(DateTime.UtcNow.AddMinutes(-6), TimeSpan.FromSeconds(5),
+            "the reading it showed is the one read six minutes ago");
+        codex.Reads.Should().Be(2);
+
+        codex.Failure = null;
+        await _viewModel.RefreshIfStaleAsync(TimeSpan.FromMinutes(2));
+
+        codex.Reads.Should().Be(3, "opening a window tries the provider again");
+        Shown("codex").UsageIsCached.Should().BeFalse();
+        Stamps("_lastResultUtc")["codex"].Should().BeCloseTo(DateTime.UtcNow, TimeSpan.FromSeconds(5));
+    }
+
+    [TestMethod]
     public async Task TimerFires_ReadFails_WaitsAnIntervalInsteadOfRetryingAtOnce()
     {
         _activity.Touch("codex");
@@ -616,6 +658,30 @@ public class MainViewModelActivityRefreshTests
         _scheduleLog.Messages.Should().NotBeEmpty();
         _scheduleLog.Messages.Should().OnlyContain(m => !m.Contains(profile, StringComparison.OrdinalIgnoreCase) &&
             !m.Contains('\\') && !m.Contains('%'));
+    }
+
+    /// <summary>A native reader that answers a fresh reading, or <see cref="Failure"/>, through a real last-good store.</summary>
+    private sealed class ScriptedNativeClient(string provider) : INativeUsageClient
+    {
+        private readonly NativeLastGoodStore _lastGood = new();
+        private int _reads;
+        public string ProviderId => provider;
+        public NativeUsageStatus? Failure { get; set; }
+        public int Reads => Volatile.Read(ref _reads);
+
+        public Task<NativeUsageResult> FetchAsync(CancellationToken ct = default)
+        {
+            var count = Interlocked.Increment(ref _reads);
+            var now = DateTimeOffset.UtcNow;
+            var result = Failure is { } failure
+                ? new NativeUsageResult { Provider = provider, Status = failure, Message = "synthetic failure", NetworkCalls = 1 }
+                : new NativeUsageResult
+                {
+                    Provider = provider, Source = "oauth", Status = NativeUsageStatus.Ok, NetworkCalls = 1, UpdatedAt = now,
+                    Primary = new(10 + count, 300, now.AddHours(2), "in 2h")
+                };
+            return Task.FromResult(_lastGood.Apply(result, now));
+        }
     }
 
     private sealed class FakeActivity : IProviderActivitySource

@@ -875,8 +875,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     var key = ProviderConstants.ValidateAndNormalize(data.Provider);
                     stamped.Add(key);
                     _lastFetchUtc[key] = resultAtUtc;
-                    // Only a good answer: a failed read (or a missing sign-in) is tried again when a window opens
-                    if (!data.HasError && !data.AuthRequired && data.UsageFetchOutcome != FetchOutcome.Failed)
+                    // Only a fresh answer: a failed read (or a missing sign-in) is tried again when a window opens. So is a
+                    // read answered with the last good reading (after a failure, an expired sign-in or a 429, or from
+                    // Claude's reading cache): that reading is no newer than the last fresh answer.
+                    if (!data.HasError && !data.AuthRequired && !data.SignInExpired && !data.UsageIsCached &&
+                        !data.UsageIsStale && data.UsageFetchOutcome != FetchOutcome.Failed)
                         _lastResultUtc[key] = resultAtUtc;
                     var providerFingerprint = UsageFingerprint.Create(index >= 0 ? [Providers[index]] : [data]);
                     _providerStreaks[key] = resetAdaptiveStreak || resetVersion != _adaptiveResetVersion || forceCostRefresh ||
