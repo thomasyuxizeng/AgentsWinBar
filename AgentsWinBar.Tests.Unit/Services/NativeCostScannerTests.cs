@@ -228,6 +228,29 @@ public sealed partial class NativeCostScannerTests
         scanner.Update(Claude, Codex).FilesRead.Should().Be(0);
     }
 
+    [TestMethod]
+    public void Update_WhenStringHasInvalidUtf8_CountsBadLineAndIndexesTheOthers()
+    {
+        var path = Path.Combine(Claude, "invalid-utf8.jsonl");
+        var broken = Encoding.UTF8.GetBytes(ClaudeLine("2", 20).Replace("claude-sonnet-4-6", "claude-\u0001-6", StringComparison.Ordinal));
+        broken[Array.IndexOf(broken, (byte)1)] = 0xFF;
+        using (var stream = File.Create(path))
+        {
+            stream.Write(Encoding.UTF8.GetBytes(ClaudeLine("1", 10) + "\n"));
+            stream.Write(broken);
+            stream.Write(Encoding.UTF8.GetBytes("\n" + ClaudeLine("3", 30) + "\n"));
+        }
+        var scanner = Scanner();
+
+        var first = scanner.Update(Claude, Codex);
+        File.AppendAllText(path, ClaudeLine("4", 40) + "\n");
+        var second = Scanner().Update(Claude, Codex);
+
+        first.MalformedLines.Should().Be(1);
+        second.MalformedLines.Should().Be(0, "the bad line is behind the stored offset");
+        scanner.ReadReport(CostProvider.Claude, asOf: Today).SessionTokens.Should().Be(80);
+    }
+
     // Review finding 10: a timestamp at the edge of the calendar is skipped instead of failing the whole scan.
     [TestMethod]
     [DataRow(9.0, "9999-12-31T20:00:00Z")]

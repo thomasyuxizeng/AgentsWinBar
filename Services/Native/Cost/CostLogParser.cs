@@ -88,8 +88,10 @@ internal sealed class CostLogParser(CostProvider provider, bool subagent, CodexC
 
             return provider == CostProvider.Claude ? ClaudeEvent(record) : CodexEvent(record);
         }
-        catch (JsonException)
+        catch (Exception ex) when (ex is JsonException or InvalidOperationException)
         {
+            // Utf8JsonReader.GetString throws InvalidOperationException for a string with invalid UTF-8. Such a line
+            // is as bad as invalid JSON: count it and move on, or every later scan would stop at the same line.
             BadLines++;
             return null;
         }
