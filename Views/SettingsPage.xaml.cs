@@ -116,7 +116,7 @@ public sealed partial class SettingsPage : Page
             }
             ScrollToApiCreditsIfRequested();
         }
-        catch (Exception ex) { LogKeyFailure("Admin key status could not be shown", ex); }
+        catch (Exception ex) { LogKeyFailure("ShowStatus", ex); }
     }
 
     private void OnUnloaded(object sender, RoutedEventArgs e)
@@ -236,7 +236,7 @@ public sealed partial class SettingsPage : Page
         {
             if (_disposed) return;
             try { ApiCreditsCard.StartBringIntoView(new BringIntoViewOptions { VerticalAlignmentRatio = 0, AnimationDesired = false }); }
-            catch (Exception ex) { LogKeyFailure("Scrolling to the API credits card failed", ex); }
+            catch (Exception ex) { LogKeyFailure("ScrollToCard", ex); }
         });
     }
 
@@ -273,7 +273,7 @@ public sealed partial class SettingsPage : Page
         }
         ApiKeyStatusText.Text = $"Status: Checking{KeyEnding(status.LastFour)}…";
         CheckSavedKeyAsync(status.LastFour).SafeFireAndForget(
-            onError: ex => LogKeyFailure("Checking the saved Admin key failed", ex), continueOnCapturedContext: true);
+            onError: ex => LogKeyFailure("CheckSavedKey", ex), continueOnCapturedContext: true);
     }
 
     private async Task CheckSavedKeyAsync(string? lastFour)
@@ -346,10 +346,13 @@ public sealed partial class SettingsPage : Page
         ApiKeySaveAnywayButton.IsEnabled = enabled;
     }
 
-    /// <summary>Logs only the exception type: a message could carry request or key details.</summary>
-    private static void LogKeyFailure(string what, Exception ex)
+    /// <summary>
+    /// Logs only a short action name and the exception type: a message could carry request or key details, and app.log
+    /// keeps only identifier-like arguments.
+    /// </summary>
+    private static void LogKeyFailure(string action, Exception ex)
     {
-        try { App.Services.GetRequiredService<ILogger<SettingsPage>>().LogWarning("{What} ({Type})", what, ex.GetType().Name); }
+        try { App.Services.GetRequiredService<ILogger<SettingsPage>>().LogWarning("Admin key card: {Action} failed ({Type})", action, ex.GetType().Name); }
         catch { /* never throw from logging */ }
     }
 
@@ -362,7 +365,7 @@ public sealed partial class SettingsPage : Page
         }
         catch (Exception ex)
         {
-            LogKeyFailure("Opening the Admin keys page failed", ex);
+            LogKeyFailure("OpenAdminKeysPage", ex);
             if (!_disposed) ShowKeyMessage("The browser did not open. Go to platform.claude.com/settings/admin-keys to create the key.");
         }
     }
@@ -406,7 +409,7 @@ public sealed partial class SettingsPage : Page
         }
         catch (Exception ex)
         {
-            LogKeyFailure("Saving the Admin key failed", ex);
+            LogKeyFailure("SaveKey", ex);
             if (!_disposed) EndKeyAction(previousStatus, "Something went wrong, so the key was not saved. Try again.");
         }
     }
@@ -426,7 +429,7 @@ public sealed partial class SettingsPage : Page
         try { await SaveKeyAsync(candidate, AdminKeyCheck.Unreachable, previousStatus); }
         catch (Exception ex)
         {
-            LogKeyFailure("Saving the Admin key failed", ex);
+            LogKeyFailure("SaveKey", ex);
             if (!_disposed) EndKeyAction(previousStatus, "Something went wrong, so the key was not saved. Try again.");
         }
     }
@@ -489,7 +492,7 @@ public sealed partial class SettingsPage : Page
         }
         catch (Exception ex)
         {
-            LogKeyFailure("Removing the Admin key failed", ex);
+            LogKeyFailure("RemoveKey", ex);
             if (!_disposed) EndKeyAction(previousStatus, "Something went wrong, so the key was not removed. Try again.");
         }
     }

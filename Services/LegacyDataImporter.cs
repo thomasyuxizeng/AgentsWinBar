@@ -444,7 +444,9 @@ public sealed class LegacyDataImporter
                 var message = $"Import of old data {(result.Outcome == LegacyImportOutcome.Partial ? "was partial" : "failed")}: " +
                               $"{result.Copied} copied, {result.Skipped} already present, {result.FailedFiles.Count} failed " +
                               $"({string.Join(", ", result.FailedFiles)})";
-                _logger.LogWarning("{Message}", message);
+                // A fixed template with counts only: app.log omits free text such as the failed file names
+                _logger.LogWarning("Import of old data {Outcome}: {Copied} copied, {Skipped} already present, {Failed} failed",
+                    result.Outcome, result.Copied, result.Skipped, result.FailedFiles.Count);
                 _reportFailure?.Invoke("LegacyDataImporter", new IOException(message));
                 break;
             default:
