@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-11-27
+
 ### Added
 - Gemini now shows today and last-30-days token totals and list-price cost estimates, matching Claude and Codex. They appear on the Gemini card in the tray flyout ("Today" and "30 days" lines) and in the dashboard's Gemini panel ("Estimated cost · local logs", with per-model details and a 30-day daily cost chart). Ported from CodexBar's Antigravity local token history (MIT, Peter Steinberger), like the existing Claude and Codex readers.
 - Local cost scanning for Gemini reads Antigravity's per-conversation SQLite databases from `%USERPROFILE%\.gemini\antigravity-cli\conversations` (Google's `agy` CLI) and `%USERPROFILE%\.gemini\antigravity` and its `conversations` folder (the Antigravity desktop app). Setting `GEMINI_CLI_HOME` to an absolute path replaces `%USERPROFILE%\.gemini`. For each model call, AgentsWinBar reads only the model name, token counts (input, cached input, and output including thinking), and the time (never prompts, replies, or any other text). Databases are opened read-only through Windows' built-in SQLite library (nothing new is installed) and are never written or checkpointed and never block `agy`'s writes, even while `agy` is using them; a database `agy` is in the middle of writing is skipped and read on a later scan. Scans follow the existing rule (only while the flyout or dashboard is open, or after Refresh): on the maintainer's laptop, the first scan of about 430 conversation databases (1.3 GB) took about 3.7 CPU seconds and about 25 MB of extra memory, and later scans skip unchanged databases (about 0.05 CPU seconds).
@@ -381,7 +383,8 @@ Early-reset detection cannot tell an account switch from a reset; if saving earl
 - Window slide-in animation from system tray
 - Setup wizard for first-time configuration
 
-[Unreleased]: https://github.com/thomasyuxizeng/AgentsWinBar/compare/v1.6.1...HEAD
+[Unreleased]: https://github.com/thomasyuxizeng/AgentsWinBar/compare/v1.7.0...HEAD
+[1.7.0]: https://github.com/thomasyuxizeng/AgentsWinBar/compare/v1.6.1...v1.7.0
 [1.6.1]: https://github.com/thomasyuxizeng/AgentsWinBar/compare/v1.6.0...v1.6.1
 [1.6.0]: https://github.com/thomasyuxizeng/AgentsWinBar/compare/v1.5.4...v1.6.0
 [1.5.4]: https://github.com/thomasyuxizeng/AgentsWinBar/compare/v1.5.3...v1.5.4
